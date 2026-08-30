@@ -1,0 +1,1263 @@
+<title>Debate Engine Concept Deck</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<style>
+:root{
+  --bg:#EFF1F4; --surface:#FFFFFF; --surface-2:#F6F7F9; --surface-3:#E8EBF0;
+  --line:#DBDFE7; --line-2:#C0C6D2;
+  --text:#171B22; --muted:#586173; --faint:#8B93A3;
+  --accent:#2F4BD6; --accent-soft:#E3E8FB; --accent-line:#B9C4F4;
+  --agree:#0C7561; --agree-soft:#DBEEE8;
+  --dispute:#9C6500; --dispute-soft:#F5EAD3;
+  --open:#645AA6; --open-soft:#E8E5F6;
+  --dissent:#AC3729; --dissent-soft:#F7E2DF;
+  --shadow-sm:0 1px 2px rgba(18,24,38,.07);
+  --shadow-lg:0 2px 4px rgba(18,24,38,.05), 0 24px 48px -28px rgba(18,24,38,.35);
+  --radius:10px;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"Archivo","Helvetica Neue",Arial,sans-serif;
+  --serif:"Source Serif 4",Georgia,"Times New Roman",serif;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0D1015; --surface:#151A21; --surface-2:#1B212A; --surface-3:#232A35;
+    --line:#262E3A; --line-2:#3A4453;
+    --text:#E6EAF1; --muted:#98A2B3; --faint:#727D8E;
+    --accent:#8098FF; --accent-soft:#1D2540; --accent-line:#33406B;
+    --agree:#3FBFA0; --agree-soft:#122C29;
+    --dispute:#DFA54D; --dispute-soft:#2E2515;
+    --open:#A79AE8; --open-soft:#22203A;
+    --dissent:#E87B6C; --dissent-soft:#331E1C;
+    --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+    --shadow-lg:0 2px 4px rgba(0,0,0,.3), 0 24px 48px -28px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0D1015; --surface:#151A21; --surface-2:#1B212A; --surface-3:#232A35;
+  --line:#262E3A; --line-2:#3A4453;
+  --text:#E6EAF1; --muted:#98A2B3; --faint:#727D8E;
+  --accent:#8098FF; --accent-soft:#1D2540; --accent-line:#33406B;
+  --agree:#3FBFA0; --agree-soft:#122C29;
+  --dispute:#DFA54D; --dispute-soft:#2E2515;
+  --open:#A79AE8; --open-soft:#22203A;
+  --dissent:#E87B6C; --dissent-soft:#331E1C;
+  --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+  --shadow-lg:0 2px 4px rgba(0,0,0,.3), 0 24px 48px -28px rgba(0,0,0,.8);
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4{margin:0;font-family:var(--sans);text-wrap:balance;letter-spacing:-.02em;font-weight:600}
+p{margin:0}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+
+/* ---------- page frame ---------- */
+.wrap{display:grid;grid-template-columns:212px minmax(0,1fr);gap:44px;max-width:1420px;margin:0 auto;padding:0 28px 96px}
+.rail{position:sticky;top:0;align-self:start;height:100vh;padding:34px 0;display:flex;flex-direction:column;gap:22px;border-right:1px solid var(--line)}
+.rail-mark{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.rail-title{font-size:16px;line-height:1.25;padding-right:20px}
+.rail nav{display:flex;flex-direction:column;gap:1px;padding-right:16px}
+.rail nav a{display:grid;grid-template-columns:20px 1fr;gap:8px;align-items:baseline;padding:6px 8px;border-radius:6px;text-decoration:none;color:var(--muted);font-size:13.5px;border-left:2px solid transparent}
+.rail nav a span.k{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.rail nav a:hover{background:var(--surface-2);color:var(--text)}
+.rail nav a.on{color:var(--text);background:var(--surface);border-left-color:var(--accent);box-shadow:var(--shadow-sm)}
+.rail-foot{margin-top:auto;font-size:12px;color:var(--faint);padding-right:20px;font-family:var(--mono);line-height:1.6}
+.main{min-width:0;padding-top:34px;display:flex;flex-direction:column;gap:80px}
+@media (max-width:940px){
+  .wrap{grid-template-columns:1fr;gap:0;padding:0 16px 64px}
+  .rail{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:24px 0}
+  .rail nav{flex-direction:row;flex-wrap:wrap;padding-right:0}
+  .rail nav a{grid-template-columns:auto;border-left:0;border-bottom:2px solid transparent}
+  .rail nav a span.k{display:none}
+  .rail nav a.on{border-left:0;border-bottom-color:var(--accent)}
+  .rail-foot{display:none}
+}
+
+/* ---------- masthead ---------- */
+.mast{display:flex;flex-direction:column;gap:20px}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent)}
+.mast h1{font-size:clamp(34px,5vw,52px);line-height:1.02;letter-spacing:-.035em;font-weight:700;max-width:15ch}
+.lede{font-family:var(--serif);font-size:19px;line-height:1.6;color:var(--muted);max-width:62ch}
+.lede em{color:var(--text);font-style:italic}
+.meta-strip{display:flex;flex-wrap:wrap;gap:0;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);overflow:hidden}
+.meta-strip div{padding:12px 18px;border-right:1px solid var(--line);flex:1 1 150px}
+.meta-strip div:last-child{border-right:0}
+.meta-strip dt{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin:0 0 3px}
+.meta-strip dd{margin:0;font-size:13.5px;font-weight:500}
+
+/* ---------- generic section furniture ---------- */
+.sec-head{display:flex;flex-direction:column;gap:12px;margin-bottom:24px}
+.sec-kicker{display:flex;align-items:center;gap:12px;font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.sec-kicker b{color:var(--accent);font-weight:600}
+.sec-kicker hr{flex:1;border:0;border-top:1px solid var(--line);margin:0}
+.sec-head h2{font-size:clamp(24px,3vw,32px);letter-spacing:-.03em}
+.sec-head h2 .lc{font-family:var(--mono);font-size:.62em;color:var(--accent);margin-right:.5em;font-weight:500;letter-spacing:0}
+.thesis{font-family:var(--serif);font-size:17.5px;line-height:1.6;color:var(--muted);max-width:66ch}
+.spec{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--surface);margin:22px 0}
+.spec > div{padding:13px 16px;border-right:1px solid var(--line)}
+.spec > div:last-child{border-right:0}
+.spec h4{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);font-weight:500;margin-bottom:5px}
+.spec p{font-size:13.5px;line-height:1.45}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;margin-top:24px}
+.note{border-top:2px solid var(--line-2);padding-top:12px}
+.note h4{font-size:13.5px;margin-bottom:5px}
+.note p{font-size:13.5px;color:var(--muted);line-height:1.5}
+.note.good{border-top-color:var(--agree)}
+.note.warn{border-top-color:var(--dispute)}
+.note.tech{border-top-color:var(--accent)}
+
+/* ---------- browser frame ---------- */
+.frame{border:1px solid var(--line-2);border-radius:12px;overflow:hidden;background:var(--surface);box-shadow:var(--shadow-lg)}
+.frame-bar{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--surface-2);border-bottom:1px solid var(--line)}
+.dots{display:flex;gap:5px}
+.dots i{width:9px;height:9px;border-radius:50%;background:var(--line-2);display:block}
+.url{flex:1;font-family:var(--mono);font-size:11px;color:var(--faint);background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:3px 9px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.frame-tag{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.viewport{overflow-x:auto;background:var(--surface)}
+.shot{min-width:1060px;font-size:13px}
+.shot.narrow{min-width:auto}
+.cap{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:10px;line-height:1.5}
+.cap b{color:var(--muted);font-weight:500}
+.stack{display:flex;flex-direction:column;gap:32px}
+</style>
+<style>
+/* ================= shared mockup UI kit ================= */
+.shot .pill{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:999px;border:1px solid var(--line-2);color:var(--muted);background:var(--surface-2);white-space:nowrap}
+.shot .pill.agree{color:var(--agree);background:var(--agree-soft);border-color:transparent}
+.shot .pill.dispute{color:var(--dispute);background:var(--dispute-soft);border-color:transparent}
+.shot .pill.open{color:var(--open);background:var(--open-soft);border-color:transparent}
+.shot .pill.dissent{color:var(--dissent);background:var(--dissent-soft);border-color:transparent}
+.shot .pill.acc{color:var(--accent);background:var(--accent-soft);border-color:transparent}
+.shot .ev{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;padding:1px 5px;border:1px solid var(--line-2);border-radius:3px;color:var(--faint);text-transform:uppercase}
+.shot .ev.fact{color:var(--agree);border-color:var(--agree)}
+.shot .ev.assum{color:var(--dispute);border-color:var(--dispute)}
+.shot .ev.infer{color:var(--accent);border-color:var(--accent-line)}
+.shot .ev.opin{color:var(--open);border-color:var(--open)}
+.shot .ev.unver{color:var(--dissent);border-color:var(--dissent)}
+.shot .mchip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--muted);white-space:nowrap}
+.shot .mchip i{width:7px;height:7px;border-radius:2px;display:block;flex:none}
+.m1{background:#2F4BD6}.m2{background:#0C7561}.m3{background:#9C6500}.m4{background:#645AA6}.m5{background:#AC3729}
+:root[data-theme="dark"] .m1{background:#8098FF}:root[data-theme="dark"] .m2{background:#3FBFA0}:root[data-theme="dark"] .m3{background:#DFA54D}:root[data-theme="dark"] .m4{background:#A79AE8}:root[data-theme="dark"] .m5{background:#E87B6C}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .m1{background:#8098FF}:root:not([data-theme="light"]) .m2{background:#3FBFA0}:root:not([data-theme="light"]) .m3{background:#DFA54D}:root:not([data-theme="light"]) .m4{background:#A79AE8}:root:not([data-theme="light"]) .m5{background:#E87B6C}}
+.shot .track{height:5px;border-radius:3px;background:var(--surface-3);overflow:hidden}
+.shot .track > i{display:block;height:100%;background:var(--accent)}
+.shot .track > i.a{background:var(--agree)}
+.shot .track > i.d{background:var(--dispute)}
+.shot .seg{display:flex;gap:2px}
+.shot .seg i{flex:1;height:7px;border-radius:1px;background:var(--surface-3);display:block}
+.shot .seg i.on{background:var(--accent)}
+.shot .seg i.half{background:linear-gradient(90deg,var(--accent) 50%,var(--surface-3) 50%)}
+.shot .btn{font-family:var(--sans);font-size:12px;font-weight:500;padding:5px 11px;border-radius:6px;border:1px solid var(--line-2);background:var(--surface);color:var(--text);white-space:nowrap}
+.shot .btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+:root[data-theme="dark"] .shot .btn.pri{color:#0D1015}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .shot .btn.pri{color:#0D1015}}
+.shot .btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+.shot .live{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--dissent)}
+.shot .live::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--dissent);animation:beat 1.6s ease-in-out infinite}
+@keyframes beat{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.75)}}
+@media (prefers-reduced-motion:reduce){.shot .live::before{animation:none}}
+.shot .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint)}
+.shot .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.shot .prose{font-family:var(--serif)}
+
+/* app chrome */
+.app{display:grid;background:var(--surface)}
+.app-rail{background:var(--surface-2);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:18px}
+.app-side{border-left:1px solid var(--line);background:var(--surface-2);padding:14px;display:flex;flex-direction:column;gap:16px}
+.app-main{padding:0;min-width:0;display:flex;flex-direction:column}
+.topbar{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid var(--line);background:var(--surface)}
+.card{border:1px solid var(--line);border-radius:8px;background:var(--surface);padding:12px}
+.grp{display:flex;flex-direction:column;gap:7px}
+.row{display:flex;align-items:center;gap:8px}
+.row.sb{justify-content:space-between}
+.kv{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted)}
+.kv b{font-family:var(--mono);font-weight:500;color:var(--text);font-variant-numeric:tabular-nums}
+.steps{display:flex;flex-direction:column;gap:2px}
+.steps a{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:6px;font-size:12.5px;color:var(--muted);text-decoration:none}
+.steps a .n{font-family:var(--mono);font-size:10px;width:16px;height:16px;border-radius:50%;border:1px solid var(--line-2);display:grid;place-items:center;color:var(--faint);flex:none}
+.steps a.done{color:var(--text)}
+.steps a.done .n{background:var(--agree);border-color:var(--agree);color:#fff}
+:root[data-theme="dark"] .steps a.done .n{color:#0D1015}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .steps a.done .n{color:#0D1015}}
+.steps a.now{background:var(--surface);color:var(--text);font-weight:500;box-shadow:var(--shadow-sm)}
+.steps a.now .n{background:var(--accent);border-color:var(--accent);color:#fff}
+:root[data-theme="dark"] .steps a.now .n{color:#0D1015}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .steps a.now .n{color:#0D1015}}
+</style>
+<style>
+/* ===== A. Control Room ===== */
+.a-shell{grid-template-columns:206px minmax(0,1fr) 292px;min-height:560px}
+.lanes{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:14px 18px;border-bottom:1px solid var(--line);background:var(--surface-2)}
+.lane{border:1px solid var(--line);border-radius:7px;background:var(--surface);padding:9px;display:flex;flex-direction:column;gap:7px;position:relative;overflow:hidden}
+.lane::before{content:"";position:absolute;inset:0 auto 0 0;width:3px}
+.lane.l1::before{background:#2F4BD6}.lane.l2::before{background:#0C7561}.lane.l3::before{background:#9C6500}.lane.l4::before{background:#645AA6}.lane.l5::before{background:#AC3729}
+.lane .nm{font-size:12px;font-weight:600;letter-spacing:-.01em;padding-left:6px}
+.lane .st{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;padding-left:6px;color:var(--faint)}
+.lane .st.act{color:var(--accent)}
+.lane .foot{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--faint);padding-left:6px;font-variant-numeric:tabular-nums}
+.stream{padding:14px 18px;display:flex;flex-direction:column;gap:9px;flex:1}
+.stream-h{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.cl{display:grid;grid-template-columns:74px minmax(0,1fr) 128px;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:7px;background:var(--surface);align-items:start}
+.cl.hot{border-color:var(--dispute);background:var(--dispute-soft)}
+.cl.new{border-color:var(--accent-line)}
+.cl .id{font-family:var(--mono);font-size:10.5px;color:var(--faint);display:flex;flex-direction:column;gap:5px}
+.cl .txt{font-family:var(--serif);font-size:13.5px;line-height:1.45}
+.cl .rel{font-size:11px;color:var(--muted);margin-top:5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.cl .rel s{text-decoration:none;font-family:var(--mono);font-size:10px;color:var(--dissent)}
+.cl .side{display:flex;flex-direction:column;gap:5px;align-items:flex-end}
+.log{display:flex;flex-direction:column;gap:0;font-family:var(--mono);font-size:10.5px;max-height:238px;overflow:hidden}
+.log div{display:flex;gap:7px;align-items:baseline;padding:4px 0;border-bottom:1px dashed var(--line);color:var(--muted);white-space:nowrap;overflow:hidden}
+.log div span{color:var(--faint);width:26px;flex:none}
+.log div em{font-style:normal;color:var(--text)}
+.log div.hi em{color:var(--accent)}
+
+/* ===== B. Docket ===== */
+.b-shot{background:var(--surface);padding:0}
+.doc-top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 26px;border-bottom:1px solid var(--line);background:var(--surface-2)}
+.doc{display:grid;grid-template-columns:186px minmax(0,680px) 190px;gap:26px;padding:30px 26px 34px;justify-content:center}
+.gutter{display:flex;flex-direction:column;gap:14px;padding-top:6px}
+.anno{font-size:11.5px;line-height:1.45;color:var(--muted);border-left:2px solid var(--line-2);padding-left:9px}
+.anno b{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:500;margin-bottom:2px}
+.anno.d{border-left-color:var(--dissent)}
+.anno.a{border-left-color:var(--agree)}
+.anno.q{border-left-color:var(--dispute)}
+.body h3{font-size:15px;margin:22px 0 8px;letter-spacing:-.01em}
+.body h3:first-child{margin-top:0}
+.body p{font-family:var(--serif);font-size:15.5px;line-height:1.62;color:var(--text);margin-bottom:10px}
+.body .cite{font-family:var(--mono);font-size:10.5px;color:var(--accent);border-bottom:1px dotted var(--accent-line);padding:0 1px;white-space:nowrap}
+.verdict{border:1px solid var(--line-2);border-radius:9px;overflow:hidden;margin-bottom:22px}
+.verdict-h{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 16px;background:var(--dispute-soft);border-bottom:1px solid var(--line)}
+.verdict-h .oc{font-family:var(--mono);font-size:13px;letter-spacing:.06em;color:var(--dispute);font-weight:600}
+.verdict-b{display:grid;grid-template-columns:repeat(3,1fr);background:var(--surface)}
+.verdict-b > div{padding:12px 16px;border-right:1px solid var(--line)}
+.verdict-b > div:last-child{border-right:0}
+.verdict-b .big{font-family:var(--mono);font-size:24px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1}
+.dissent-block{border-left:3px solid var(--dissent);background:var(--dissent-soft);padding:12px 16px;border-radius:0 7px 7px 0;margin:14px 0}
+.dissent-block p{font-size:14.5px;margin-bottom:6px}
+.rubric{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+.rubric th{text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:0 8px 6px 0;border-bottom:1px solid var(--line)}
+.rubric td{padding:5px 8px 5px 0;border-bottom:1px solid var(--line);vertical-align:middle}
+.rubric td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;width:44px}
+.rubric td.b{width:96px}
+
+/* ===== C. Claim Board ===== */
+.board-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:11px 16px;border-bottom:1px solid var(--line);background:var(--surface-2)}
+.filter{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:5px;border:1px solid var(--line-2);color:var(--muted);background:var(--surface)}
+.filter.on{background:var(--accent);border-color:var(--accent);color:#fff}
+:root[data-theme="dark"] .filter.on{color:#0D1015}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .filter.on{color:#0D1015}}
+.cols{display:grid;grid-template-columns:repeat(3,1fr);gap:0;align-items:start}
+.col{padding:14px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:9px;min-height:430px}
+.col:last-child{border-right:0}
+.col-h{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-bottom:9px;border-bottom:2px solid var(--line)}
+.col.agr .col-h{border-bottom-color:var(--agree)}
+.col.dis .col-h{border-bottom-color:var(--dispute)}
+.col.unr .col-h{border-bottom-color:var(--open)}
+.col-h h4{font-size:12.5px;letter-spacing:0}
+.ccard{border:1px solid var(--line);border-radius:7px;background:var(--surface);padding:10px;display:flex;flex-direction:column;gap:7px;box-shadow:var(--shadow-sm)}
+.ccard .top{display:flex;justify-content:space-between;gap:8px;align-items:center}
+.ccard .q{font-family:var(--serif);font-size:13.5px;line-height:1.45}
+.ccard .bot{display:flex;justify-content:space-between;align-items:center;gap:8px;padding-top:6px;border-top:1px solid var(--line)}
+.stack-dots{display:flex;gap:3px}
+.stack-dots i{width:7px;height:7px;border-radius:2px;display:block}
+.stack-dots i.off{background:var(--surface-3)}
+.matrix{padding:14px 16px;border-top:1px solid var(--line);background:var(--surface-2)}
+table.mx{border-collapse:collapse;width:100%;font-size:11.5px}
+table.mx th{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:4px 6px;text-align:center;border-bottom:1px solid var(--line)}
+table.mx th.l{text-align:left;width:230px}
+table.mx td{padding:5px 6px;text-align:center;border-bottom:1px solid var(--line);font-family:var(--mono)}
+table.mx td.l{text-align:left;font-family:var(--serif);font-size:12.5px;color:var(--text)}
+table.mx td.y{color:var(--agree)}table.mx td.n{color:var(--dissent)}table.mx td.q{color:var(--dispute)}table.mx td.o{color:var(--faint)}
+
+/* ===== D. Focus Flow (mobile) ===== */
+.phones{display:flex;gap:22px;padding:26px 22px;background:var(--surface-2);overflow-x:auto}
+.phone{width:288px;flex:none;border:1px solid var(--line-2);border-radius:22px;background:var(--surface);box-shadow:var(--shadow-lg);overflow:hidden;display:flex;flex-direction:column}
+.phone-h{display:flex;justify-content:space-between;align-items:center;padding:8px 16px 4px;font-family:var(--mono);font-size:9.5px;color:var(--faint)}
+.phone-b{padding:12px 14px 16px;display:flex;flex-direction:column;gap:11px;flex:1}
+.phone-nav{display:flex;justify-content:space-between;padding:9px 16px;border-top:1px solid var(--line);background:var(--surface-2);font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.phone-nav b{color:var(--accent);font-weight:500}
+.ask{border:1px solid var(--line-2);border-radius:9px;padding:11px;font-family:var(--serif);font-size:14.5px;line-height:1.45;min-height:92px;background:var(--surface-2)}
+.chooser{display:flex;flex-direction:column;gap:7px}
+.mrow{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.mrow.sel{border-color:var(--accent);background:var(--accent-soft)}
+.mrow .g{flex:1;min-width:0}
+.mrow .nm{font-size:12.5px;font-weight:500}
+.mrow .sub{font-family:var(--mono);font-size:9.5px;color:var(--faint)}
+.tick{width:16px;height:16px;border-radius:4px;border:1px solid var(--line-2);display:grid;place-items:center;font-size:10px;color:transparent;flex:none}
+.mrow.sel .tick{background:var(--accent);border-color:var(--accent);color:#fff}
+:root[data-theme="dark"] .mrow.sel .tick{color:#0D1015}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .mrow.sel .tick{color:#0D1015}}
+.ring{display:grid;place-items:center;gap:3px;padding:10px 0}
+.ring .v{font-family:var(--mono);font-size:34px;font-weight:600;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
+.stepper{display:flex;flex-direction:column;gap:0}
+.stepper div{display:grid;grid-template-columns:14px 1fr auto;gap:9px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line);font-size:12px}
+.stepper div .dot{width:8px;height:8px;border-radius:50%;background:var(--surface-3)}
+.stepper div.done .dot{background:var(--agree)}
+.stepper div.now .dot{background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.stepper div .t{font-family:var(--mono);font-size:10px;color:var(--faint)}
+
+/* ===== E. Workbench ===== */
+.wb{grid-template-columns:274px minmax(0,1fr);min-height:520px}
+.wb-ctx{border-right:1px solid var(--line);background:var(--surface-2);padding:14px;display:flex;flex-direction:column;gap:14px}
+.tabs{display:flex;gap:2px;padding:0 16px;border-bottom:1px solid var(--line);background:var(--surface)}
+.tabs span{padding:10px 13px;font-size:12.5px;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap}
+.tabs span.on{color:var(--text);font-weight:500;border-bottom-color:var(--accent)}
+.editor{display:grid;grid-template-columns:minmax(0,1fr) 246px;flex:1;min-height:0}
+.code{padding:14px 18px;font-family:var(--mono);font-size:11.5px;line-height:1.7;overflow:hidden;background:var(--surface);color:var(--muted)}
+.code b{color:var(--text);font-weight:600}
+.code u{text-decoration:none;color:var(--accent)}
+.code i{color:var(--faint);font-style:normal}
+.code .h{color:var(--agree)}
+.outline{border-left:1px solid var(--line);padding:14px;display:flex;flex-direction:column;gap:12px;background:var(--surface-2)}
+.olist{display:flex;flex-direction:column;gap:1px}
+.olist a{font-size:12px;color:var(--muted);text-decoration:none;padding:4px 8px;border-radius:5px;border-left:2px solid transparent}
+.olist a.on{background:var(--surface);color:var(--text);border-left-color:var(--accent)}
+
+/* ===== F. Ledger ===== */
+table.led{width:100%;border-collapse:collapse;font-size:12.5px}
+table.led th{text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:9px 14px;border-bottom:1px solid var(--line);background:var(--surface-2)}
+table.led td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:middle}
+table.led td.q{font-family:var(--serif);font-size:13.5px;max-width:340px}
+table.led td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--muted)}
+table.led tr:hover td{background:var(--surface-2)}
+
+/* ===== appendix ===== */
+.kit{display:grid;grid-template-columns:repeat(auto-fit,minmax(232px,1fr));gap:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.kit > div{padding:16px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:9px}
+.kit h4{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);font-weight:500}
+.kit p{font-size:12.5px;color:var(--muted);line-height:1.45}
+.swatches{display:flex;flex-wrap:wrap;gap:6px}
+.sw{display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:9.5px;color:var(--faint)}
+.sw i{width:52px;height:26px;border-radius:4px;display:block;border:1px solid var(--line)}
+.cover{width:100%;border-collapse:collapse;font-size:13px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.cover th{text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--surface-2)}
+.cover th.c,.cover td.c{text-align:center;width:88px}
+.cover td{padding:9px 12px;border-bottom:1px solid var(--line);color:var(--muted)}
+.cover td.s{color:var(--text);font-weight:500}
+.cover td.c b{color:var(--accent);font-family:var(--mono);font-weight:600}
+.cover td.c span{color:var(--line-2)}
+.cover tr:last-child td{border-bottom:0}
+</style>
+<div class="wrap">
+<aside class="rail">
+  <div class="grp">
+    <div class="rail-mark">UX concept study · v1</div>
+    <div class="rail-title">Debate Engine<br>Concept Deck</div>
+  </div>
+  <nav id="nav">
+    <a href="#brief" class="on"><span class="k">00</span><span>The brief</span></a>
+    <a href="#coverage"><span class="k">01</span><span>Coverage map</span></a>
+    <a href="#a"><span class="k">A</span><span>Control Room</span></a>
+    <a href="#b"><span class="k">B</span><span>Docket</span></a>
+    <a href="#c"><span class="k">C</span><span>Claim Board</span></a>
+    <a href="#d"><span class="k">D</span><span>Focus Flow</span></a>
+    <a href="#e"><span class="k">E</span><span>Workbench</span></a>
+    <a href="#f"><span class="k">F</span><span>Ledger</span></a>
+    <a href="#kit"><span class="k">02</span><span>Shared kit</span></a>
+    <a href="#pick"><span class="k">03</span><span>What to build</span></a>
+  </nav>
+  <div class="rail-foot">6 layouts<br>1 component kit<br>0 lines of product code</div>
+</aside>
+
+<main class="main">
+
+<!-- ================= BRIEF ================= -->
+<section class="mast" id="brief">
+  <div class="eyebrow">Layout exploration · not an implementation</div>
+  <h1>Six ways to show a machine changing its mind.</h1>
+  <p class="lede">Every screen below renders the same debate: <em>“Should the payments platform ship as a modular monolith or as microservices for the next 18 months?”</em> — five models, one independent judge, outcome <em>MAJORITY_WITH_DISSENT</em> at 84% confidence. Same decision object, six different layout arguments about which part of it deserves the pixels.</p>
+  <dl class="meta-strip">
+    <div><dt>Unit of analysis</dt><dd>Claims, never model votes</dd></div>
+    <div><dt>Outcome states</dt><dd>4 (incl. no-consensus)</dd></div>
+    <div><dt>Live channel</dt><dd>16 WebSocket events</dd></div>
+    <div><dt>Budget frame</dt><dd>$2.00 hard cap, always visible</dd></div>
+    <div><dt>Terminal value</dt><dd>Decision → build prompt</dd></div>
+  </dl>
+  <div class="notes">
+    <div class="note good"><h4>Principle 1 renders as structure</h4><p>Claims are first-class objects on screen — addressable IDs, evidence type, relationships. No layout aggregates models into a percentage bar.</p></div>
+    <div class="note warn"><h4>Principle 2 renders as colour</h4><p>Dissent gets its own semantic channel (brick) and its own real estate. A split decision must look as finished as a consensus, never like a failure state.</p></div>
+    <div class="note tech"><h4>Principle 3 renders as a doorway</h4><p>Every decision surface ends in one primary action — open Build Studio. The debate is never the last screen a user sees.</p></div>
+  </div>
+</section>
+
+<!-- ================= COVERAGE ================= -->
+<section id="coverage">
+  <div class="sec-head">
+    <div class="sec-kicker"><b>01</b><span>Coverage map</span><hr></div>
+    <h2>Which layout carries which screen</h2>
+    <p class="thesis">The six concepts are not six skins of one page. Each takes a different part of the 6-screen journey and argues for a different information density. They compose: pick one shell (A or D), one decision surface (B or C), plus E and F.</p>
+  </div>
+  <div style="overflow-x:auto">
+  <table class="cover">
+    <thead><tr><th>Screen / module</th><th class="c">A Control Room</th><th class="c">B Docket</th><th class="c">C Claim Board</th><th class="c">D Focus Flow</th><th class="c">E Workbench</th><th class="c">F Ledger</th></tr></thead>
+    <tbody>
+      <tr><td class="s">1 · Ask</td><td class="c"><b>●</b></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td><td class="c"><b>●</b></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td></tr>
+      <tr><td class="s">2 · Choose panel</td><td class="c"><b>●</b></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td><td class="c"><b>●</b></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td></tr>
+      <tr><td class="s">3 · Watch debate</td><td class="c"><b>●</b></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td><td class="c"><b>●</b></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td></tr>
+      <tr><td class="s">4 · Explore claims</td><td class="c"><b>●</b></td><td class="c"><b>●</b></td><td class="c"><b>●</b></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td></tr>
+      <tr><td class="s">5 · See decision</td><td class="c"><span>—</span></td><td class="c"><b>●</b></td><td class="c"><b>●</b></td><td class="c"><b>●</b></td><td class="c"><b>●</b></td><td class="c"><span>—</span></td></tr>
+      <tr><td class="s">6 · Build</td><td class="c"><span>—</span></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td><td class="c"><b>●</b></td><td class="c"><span>—</span></td></tr>
+      <tr><td class="s">Model Arena</td><td class="c"><b>●</b></td><td class="c"><span>—</span></td><td class="c"><b>●</b></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td></tr>
+      <tr><td class="s">Debate History</td><td class="c"><span>—</span></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td><td class="c"><span>—</span></td><td class="c"><b>●</b></td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+<!-- ================= A ================= -->
+<section id="a">
+  <div class="sec-head">
+    <div class="sec-kicker"><b>Layout A</b><span>Three-pane console · desktop only</span><hr></div>
+    <h2><span class="lc">A</span>Control Room</h2>
+    <p class="thesis">Journey on the left, deliberation in the middle, telemetry on the right. The centre column is a <em>claim stream</em>, not a chat log — models emit claims, the claims collide, and the collisions are what scroll past. Built for the operator who runs debates all day and wants to see cost and sequence numbers while it happens.</p>
+  </div>
+  <div class="spec">
+    <div><h4>Optimises for</h4><p>Density, live control, cost awareness</p></div>
+    <div><h4>Trade-off</h4><p>Three panes need ≥1200px; no phone story</p></div>
+    <div><h4>Screens</h4><p>1 · 2 · 3 · 4 in one persistent shell</p></div>
+    <div><h4>Data it needs</h4><p>All 16 WS events, per-op cost log</p></div>
+  </div>
+
+  <div class="frame">
+    <div class="frame-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">debate.local/session/d_8f21c4 — round 2 · cross-examination</div><div class="frame-tag">1440 × 900</div></div>
+    <div class="viewport"><div class="shot">
+      <div class="app a-shell">
+
+        <!-- left rail -->
+        <div class="app-rail">
+          <div class="grp">
+            <div class="lbl">Session</div>
+            <div class="steps">
+              <a class="done"><span class="n">✓</span>Ask</a>
+              <a class="done"><span class="n">✓</span>Choose panel</a>
+              <a class="now"><span class="n">3</span>Watch debate</a>
+              <a><span class="n">4</span>Explore claims</a>
+              <a><span class="n">5</span>See decision</a>
+              <a><span class="n">6</span>Build</a>
+            </div>
+          </div>
+          <div class="grp">
+            <div class="lbl">Panel · 5 models</div>
+            <div class="grp" style="gap:5px">
+              <span class="mchip"><i class="m1"></i>Claude Opus 4.5</span>
+              <span class="mchip"><i class="m2"></i>GPT-5.1</span>
+              <span class="mchip"><i class="m3"></i>Gemini 2.5 Pro</span>
+              <span class="mchip"><i class="m4"></i>Llama 3.3 70B</span>
+              <span class="mchip"><i class="m5"></i>Mistral Large 2</span>
+            </div>
+          </div>
+          <div class="grp">
+            <div class="lbl">Judge · independent</div>
+            <span class="mchip"><i style="background:var(--line-2)"></i>Sonnet 4.5 · sealed</span>
+            <p style="font-size:11px;color:var(--faint);line-height:1.4">Sees Position-A…E. No model names, order randomised.</p>
+          </div>
+          <div class="grp">
+            <div class="lbl">Mode</div>
+            <span class="pill acc">Standard · 1 rebuttal</span>
+          </div>
+        </div>
+
+        <!-- centre -->
+        <div class="app-main">
+          <div class="topbar">
+            <div style="flex:1;min-width:0">
+              <div class="lbl" style="margin-bottom:2px">Question</div>
+              <div style="font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Should the payments platform ship as a modular monolith or as microservices for the next 18 months?</div>
+            </div>
+            <span class="live">Round 2 · cross-exam</span>
+            <button class="btn">Pause</button>
+            <button class="btn">Cancel</button>
+          </div>
+
+          <div class="lanes">
+            <div class="lane l1"><div class="nm">Opus 4.5</div><div class="st act">Answering challenge</div><div class="track"><i style="width:62%"></i></div><div class="foot"><span>7 claims</span><span>$0.09</span></div></div>
+            <div class="lane l2"><div class="nm">GPT-5.1</div><div class="st act">Answering challenge</div><div class="track"><i style="width:41%"></i></div><div class="foot"><span>6 claims</span><span>$0.08</span></div></div>
+            <div class="lane l3"><div class="nm">Gemini 2.5</div><div class="st">Position held</div><div class="track"><i class="a" style="width:100%"></i></div><div class="foot"><span>8 claims</span><span>$0.06</span></div></div>
+            <div class="lane l4"><div class="nm">Llama 3.3</div><div class="st">Modified position</div><div class="track"><i class="d" style="width:100%"></i></div><div class="foot"><span>5 claims</span><span>$0.02</span></div></div>
+            <div class="lane l5"><div class="nm">Mistral L2</div><div class="st">Queued</div><div class="track"><i style="width:8%"></i></div><div class="foot"><span>6 claims</span><span>$0.03</span></div></div>
+          </div>
+
+          <div class="stream">
+            <div class="stream-h">
+              <div class="row" style="gap:8px"><span class="lbl">Claim stream</span><span class="pill">32 extracted</span><span class="pill agree">18 agreed</span><span class="pill dispute">9 disputed</span><span class="pill open">5 unresolved</span></div>
+              <div class="row" style="gap:6px"><button class="btn ghost">All</button><button class="btn">Disputed only</button></div>
+            </div>
+
+            <div class="cl hot new">
+              <div class="id">C-024<span class="ev assum">assumption</span></div>
+              <div>
+                <div class="txt">“Team of 12 engineers can operate 6–8 services without a dedicated platform team.”</div>
+                <div class="rel"><span class="mchip"><i class="m2"></i>GPT-5.1</span><s>contradicts →</s><span class="num" style="color:var(--faint)">C-011</span><span style="color:var(--faint)">·</span><span>dispute priority <b class="num">0.91</b></span></div>
+              </div>
+              <div class="side"><span class="pill dispute">Challenged</span><span class="lbl">awaiting rebuttal</span></div>
+            </div>
+
+            <div class="cl">
+              <div class="id">C-011<span class="ev fact">fact</span></div>
+              <div>
+                <div class="txt">“Median on-call load rises with service count; 6 services ≈ 3× alert volume of 1 deployable.”</div>
+                <div class="rel"><span class="mchip"><i class="m1"></i>Opus 4.5</span><span style="color:var(--faint)">supported by</span><span class="mchip"><i class="m4"></i>Llama 3.3</span></div>
+              </div>
+              <div class="side"><span class="pill agree">Evidence: strong</span><span class="lbl">3 of 5 aligned</span></div>
+            </div>
+
+            <div class="cl">
+              <div class="id">C-018<span class="ev infer">inference</span></div>
+              <div>
+                <div class="txt">“Because payment settlement and ledger scale together, splitting them yields no independent scaling win.”</div>
+                <div class="rel"><span class="mchip"><i class="m3"></i>Gemini 2.5</span><span style="color:var(--faint)">qualifies</span><span class="num" style="color:var(--faint)">C-007</span></div>
+              </div>
+              <div class="side"><span class="pill">Uncontested</span><span class="lbl">no challenge issued</span></div>
+            </div>
+
+            <div class="cl hot">
+              <div class="id">C-006<span class="ev opin">opinion</span></div>
+              <div>
+                <div class="txt">“Microservices are the safer default for a regulated payments domain.”</div>
+                <div class="rel"><span class="mchip"><i class="m5"></i>Mistral L2</span><s>contradicts →</s><span class="num" style="color:var(--faint)">C-018</span><span style="color:var(--faint)">·</span><span>evidence <b>unverified</b></span></div>
+              </div>
+              <div class="side"><span class="pill dissent">Dissent core</span><span class="lbl">2 of 5 aligned</span></div>
+            </div>
+
+            <div class="cl">
+              <div class="id">C-002<span class="ev fact">fact</span></div>
+              <div>
+                <div class="txt">“PCI scope is reduced when card data is isolated to one deployable boundary.”</div>
+                <div class="rel"><span class="mchip"><i class="m1"></i>Opus 4.5</span><span style="color:var(--faint)">supported by</span><span class="mchip"><i class="m2"></i>GPT-5.1</span><span class="mchip"><i class="m3"></i>Gemini</span></div>
+              </div>
+              <div class="side"><span class="pill agree">Consensus</span><span class="lbl">5 of 5 aligned</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- right -->
+        <div class="app-side">
+          <div class="card grp">
+            <div class="row sb"><span class="lbl">Spend</span><span class="pill acc">live</span></div>
+            <div class="row sb" style="align-items:baseline"><span class="num" style="font-size:26px;font-weight:600;letter-spacing:-.02em">$0.31</span><span class="num" style="font-size:11px;color:var(--faint)">of $2.00 cap</span></div>
+            <div class="track"><i style="width:15.5%"></i></div>
+            <div class="kv"><span>Round 1 · generation</span><b>$0.18</b></div>
+            <div class="kv"><span>Claim extraction</span><b>$0.04</b></div>
+            <div class="kv"><span>Round 2 · challenges</span><b>$0.09</b></div>
+            <div class="kv" style="color:var(--faint)"><span>Judge (estimated)</span><b>~$0.07</b></div>
+          </div>
+
+          <div class="grp">
+            <div class="row sb"><span class="lbl">Event log</span><span class="lbl">seq 0142</span></div>
+            <div class="log">
+              <div class="hi"><span>0142</span><em>CHALLENGE_ISSUED</em></div>
+              <div><span>0141</span>DISPUTE_PRIORITISED <em>C-024</em></div>
+              <div><span>0140</span>RELATIONSHIP_FOUND <em>contradicts</em></div>
+              <div><span>0139</span>CLAIM_EXTRACTED <em>C-024</em></div>
+              <div><span>0138</span>POSITION_COMPLETE <em>model_4</em></div>
+              <div><span>0137</span>TOKENS_BILLED <em>$0.006</em></div>
+              <div class="hi"><span>0136</span><em>ROUND_STARTED</em> r2</div>
+              <div><span>0135</span>ROUND_COMPLETE <em>r1</em></div>
+              <div><span>0134</span>POSITION_COMPLETE <em>model_2</em></div>
+              <div><span>0133</span>CLAIM_EXTRACTED <em>C-023</em></div>
+            </div>
+            <p style="font-size:11px;color:var(--faint);line-height:1.4">Gap in sequence numbers triggers a silent re-sync — the user sees a “catching up” chip, never a broken timeline.</p>
+          </div>
+
+          <div class="grp">
+            <div class="lbl">Stop conditions</div>
+            <div class="kv"><span>Round limit</span><b>2 / 3</b></div>
+            <div class="kv"><span>Budget</span><b>15%</b></div>
+            <div class="kv"><span>Critical disputes open</span><b>3</b></div>
+            <div class="kv"><span>New information rate</span><b>falling</b></div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+  <p class="cap"><b>Screen 3 · Watch debate.</b> Lane cards carry the four position verbs (generating / held / modified / withdrawn); the stream carries the claims. Dispute priority is shown as a number because the controller uses it to decide what to challenge — the user should see the same score the orchestrator does.</p>
+
+  <div class="notes">
+    <div class="note tech"><h4>Maps to</h4><p>ROUND_STARTED, CLAIM_EXTRACTED, RELATIONSHIP_FOUND, CHALLENGE_ISSUED, TOKENS_BILLED, POSITION_COMPLETE.</p></div>
+    <div class="note good"><h4>Why it works</h4><p>The right rail makes the cost engine a visible pillar rather than a post-hoc invoice, and turns the stop-condition tree into something the user can predict.</p></div>
+    <div class="note warn"><h4>Watch out</h4><p>Five lanes plus a stream plus a log is three moving things at once. Freeze lane animation while the stream is scrolling, or the screen reads as noise.</p></div>
+  </div>
+</section>
+<!-- ================= B ================= -->
+<section id="b">
+  <div class="sec-head">
+    <div class="sec-kicker"><b>Layout B</b><span>Document-first · single column with margin apparatus</span><hr></div>
+    <h2><span class="lc">B</span>Docket</h2>
+    <p class="thesis">The decision as a written opinion, with the machinery in the margin. One 680px measure of serif prose, every assertion carrying a clickable claim citation, and the dissent set as its own block rather than a footnote. This is the artefact that gets pasted into an RFC — so it has to survive being read by someone who never watched the debate.</p>
+  </div>
+  <div class="spec">
+    <div><h4>Optimises for</h4><p>Reading, sharing, defensibility</p></div>
+    <div><h4>Trade-off</h4><p>Linear; poor for comparing 5 positions at once</p></div>
+    <div><h4>Screens</h4><p>5 · See decision (and 4 via citations)</p></div>
+    <div><h4>Data it needs</h4><p>final_decision_object + judge rubric</p></div>
+  </div>
+
+  <div class="frame">
+    <div class="frame-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">debate.local/session/d_8f21c4/decision</div><div class="frame-tag">reader view</div></div>
+    <div class="viewport"><div class="shot b-shot">
+      <div class="doc-top">
+        <div class="row" style="gap:10px"><span class="lbl">Decision record</span><span class="num" style="font-size:11px;color:var(--faint)">d_8f21c4 · 30 Aug 2026 · 2m 41s · $0.38</span></div>
+        <div class="row" style="gap:6px"><button class="btn">Copy link</button><button class="btn">Export PDF</button><button class="btn pri">Open Build Studio →</button></div>
+      </div>
+
+      <div class="doc">
+        <!-- margin -->
+        <div class="gutter">
+          <div class="anno a"><b>Agreement</b>3 of 5 models support the recommendation. Agreement is reported, not averaged into confidence.</div>
+          <div class="anno q"><b>Evidence base</b>18 agreed claims · 9 disputed · 5 unresolved. 11 facts, 6 assumptions, 9 inferences, 4 opinions, 2 unverified.</div>
+          <div class="anno d"><b>Live dissent</b>Mistral Large 2 and GPT-5.1 held their position after rebuttal. Neither withdrew a claim.</div>
+          <div class="anno"><b>Judge</b>Sonnet 4.5, sealed panel. Positions anonymised and order-randomised before scoring.</div>
+          <div class="anno q"><b>Sensitivity</b>Decision flips if headcount for platform work exceeds 4 FTE or if settlement latency SLO drops below 150ms.</div>
+        </div>
+
+        <!-- body -->
+        <div class="body">
+          <div class="verdict">
+            <div class="verdict-h">
+              <div>
+                <div class="lbl" style="margin-bottom:3px">Outcome</div>
+                <div class="oc">MAJORITY_WITH_DISSENT</div>
+              </div>
+              <div style="text-align:right">
+                <div class="lbl" style="margin-bottom:4px">Decision confidence</div>
+                <div class="seg" style="width:150px"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="half"></i><i></i></div>
+              </div>
+            </div>
+            <div class="verdict-b">
+              <div><div class="lbl">Confidence</div><div class="big">84</div></div>
+              <div><div class="lbl">Model agreement</div><div class="big">3/5</div></div>
+              <div><div class="lbl">Unresolved claims</div><div class="big">5</div></div>
+            </div>
+          </div>
+
+          <h3>Decision</h3>
+          <p>Build the payments platform as a <strong>modular monolith</strong> with enforced module boundaries and a single deployable, and extract services only when a named scaling or compliance trigger fires.</p>
+
+          <h3>Why</h3>
+          <p>The strongest surviving evidence concerns operational load rather than architecture aesthetics. On-call burden scales with service count <span class="cite">C-011 · fact</span>, and the domains under discussion — settlement and ledger — scale together, so splitting them buys no independent scaling headroom <span class="cite">C-018 · inference</span>. The one compliance argument that survived cross-examination cuts the same way: isolating card data to a single deployable boundary reduces PCI scope <span class="cite">C-002 · fact</span>, and every model in the panel accepted it.</p>
+          <p>The case for microservices rested on a claim the panel could not substantiate — that a twelve-engineer team can operate six to eight services without dedicated platform staffing <span class="cite">C-024 · assumption</span>. Challenged directly, its author narrowed it to “with a platform team of at least three”, which the requirements do not fund.</p>
+
+          <h3>Dissent</h3>
+          <div class="dissent-block">
+            <p><strong>Two models declined to converge.</strong> Both argued that a regulated payments domain should default to service isolation regardless of team size <span class="cite">C-006 · opinion</span>. The judge scored the claim low on evidence quality (0.41) but high on risk awareness (0.79): the reasoning is unevidenced, but the risk it names — a blast radius spanning settlement and ledger in one deployable — is real and unaddressed by the recommendation.</p>
+            <p style="margin-bottom:0"><em>This dissent is not resolved by this decision. It is a live constraint on the design that follows.</em></p>
+          </div>
+
+          <h3>What would change this decision</h3>
+          <p>Three triggers, each traceable to an unresolved claim: platform engineering headcount reaching 4 FTE <span class="cite">C-024</span>; a settlement latency SLO below 150ms that the shared runtime cannot hold <span class="cite">C-031</span>; or a regulatory requirement for physically separated card-data processing <span class="cite">C-006</span>. Until one fires, extraction is deferred, not rejected.</p>
+
+          <h3>Judge scorecard</h3>
+          <table class="rubric">
+            <thead><tr><th>Metric</th><th>Weight</th><th></th><th>Score</th></tr></thead>
+            <tbody>
+              <tr><td>Factual correctness</td><td class="n">15%</td><td class="b"><div class="track"><i class="a" style="width:88%"></i></div></td><td class="n">0.88</td></tr>
+              <tr><td>Logical reasoning</td><td class="n">15%</td><td class="b"><div class="track"><i class="a" style="width:86%"></i></div></td><td class="n">0.86</td></tr>
+              <tr><td>Counterargument handling</td><td class="n">15%</td><td class="b"><div class="track"><i class="d" style="width:71%"></i></div></td><td class="n">0.71</td></tr>
+              <tr><td>Evidence quality</td><td class="n">10%</td><td class="b"><div class="track"><i class="d" style="width:64%"></i></div></td><td class="n">0.64</td></tr>
+              <tr><td>Problem relevance</td><td class="n">10%</td><td class="b"><div class="track"><i class="a" style="width:92%"></i></div></td><td class="n">0.92</td></tr>
+              <tr><td>Assumption quality</td><td class="n">10%</td><td class="b"><div class="track"><i class="d" style="width:69%"></i></div></td><td class="n">0.69</td></tr>
+              <tr><td>Risk awareness</td><td class="n">10%</td><td class="b"><div class="track"><i class="a" style="width:79%"></i></div></td><td class="n">0.79</td></tr>
+              <tr><td>Practicality</td><td class="n">10%</td><td class="b"><div class="track"><i class="a" style="width:90%"></i></div></td><td class="n">0.90</td></tr>
+              <tr><td>Clarity</td><td class="n">5%</td><td class="b"><div class="track"><i class="a" style="width:94%"></i></div></td><td class="n">0.94</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- right margin -->
+        <div class="gutter">
+          <div class="card grp" style="padding:11px">
+            <div class="lbl">Alternatives rejected</div>
+            <div class="kv"><span>Microservices (6–8)</span><b>0.42</b></div>
+            <div class="kv"><span>Service-per-team</span><b>0.31</b></div>
+            <div class="kv"><span>Serverless functions</span><b>0.18</b></div>
+            <p style="font-size:11px;color:var(--faint);line-height:1.4;margin-top:2px">Scores are evidence strength, not vote share.</p>
+          </div>
+          <div class="anno"><b>Cited claims</b>C-002 · C-006 · C-011 · C-018 · C-024 · C-031 — each opens the claim in place with its source span and challenge history.</div>
+          <div class="anno"><b>Provenance</b>Every sentence above resolves to a claim ID. Nothing in this record is generated without a claim behind it.</div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+  <p class="cap"><b>Screen 5 · See decision.</b> Confidence, agreement and unresolved count are three separate numbers on purpose — collapsing them into one score is exactly the failure mode the spec forbids. Dissent gets prose, not a percentage.</p>
+
+  <div class="notes">
+    <div class="note good"><h4>Why it works</h4><p>Reads as an opinion a reviewer can argue with. Citations make the claim layer inspectable without leaving the page.</p></div>
+    <div class="note warn"><h4>Watch out</h4><p>Two gutters at 1060px is the floor; below that the annotations must collapse inline, not scroll sideways.</p></div>
+    <div class="note tech"><h4>Also renders</h4><p>SPLIT_DECISION and INSUFFICIENT_EVIDENCE reuse this layout — the verdict block swaps colour and the dissent block grows. No “failed” empty state.</p></div>
+  </div>
+</section>
+<!-- ================= C ================= -->
+<section id="c">
+  <div class="sec-head">
+    <div class="sec-kicker"><b>Layout C</b><span>Board + matrix · analysis surface</span><hr></div>
+    <h2><span class="lc">C</span>Claim Board</h2>
+    <p class="thesis">Three columns — agreed, disputed, unresolved — and every claim is a card you can pick up. Below the board, two views of the same relationships: a model × claim alignment matrix, and a contradiction map. This is the screen that makes “models don’t vote” literal, because a model only ever appears as a dot attached to a claim.</p>
+  </div>
+  <div class="spec">
+    <div><h4>Optimises for</h4><p>Finding the real disagreement fast</p></div>
+    <div><h4>Trade-off</h4><p>No narrative; needs B or D to conclude</p></div>
+    <div><h4>Screens</h4><p>4 · Explore claims, plus Model Arena</p></div>
+    <div><h4>Data it needs</h4><p>Claims + relationships + per-model alignment</p></div>
+  </div>
+
+  <div class="frame">
+    <div class="frame-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">debate.local/session/d_8f21c4/claims?view=board</div><div class="frame-tag">32 claims</div></div>
+    <div class="viewport"><div class="shot">
+      <div class="board-top">
+        <span class="lbl">Filter</span>
+        <span class="filter on">All 32</span><span class="filter">Facts 11</span><span class="filter">Assumptions 6</span><span class="filter">Inferences 9</span><span class="filter">Opinions 4</span><span class="filter">Unverified 2</span>
+        <span style="width:1px;height:18px;background:var(--line)"></span>
+        <span class="lbl">Model</span>
+        <span class="mchip"><i class="m1"></i>Opus</span><span class="mchip"><i class="m2"></i>GPT-5.1</span><span class="mchip"><i class="m3"></i>Gemini</span><span class="mchip"><i class="m4"></i>Llama</span><span class="mchip"><i class="m5"></i>Mistral</span>
+        <span style="flex:1"></span>
+        <button class="btn">Sort: dispute priority</button>
+      </div>
+
+      <div class="cols">
+        <div class="col agr">
+          <div class="col-h"><h4>Agreed</h4><span class="pill agree">18 claims</span></div>
+          <div class="ccard">
+            <div class="top"><span class="num" style="font-size:10.5px;color:var(--faint)">C-002</span><span class="ev fact">fact</span></div>
+            <div class="q">PCI scope is reduced when card data is isolated to one deployable boundary.</div>
+            <div class="bot"><div class="stack-dots"><i class="m1"></i><i class="m2"></i><i class="m3"></i><i class="m4"></i><i class="m5"></i></div><span class="lbl">5/5 · evidence 0.91</span></div>
+          </div>
+          <div class="ccard">
+            <div class="top"><span class="num" style="font-size:10.5px;color:var(--faint)">C-011</span><span class="ev fact">fact</span></div>
+            <div class="q">On-call load rises with service count; 6 services ≈ 3× the alert volume of one deployable.</div>
+            <div class="bot"><div class="stack-dots"><i class="m1"></i><i class="m2 off"></i><i class="m3"></i><i class="m4"></i><i class="m5 off"></i></div><span class="lbl">3/5 · evidence 0.84</span></div>
+          </div>
+          <div class="ccard">
+            <div class="top"><span class="num" style="font-size:10.5px;color:var(--faint)">C-018</span><span class="ev infer">inference</span></div>
+            <div class="q">Settlement and ledger scale together, so splitting them yields no independent scaling win.</div>
+            <div class="bot"><div class="stack-dots"><i class="m1"></i><i class="m2"></i><i class="m3"></i><i class="m4"></i><i class="m5 off"></i></div><span class="lbl">4/5 · evidence 0.77</span></div>
+          </div>
+          <div class="ccard" style="opacity:.55">
+            <div class="top"><span class="num" style="font-size:10.5px;color:var(--faint)">C-009</span><span class="ev fact">fact</span></div>
+            <div class="q">Postgres row-level security satisfies tenant isolation for the ledger.</div>
+            <div class="bot"><div class="stack-dots"><i class="m1"></i><i class="m2"></i><i class="m3 off"></i><i class="m4"></i><i class="m5"></i></div><span class="lbl">4/5 · evidence 0.80</span></div>
+          </div>
+        </div>
+
+        <div class="col dis">
+          <div class="col-h"><h4>Disputed</h4><span class="pill dispute">9 claims · 4 critical</span></div>
+          <div class="ccard" style="border-color:var(--dispute)">
+            <div class="top"><span class="num" style="font-size:10.5px;color:var(--faint)">C-024</span><span class="ev assum">assumption</span></div>
+            <div class="q">A team of 12 can operate 6–8 services without a dedicated platform team.</div>
+            <div class="row" style="gap:6px;flex-wrap:wrap"><span class="pill dissent">contradicts C-011</span><span class="pill">challenged 2×</span></div>
+            <div class="bot"><div class="stack-dots"><i class="m1 off"></i><i class="m2"></i><i class="m3 off"></i><i class="m4 off"></i><i class="m5"></i></div><span class="lbl">priority 0.91 · narrowed</span></div>
+          </div>
+          <div class="ccard" style="border-color:var(--dispute)">
+            <div class="top"><span class="num" style="font-size:10.5px;color:var(--faint)">C-006</span><span class="ev opin">opinion</span></div>
+            <div class="q">Microservices are the safer default for a regulated payments domain.</div>
+            <div class="row" style="gap:6px;flex-wrap:wrap"><span class="pill dissent">contradicts C-018</span><span class="pill">position held</span></div>
+            <div class="bot"><div class="stack-dots"><i class="m1 off"></i><i class="m2"></i><i class="m3 off"></i><i class="m4 off"></i><i class="m5"></i></div><span class="lbl">priority 0.88 · defended</span></div>
+          </div>
+          <div class="ccard">
+            <div class="top"><span class="num" style="font-size:10.5px;color:var(--faint)">C-027</span><span class="ev infer">inference</span></div>
+            <div class="q">Module boundaries in one deployable erode without CI enforcement.</div>
+            <div class="row" style="gap:6px;flex-wrap:wrap"><span class="pill">qualifies C-018</span><span class="pill agree">withdrawn by 1</span></div>
+            <div class="bot"><div class="stack-dots"><i class="m1"></i><i class="m2"></i><i class="m3 off"></i><i class="m4 off"></i><i class="m5"></i></div><span class="lbl">priority 0.64 · modified</span></div>
+          </div>
+        </div>
+
+        <div class="col unr">
+          <div class="col-h"><h4>Unresolved</h4><span class="pill open">5 claims</span></div>
+          <div class="ccard">
+            <div class="top"><span class="num" style="font-size:10.5px;color:var(--faint)">C-031</span><span class="ev unver">unverified</span></div>
+            <div class="q">Shared runtime cannot hold a 150ms settlement SLO at 4× current volume.</div>
+            <div class="row" style="gap:6px;flex-wrap:wrap"><span class="pill open">no evidence offered</span></div>
+            <div class="bot"><div class="stack-dots"><i class="m1 off"></i><i class="m2"></i><i class="m3 off"></i><i class="m4 off"></i><i class="m5 off"></i></div><span class="lbl">becomes a change trigger</span></div>
+          </div>
+          <div class="ccard">
+            <div class="top"><span class="num" style="font-size:10.5px;color:var(--faint)">C-014</span><span class="ev assum">assumption</span></div>
+            <div class="q">Regulator will accept logical separation of card data in place of physical separation.</div>
+            <div class="row" style="gap:6px;flex-wrap:wrap"><span class="pill open">outside model knowledge</span></div>
+            <div class="bot"><div class="stack-dots"><i class="m1"></i><i class="m2 off"></i><i class="m3"></i><i class="m4 off"></i><i class="m5 off"></i></div><span class="lbl">needs a human answer</span></div>
+          </div>
+          <div class="ccard" style="border-style:dashed;background:transparent">
+            <div class="q" style="color:var(--muted);font-size:12.5px">Unresolved is a valid resting state. These claims are carried into the decision as open constraints, not dropped.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="matrix">
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) 316px;gap:22px;align-items:start">
+          <div>
+            <div class="row sb" style="margin-bottom:8px"><span class="lbl">Alignment matrix · model × claim</span><span class="lbl">✓ supports · ✗ contradicts · ~ qualifies · · silent</span></div>
+            <table class="mx">
+              <thead><tr><th class="l">Claim</th><th>Opus 4.5</th><th>GPT-5.1</th><th>Gemini 2.5</th><th>Llama 3.3</th><th>Mistral L2</th><th>Outcome</th></tr></thead>
+              <tbody>
+                <tr><td class="l">C-002 · PCI scope reduction</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td><span class="pill agree">agreed</span></td></tr>
+                <tr><td class="l">C-011 · on-call load scales</td><td class="y">✓</td><td class="n">✗</td><td class="y">✓</td><td class="y">✓</td><td class="o">·</td><td><span class="pill agree">agreed</span></td></tr>
+                <tr><td class="l">C-018 · no scaling win</td><td class="y">✓</td><td class="q">~</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗</td><td><span class="pill agree">agreed</span></td></tr>
+                <tr><td class="l">C-024 · 12 can run 8 services</td><td class="n">✗</td><td class="y">✓</td><td class="n">✗</td><td class="q">~</td><td class="y">✓</td><td><span class="pill dispute">disputed</span></td></tr>
+                <tr><td class="l">C-006 · services safer by default</td><td class="n">✗</td><td class="y">✓</td><td class="n">✗</td><td class="o">·</td><td class="y">✓</td><td><span class="pill dissent">dissent</span></td></tr>
+                <tr><td class="l">C-031 · SLO at 4× volume</td><td class="o">·</td><td class="y">✓</td><td class="o">·</td><td class="o">·</td><td class="o">·</td><td><span class="pill open">unresolved</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card grp">
+            <div class="lbl">Contradiction map</div>
+            <svg viewBox="0 0 290 190" width="100%" height="182" role="img" aria-label="Claim relationship map showing supports and contradicts edges between six claims">
+              <g stroke="var(--line-2)" stroke-width="1.2" fill="none">
+                <path d="M62 44 L150 96"/><path d="M150 96 L64 148"/><path d="M150 96 L232 52"/>
+              </g>
+              <g stroke="var(--dissent)" stroke-width="1.6" fill="none" stroke-dasharray="4 3">
+                <path d="M62 44 L226 140"/><path d="M232 52 L64 148"/>
+              </g>
+              <g font-family="IBM Plex Mono, monospace" font-size="9" fill="var(--muted)">
+                <circle cx="62" cy="44" r="15" fill="var(--agree-soft)" stroke="var(--agree)"/><text x="46" y="47">C-011</text>
+                <circle cx="150" cy="96" r="15" fill="var(--agree-soft)" stroke="var(--agree)"/><text x="134" y="99">C-018</text>
+                <circle cx="232" cy="52" r="15" fill="var(--surface-3)" stroke="var(--line-2)"/><text x="216" y="55">C-002</text>
+                <circle cx="64" cy="148" r="15" fill="var(--dispute-soft)" stroke="var(--dispute)"/><text x="48" y="151">C-024</text>
+                <circle cx="226" cy="140" r="15" fill="var(--dissent-soft)" stroke="var(--dissent)"/><text x="210" y="143">C-006</text>
+              </g>
+            </svg>
+            <div class="row" style="gap:12px"><span class="lbl" style="color:var(--muted)">— supports</span><span class="lbl" style="color:var(--dissent)">--- contradicts</span></div>
+            <p style="font-size:11.5px;color:var(--faint);line-height:1.45">Two contradiction edges carry the whole disagreement. Everything else in the debate is agreement or noise.</p>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+  <p class="cap"><b>Screen 4 · Explore claims.</b> Dimmed cards are agreed-and-uncontested — present but demoted. The matrix is the only place model identity is foregrounded, and even there the row, not the column, is the subject.</p>
+
+  <div class="notes">
+    <div class="note good"><h4>Why it works</h4><p>Answers “where do they actually disagree?” in one glance, and shows that most of a debate is agreement — which is what makes the dissent meaningful.</p></div>
+    <div class="note warn"><h4>Watch out</h4><p>Thirty-two cards is a wall. Default to critical disputes plus top-evidence agreed claims, with “show all” as an explicit act.</p></div>
+    <div class="note tech"><h4>Cheap version</h4><p>Ship the matrix before the map. The graph needs layout work; the table needs one query and already carries the same information.</p></div>
+  </div>
+</section>
+<!-- ================= D ================= -->
+<section id="d">
+  <div class="sec-head">
+    <div class="sec-kicker"><b>Layout D</b><span>One thing per screen · mobile-first, scales up</span><hr></div>
+    <h2><span class="lc">D</span>Focus Flow</h2>
+    <p class="thesis">The same six screens with everything deferred. You ask, you pick a panel, you watch a stepper rather than a stream, you get a decision card. Claims live one tap down. It’s the version you can hand to someone who has never heard the phrase “cross-examination” — and the only one that works while a debate runs for three minutes in your pocket.</p>
+  </div>
+  <div class="spec">
+    <div><h4>Optimises for</h4><p>First-run comprehension, phone use</p></div>
+    <div><h4>Trade-off</h4><p>Hides the machinery power users came for</p></div>
+    <div><h4>Screens</h4><p>1 · 2 · 3 · 5 (4 and 6 as drill-downs)</p></div>
+    <div><h4>Data it needs</h4><p>Same events; renders progress, not detail</p></div>
+  </div>
+
+  <div class="frame">
+    <div class="frame-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">debate.local — 390 × 844</div><div class="frame-tag">flow · 5 states</div></div>
+    <div class="viewport"><div class="shot narrow">
+      <div class="phones">
+
+        <!-- 1 ASK -->
+        <div class="phone">
+          <div class="phone-h"><span>9:41</span><span>Ask</span></div>
+          <div class="phone-b">
+            <div class="grp" style="gap:4px"><span class="lbl">What are you deciding?</span></div>
+            <div class="ask">Should the payments platform ship as a modular monolith or as microservices for the next 18 months?<span style="color:var(--accent)">|</span></div>
+            <div class="grp">
+              <span class="lbl">Depth</span>
+              <div class="row" style="gap:6px">
+                <span class="filter on">Standard · ~2 min · ~$0.35</span>
+                <span class="filter">Deep · ~6 min · ~$1.20</span>
+              </div>
+            </div>
+            <div class="card grp" style="gap:6px">
+              <div class="kv"><span>Estimated spend</span><b>$0.31 – $0.44</b></div>
+              <div class="track"><i style="width:19%"></i></div>
+              <p style="font-size:11px;color:var(--faint);line-height:1.4">Hard cap $2.00. The debate stops itself before the cap; it never asks you mid-run.</p>
+            </div>
+            <div style="flex:1"></div>
+            <button class="btn pri" style="padding:10px;font-size:13px">Choose a panel →</button>
+          </div>
+          <div class="phone-nav"><b>1 Ask</b><span>2 Panel</span><span>3 Debate</span><span>4 Decision</span></div>
+        </div>
+
+        <!-- 2 PANEL -->
+        <div class="phone">
+          <div class="phone-h"><span>9:41</span><span>Panel</span></div>
+          <div class="phone-b">
+            <div class="row sb"><span class="lbl">5 selected · judge sealed</span><span class="pill acc">Recommended</span></div>
+            <div class="chooser">
+              <div class="mrow sel"><span class="tick">✓</span><div class="g"><div class="nm">Claude Opus 4.5</div><div class="sub">strong on risk framing</div></div><span class="num" style="font-size:10px;color:var(--faint)">$0.09</span></div>
+              <div class="mrow sel"><span class="tick">✓</span><div class="g"><div class="nm">GPT-5.1</div><div class="sub">strong on counterargument</div></div><span class="num" style="font-size:10px;color:var(--faint)">$0.08</span></div>
+              <div class="mrow sel"><span class="tick">✓</span><div class="g"><div class="nm">Gemini 2.5 Pro</div><div class="sub">strong on evidence recall</div></div><span class="num" style="font-size:10px;color:var(--faint)">$0.06</span></div>
+              <div class="mrow sel"><span class="tick">✓</span><div class="g"><div class="nm">Llama 3.3 70B</div><div class="sub">cheap dissenting voice</div></div><span class="num" style="font-size:10px;color:var(--faint)">$0.02</span></div>
+              <div class="mrow sel"><span class="tick">✓</span><div class="g"><div class="nm">Mistral Large 2</div><div class="sub">concise, low drift</div></div><span class="num" style="font-size:10px;color:var(--faint)">$0.03</span></div>
+              <div class="mrow"><span class="tick">✓</span><div class="g"><div class="nm">Command R+</div><div class="sub">add a sixth voice</div></div><span class="num" style="font-size:10px;color:var(--faint)">+$0.04</span></div>
+            </div>
+            <p style="font-size:11px;color:var(--faint);line-height:1.4">A sixth model raises cost ~13% and rarely changes the outcome — it changes how much dissent survives.</p>
+            <div style="flex:1"></div>
+            <button class="btn pri" style="padding:10px;font-size:13px">Start debate · $0.28 est.</button>
+          </div>
+          <div class="phone-nav"><span>1 Ask</span><b>2 Panel</b><span>3 Debate</span><span>4 Decision</span></div>
+        </div>
+
+        <!-- 3 DEBATE -->
+        <div class="phone">
+          <div class="phone-h"><span>9:43</span><span>Debate</span></div>
+          <div class="phone-b">
+            <div class="row sb"><span class="live">Running</span><span class="num" style="font-size:11px;color:var(--faint)">01:12 · $0.31</span></div>
+            <div class="stepper">
+              <div class="done"><span class="dot"></span><span>Independent positions</span><span class="t">5/5</span></div>
+              <div class="done"><span class="dot"></span><span>Claims extracted</span><span class="t">32</span></div>
+              <div class="done"><span class="dot"></span><span>Disputes prioritised</span><span class="t">9</span></div>
+              <div class="now"><span class="dot"></span><span>Cross-examination</span><span class="t">4/6</span></div>
+              <div><span class="dot"></span><span>Rebuttals</span><span class="t">—</span></div>
+              <div><span class="dot"></span><span>Judgment</span><span class="t">—</span></div>
+            </div>
+            <div class="card grp" style="gap:7px">
+              <span class="lbl">Happening now</span>
+              <div class="q prose" style="font-size:13px;line-height:1.45">GPT-5.1 is challenging Opus 4.5 on <b class="num" style="font-size:11px">C-011</b> — whether on-call load really scales with service count.</div>
+              <div class="row" style="gap:6px"><span class="pill dispute">priority 0.91</span><span class="pill">2 of 6 answered</span></div>
+            </div>
+            <div class="grp" style="gap:5px">
+              <span class="lbl">Settled so far</span>
+              <div class="kv"><span>Agreed claims</span><b>18</b></div>
+              <div class="kv"><span>Still disputed</span><b>9</b></div>
+            </div>
+            <div style="flex:1"></div>
+            <button class="btn" style="padding:9px;font-size:12.5px">Stop and judge now</button>
+          </div>
+          <div class="phone-nav"><span>1 Ask</span><span>2 Panel</span><b>3 Debate</b><span>4 Decision</span></div>
+        </div>
+
+        <!-- 4 DECISION -->
+        <div class="phone">
+          <div class="phone-h"><span>9:44</span><span>Decision</span></div>
+          <div class="phone-b">
+            <span class="pill dispute" style="align-self:flex-start">Majority with dissent</span>
+            <div class="q prose" style="font-size:17px;line-height:1.35;font-weight:600;font-family:var(--sans);letter-spacing:-.02em">Build a modular monolith. Extract services only on a named trigger.</div>
+            <div class="ring">
+              <div class="v">84</div>
+              <span class="lbl">decision confidence</span>
+              <div class="seg" style="width:180px;margin-top:6px"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="half"></i><i></i></div>
+            </div>
+            <div class="row" style="gap:8px">
+              <div class="card grp" style="flex:1;gap:2px;padding:9px"><span class="lbl">Agreement</span><b class="num" style="font-size:16px">3/5</b></div>
+              <div class="card grp" style="flex:1;gap:2px;padding:9px"><span class="lbl">Unresolved</span><b class="num" style="font-size:16px">5</b></div>
+            </div>
+            <div class="card grp" style="gap:6px;border-left:3px solid var(--dissent)">
+              <span class="lbl" style="color:var(--dissent)">Dissent stands</span>
+              <p style="font-size:12.5px;line-height:1.45;color:var(--muted)">2 models argue a regulated domain should isolate services regardless of team size. Unevidenced, but the blast-radius risk is real.</p>
+            </div>
+            <div style="flex:1"></div>
+            <button class="btn" style="padding:9px;font-size:12.5px">See the 32 claims</button>
+            <button class="btn pri" style="padding:10px;font-size:13px">Turn this into a spec →</button>
+          </div>
+          <div class="phone-nav"><span>1 Ask</span><span>2 Panel</span><span>3 Debate</span><b>4 Decision</b></div>
+        </div>
+
+        <!-- 5 CLAIMS DRILL -->
+        <div class="phone">
+          <div class="phone-h"><span>9:45</span><span>Claims</span></div>
+          <div class="phone-b">
+            <div class="row" style="gap:6px"><span class="filter">18 agreed</span><span class="filter on">9 disputed</span><span class="filter">5 open</span></div>
+            <div class="ccard">
+              <div class="top"><span class="num" style="font-size:10.5px;color:var(--faint)">C-024</span><span class="ev assum">assumption</span></div>
+              <div class="q">A team of 12 can operate 6–8 services without a dedicated platform team.</div>
+              <div class="bot"><div class="stack-dots"><i class="m1 off"></i><i class="m2"></i><i class="m3 off"></i><i class="m4 off"></i><i class="m5"></i></div><span class="lbl">narrowed after challenge</span></div>
+            </div>
+            <div class="ccard">
+              <div class="top"><span class="num" style="font-size:10.5px;color:var(--faint)">C-006</span><span class="ev opin">opinion</span></div>
+              <div class="q">Microservices are the safer default for a regulated payments domain.</div>
+              <div class="bot"><div class="stack-dots"><i class="m1 off"></i><i class="m2"></i><i class="m3 off"></i><i class="m4 off"></i><i class="m5"></i></div><span class="lbl">position held</span></div>
+            </div>
+            <div class="ccard">
+              <div class="top"><span class="num" style="font-size:10.5px;color:var(--faint)">C-027</span><span class="ev infer">inference</span></div>
+              <div class="q">Module boundaries erode without CI enforcement.</div>
+              <div class="bot"><div class="stack-dots"><i class="m1"></i><i class="m2"></i><i class="m3 off"></i><i class="m4 off"></i><i class="m5"></i></div><span class="lbl">1 withdrawal</span></div>
+            </div>
+            <p style="font-size:11px;color:var(--faint);line-height:1.4">Tap a claim to see its source span, who challenged it, and what the author said back.</p>
+          </div>
+          <div class="phone-nav"><span>Back to decision</span><b>Claims</b></div>
+        </div>
+
+      </div>
+    </div></div>
+  </div>
+  <p class="cap"><b>Screens 1 → 5 as a flow.</b> Note what the live screen shows: a stepper and one sentence about the current exchange. On a phone, the pipeline’s legibility matters more than its contents.</p>
+
+  <div class="notes">
+    <div class="note good"><h4>Why it works</h4><p>Cost is quoted before the run and confirmed on the button, which is where budget anxiety actually lives.</p></div>
+    <div class="note warn"><h4>Watch out</h4><p>“Stop and judge now” must be honest: it judges on evidence gathered so far and the decision object should record that it was cut short.</p></div>
+    <div class="note tech"><h4>Scales up</h4><p>At desktop width the five states become a centred 640px column with the same order — no second codebase.</p></div>
+  </div>
+</section>
+<!-- ================= E ================= -->
+<section id="e">
+  <div class="sec-head">
+    <div class="sec-kicker"><b>Layout E</b><span>Split workbench · decision locked left, artefact right</span><hr></div>
+    <h2><span class="lc">E</span>Workbench</h2>
+    <p class="thesis">Build Studio as a two-pane editor: the decision sits pinned and read-only on the left, the generated artefact fills the right through three tabs — product spec, technical spec, development prompt. The point of the pinning is traceability: every section of the spec names the claim or constraint it came from, including the dissent it has to live with.</p>
+  </div>
+  <div class="spec">
+    <div><h4>Optimises for</h4><p>Traceable generation, copy-out</p></div>
+    <div><h4>Trade-off</h4><p>Long artefacts; needs strong outline nav</p></div>
+    <div><h4>Screens</h4><p>6 · Build (module: Build Studio)</p></div>
+    <div><h4>Data it needs</h4><p>final_decision_object → 3 architect passes</p></div>
+  </div>
+
+  <div class="frame">
+    <div class="frame-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">debate.local/session/d_8f21c4/build</div><div class="frame-tag">stage 3 of 3</div></div>
+    <div class="viewport"><div class="shot">
+      <div class="app wb">
+        <div class="wb-ctx">
+          <div class="grp" style="gap:6px">
+            <span class="lbl">Decision · locked</span>
+            <div style="font-size:13px;font-weight:600;line-height:1.35;letter-spacing:-.01em">Modular monolith with enforced module boundaries; extract on trigger.</div>
+            <div class="row" style="gap:6px;flex-wrap:wrap"><span class="pill dispute">majority w/ dissent</span><span class="pill">conf 84</span><span class="pill">3/5</span></div>
+          </div>
+          <div class="grp" style="gap:6px">
+            <span class="lbl">Pipeline</span>
+            <div class="steps">
+              <a class="done"><span class="n">✓</span>Product architect</a>
+              <a class="done"><span class="n">✓</span>Technical architect</a>
+              <a class="now"><span class="n">3</span>Prompt engineer</a>
+            </div>
+          </div>
+          <div class="grp" style="gap:6px">
+            <span class="lbl">Constraints carried in</span>
+            <div class="card grp" style="gap:5px;padding:9px;border-left:3px solid var(--dissent)">
+              <span class="lbl" style="color:var(--dissent)">From dissent</span>
+              <p style="font-size:11.5px;line-height:1.45;color:var(--muted)">Blast radius spans settlement + ledger. Spec must include a kill-switch and module-level circuit breaking.</p>
+            </div>
+            <div class="card grp" style="gap:5px;padding:9px;border-left:3px solid var(--open)">
+              <span class="lbl" style="color:var(--open)">From unresolved</span>
+              <p style="font-size:11.5px;line-height:1.45;color:var(--muted)">C-031 latency and C-014 regulator posture are open — both become explicit assumptions in the prompt, not silent defaults.</p>
+            </div>
+          </div>
+          <div class="grp" style="gap:6px">
+            <span class="lbl">Generation cost</span>
+            <div class="kv"><span>Product spec</span><b>$0.04</b></div>
+            <div class="kv"><span>Technical spec</span><b>$0.06</b></div>
+            <div class="kv"><span>Dev prompt</span><b>$0.05</b></div>
+          </div>
+        </div>
+
+        <div class="app-main">
+          <div class="tabs">
+            <span>Product specification</span><span>Technical architecture</span><span class="on">Development prompt</span><span style="margin-left:auto;color:var(--faint)">Diff vs. decision</span>
+          </div>
+          <div class="topbar" style="padding:9px 16px">
+            <span class="lbl">prompt.md · 214 lines · ready to paste</span>
+            <span style="flex:1"></span>
+            <button class="btn">Regenerate</button><button class="btn">Download</button><button class="btn pri">Copy prompt</button>
+          </div>
+          <div class="editor">
+            <div class="code">
+<b># Build: Payments Platform — Modular Monolith</b><br><br>
+<i>## Context</i><br>
+You are implementing a payments platform chosen by a five-model<br>
+deliberation (outcome: <u>MAJORITY_WITH_DISSENT</u>, confidence 84).<br>
+Two models dissented; their risk is <u>binding</u>, not advisory.<br><br>
+<i>## Non-negotiable constraints</i><br>
+1. One deployable. Modules communicate through published<br>
+&nbsp;&nbsp; interfaces only — no cross-module table access. <span class="h">(C-018)</span><br>
+2. Card data confined to a single module boundary for PCI<br>
+&nbsp;&nbsp; scope reduction. <span class="h">(C-002)</span><br>
+3. Module-level circuit breakers + a settlement kill switch,<br>
+&nbsp;&nbsp; because blast radius spans settlement and ledger. <span class="h">(dissent)</span><br>
+4. CI enforces boundaries: an import-graph check fails the<br>
+&nbsp;&nbsp; build on any illegal edge. <span class="h">(C-027)</span><br><br>
+<i>## Stated assumptions (unresolved in debate)</i><br>
+- Settlement SLO target 150ms at 4× volume is <u>unverified</u>.<br>
+&nbsp;&nbsp; Instrument it from day one; do not design around it. <span class="h">(C-031)</span><br>
+- Logical separation of card data is assumed acceptable to the<br>
+&nbsp;&nbsp; regulator. <u>Confirm before launch.</u> <span class="h">(C-014)</span><br><br>
+<i>## Extraction triggers (do not pre-build)</i><br>
+Platform headcount ≥ 4 FTE · settlement p99 &gt; 150ms sustained ·<br>
+regulator requires physical separation.<br><br>
+<i>## Deliverables</i><br>
+- <b>modules/</b> ledger, settlement, cardvault, ledger-api<br>
+- <b>contracts/</b> typed interfaces + import-graph rules<br>
+- <b>ops/</b> circuit breakers, kill switch, alert routing…
+            </div>
+            <div class="outline">
+              <span class="lbl">Outline</span>
+              <div class="olist">
+                <a>Context</a>
+                <a class="on">Non-negotiable constraints</a>
+                <a>Stated assumptions</a>
+                <a>Extraction triggers</a>
+                <a>Deliverables</a>
+                <a>Module contracts</a>
+                <a>Data model</a>
+                <a>Test plan</a>
+                <a>Definition of done</a>
+              </div>
+              <div class="grp" style="gap:6px;margin-top:4px">
+                <span class="lbl">Traceability</span>
+                <div class="kv"><span>Lines citing a claim</span><b>41</b></div>
+                <div class="kv"><span>Uncited assertions</span><b>0</b></div>
+                <div class="kv"><span>Dissent clauses</span><b>2</b></div>
+              </div>
+              <p style="font-size:11px;color:var(--faint);line-height:1.45">An uncited assertion count above zero is a generation bug, not a style issue — the spec is only as good as its provenance.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+  <p class="cap"><b>Screen 6 · Build.</b> The three architect passes are tabs, not wizard steps, so a user can go back to the product spec after reading the prompt without regenerating the chain.</p>
+</section>
+
+<!-- ================= F ================= -->
+<section id="f">
+  <div class="sec-head">
+    <div class="sec-kicker"><b>Layout F</b><span>Dense table · retrieval and reuse</span><hr></div>
+    <h2><span class="lc">F</span>Ledger</h2>
+    <p class="thesis">History as a table, because history is a lookup problem. Sortable on the three things people actually search by — outcome, confidence, and whether a spec was ever produced — with Postgres full-text over question and decision text. No cards, no thumbnails, no timeline scrubber.</p>
+  </div>
+  <div class="spec">
+    <div><h4>Optimises for</h4><p>Finding one debate among hundreds</p></div>
+    <div><h4>Trade-off</h4><p>Utilitarian by design; nothing to look at</p></div>
+    <div><h4>Screens</h4><p>Module: Debate History</p></div>
+    <div><h4>Data it needs</h4><p>debate_sessions + outcome + spec flag</p></div>
+  </div>
+
+  <div class="frame">
+    <div class="frame-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">debate.local/history?q=architecture&amp;outcome=any</div><div class="frame-tag">142 debates</div></div>
+    <div class="viewport"><div class="shot">
+      <div class="board-top">
+        <span class="filter on">All outcomes</span><span class="filter">Consensus 61</span><span class="filter">Majority w/ dissent 48</span><span class="filter">Split 24</span><span class="filter">Insufficient evidence 9</span>
+        <span style="width:1px;height:18px;background:var(--line)"></span>
+        <span class="filter">Confidence ≥ 80</span><span class="filter">Has spec</span><span class="filter">Mine</span>
+        <span style="flex:1"></span>
+        <span class="lbl">Total spend this month · $46.12</span>
+      </div>
+      <table class="led">
+        <thead><tr><th>Question</th><th>Outcome</th><th>Conf.</th><th>Agree</th><th>Open</th><th>Panel</th><th>Cost</th><th>Built</th><th>When</th></tr></thead>
+        <tbody>
+          <tr><td class="q">Should the payments platform ship as a modular monolith or as microservices?</td><td><span class="pill dispute">majority w/ dissent</span></td><td class="n">84</td><td class="n">3/5</td><td class="n">5</td><td class="n">5</td><td class="n">$0.38</td><td><span class="pill acc">spec</span></td><td class="n">2m ago</td></tr>
+          <tr><td class="q">Postgres or DynamoDB for the event ledger at 40k writes/sec?</td><td><span class="pill agree">consensus</span></td><td class="n">91</td><td class="n">5/5</td><td class="n">1</td><td class="n">5</td><td class="n">$0.31</td><td><span class="pill acc">spec</span></td><td class="n">Today</td></tr>
+          <tr><td class="q">Do we need a feature-flag service or is a config table enough?</td><td><span class="pill agree">consensus</span></td><td class="n">88</td><td class="n">4/5</td><td class="n">2</td><td class="n">4</td><td class="n">$0.19</td><td><span class="pill">—</span></td><td class="n">Yesterday</td></tr>
+          <tr><td class="q">Rewrite the fraud scoring service in Rust, or optimise the Python one?</td><td><span class="pill dissent">split decision</span></td><td class="n">52</td><td class="n">2/5</td><td class="n">11</td><td class="n">5</td><td class="n">$0.47</td><td><span class="pill">—</span></td><td class="n">28 Aug</td></tr>
+          <tr><td class="q">Is a 4-week freeze on schema changes justified before the audit?</td><td><span class="pill open">insufficient evidence</span></td><td class="n">38</td><td class="n">2/5</td><td class="n">14</td><td class="n">3</td><td class="n">$0.12</td><td><span class="pill">—</span></td><td class="n">27 Aug</td></tr>
+          <tr><td class="q">Single-region with warm standby, or active-active across two regions?</td><td><span class="pill dispute">majority w/ dissent</span></td><td class="n">76</td><td class="n">3/5</td><td class="n">6</td><td class="n">5</td><td class="n">$0.41</td><td><span class="pill acc">spec</span></td><td class="n">26 Aug</td></tr>
+        </tbody>
+      </table>
+      <div class="row sb" style="padding:11px 16px;border-top:1px solid var(--line)">
+        <span class="lbl">Rows 1–6 of 142 · full-text over question + decision text</span>
+        <div class="row" style="gap:6px"><button class="btn">Reuse panel</button><button class="btn">Re-run with new evidence</button><button class="btn">Export CSV</button></div>
+      </div>
+    </div></div>
+  </div>
+  <p class="cap"><b>Module · Debate History.</b> “Insufficient evidence” is listed like any other outcome, at full opacity. A debate that refused to conclude is a result, and the history view is where that stance is either honoured or quietly undermined.</p>
+</section>
+<!-- ================= KIT ================= -->
+<section id="kit">
+  <div class="sec-head">
+    <div class="sec-kicker"><b>02</b><span>Shared component kit</span><hr></div>
+    <h2>One vocabulary under all six layouts</h2>
+    <p class="thesis">Whichever shell wins, these primitives stay identical. They encode the spec’s terminology directly — outcome states, evidence types, position verbs — so a user who learns them on the board can read them on the docket.</p>
+  </div>
+  <div class="kit">
+    <div>
+      <h4>Semantic channels</h4>
+      <div class="swatches">
+        <span class="sw"><i style="background:var(--agree)"></i>agreed</span>
+        <span class="sw"><i style="background:var(--dispute)"></i>disputed</span>
+        <span class="sw"><i style="background:var(--open)"></i>unresolved</span>
+        <span class="sw"><i style="background:var(--dissent)"></i>dissent</span>
+        <span class="sw"><i style="background:var(--accent)"></i>action</span>
+      </div>
+      <p>Four states, four colours, never reused for anything else. Accent cobalt is reserved for interaction so it can’t be mistaken for a verdict.</p>
+    </div>
+    <div class="shot">
+      <h4>Outcome badge</h4>
+      <div class="row" style="gap:6px;flex-wrap:wrap">
+        <span class="pill agree">consensus</span><span class="pill dispute">majority w/ dissent</span><span class="pill dissent">split decision</span><span class="pill open">insufficient evidence</span>
+      </div>
+      <p>All four are terminal, equal-weight states. None is styled as an error or a partial result.</p>
+    </div>
+    <div class="shot">
+      <h4>Evidence chip</h4>
+      <div class="row" style="gap:6px;flex-wrap:wrap">
+        <span class="ev fact">fact</span><span class="ev assum">assumption</span><span class="ev infer">inference</span><span class="ev opin">opinion</span><span class="ev unver">unverified</span>
+      </div>
+      <p>Outline-only, never filled — evidence type qualifies a claim, it doesn’t rank it. Always sits with the claim ID.</p>
+    </div>
+    <div class="shot">
+      <h4>Confidence meter</h4>
+      <div class="seg" style="max-width:180px"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="half"></i><i></i></div>
+      <p>Ten segments, not a smooth bar. Discrete units resist being read as precision the model doesn’t have.</p>
+    </div>
+    <div class="shot">
+      <h4>Claim card anatomy</h4>
+      <div class="ccard" style="max-width:260px">
+        <div class="top"><span class="num" style="font-size:10.5px;color:var(--faint)">C-0nn</span><span class="ev fact">type</span></div>
+        <div class="q">Claim text, always the largest thing on the card.</div>
+        <div class="bot"><div class="stack-dots"><i class="m1"></i><i class="m2"></i><i class="m3 off"></i><i class="m4"></i><i class="m5 off"></i></div><span class="lbl">n/5 · evidence</span></div>
+      </div>
+      <p>ID, type, text, alignment dots, strength. Model dots are 7px — deliberately smaller than the claim.</p>
+    </div>
+    <div class="shot">
+      <h4>Position verbs</h4>
+      <div class="row" style="gap:6px;flex-wrap:wrap">
+        <span class="pill agree">held</span><span class="pill dispute">modified</span><span class="pill dissent">withdrawn</span><span class="pill acc">answering</span>
+      </div>
+      <p>What a model did after being challenged is the most interesting fact about it — more than its score.</p>
+    </div>
+    <div class="shot">
+      <h4>Cost ticker</h4>
+      <div class="row sb" style="align-items:baseline;max-width:220px"><span class="num" style="font-size:20px;font-weight:600">$0.31</span><span class="num" style="font-size:11px;color:var(--faint)">of $2.00</span></div>
+      <div class="track" style="max-width:220px"><i style="width:15.5%"></i></div>
+      <p>Present on every screen where a model can be called. Turns amber past 60%, and the orchestrator stops before it turns red.</p>
+    </div>
+    <div>
+      <h4>Type roles</h4>
+      <p style="font-family:var(--serif);font-size:15px;color:var(--text);line-height:1.5">Source Serif — claims, arguments, decision prose. Anything a model said.</p>
+      <p style="font-weight:600;color:var(--text)">Archivo — interface chrome, headings, buttons. Anything the product says.</p>
+      <p style="font-family:var(--mono);font-size:12px;color:var(--text)">IBM Plex Mono — IDs, scores, costs, event names. Anything the system measures.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PICK ================= -->
+<section id="pick">
+  <div class="sec-head">
+    <div class="sec-kicker"><b>03</b><span>Recommendation</span><hr></div>
+    <h2>What I’d build for the 3–4 week MVP</h2>
+  </div>
+  <div class="notes" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
+    <div class="note tech"><h4>Shell: D, then A</h4><p>Ship Focus Flow first — it covers screens 1, 2, 3 and 5 with one column and no layout risk, and it forces the cost and progress story to be legible. Add the Control Room as a “pro view” toggle once the event contract is stable.</p></div>
+    <div class="note good"><h4>Decision surface: B</h4><p>The Docket is the artefact people will share, and it is the cheapest to build — it renders the decision object directly. Its citations give you screen 4 for free before the board exists.</p></div>
+    <div class="note warn"><h4>Defer: C’s graph</h4><p>Build the board columns and the alignment matrix; leave the contradiction map for post-MVP. The map needs graph layout work that buys no information the matrix lacks.</p></div>
+    <div class="note tech"><h4>E and F as-is</h4><p>Both are single-purpose and small. The Workbench’s traceability counters are worth building on day one — they’re your regression test for spec-generation quality.</p></div>
+  </div>
+  <div class="spec" style="margin-top:26px">
+    <div><h4>Week 1–2</h4><p>D (screens 1–3) + live event plumbing + cost ticker</p></div>
+    <div><h4>Week 3</h4><p>B decision record + claim citations (screen 4 via drill-down)</p></div>
+    <div><h4>Week 4</h4><p>E Build Studio tabs + F history table</p></div>
+    <div><h4>Post-MVP</h4><p>A pro shell · C board and matrix · adaptive rounds</p></div>
+  </div>
+  <p class="cap" style="margin-top:22px"><b>Not built here.</b> These are layout studies — static HTML, invented content, no product code. Numbers, claims and model names are illustrative and chosen to stress the layouts, not to represent any real benchmark.</p>
+</section>
+
+</main>
+</div>
+
+<script>
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('#nav a'));
+  var targets = links.map(function(a){ return document.querySelector(a.getAttribute('href')); });
+  function sync(){
+    var best = 0, top = window.scrollY + 140;
+    targets.forEach(function(t,i){ if(t && t.offsetTop <= top) best = i; });
+    links.forEach(function(a,i){ a.classList.toggle('on', i === best); });
+  }
+  var tick = false;
+  window.addEventListener('scroll', function(){
+    if(tick) return; tick = true;
+    window.requestAnimationFrame(function(){ sync(); tick = false; });
+  }, {passive:true});
+  links.forEach(function(a){
+    a.addEventListener('click', function(e){
+      var t = document.querySelector(a.getAttribute('href'));
+      if(!t) return;
+      e.preventDefault();
+      t.scrollIntoView({behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block:'start'});
+    });
+  });
+  sync();
+})();
+</script>
