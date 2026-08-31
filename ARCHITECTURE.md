@@ -3,6 +3,7 @@
 **Version:** 2.0 (frozen for implementation)
 **Status:** approved — implementation in progress
 **Supersedes:** v1.0 (Python · LangGraph · Postgres · FastAPI · WebSocket · React)
+**Companion:** `docs/INTERFACES.md` — concrete trait definitions and protocols
 **Last updated:** 2026-08-31
 
 ---
@@ -148,6 +149,11 @@ Source-span validation works for *"our team has 8 developers"* but not for
 Hence three variants, not two. `Unsupported` is admitted at low weight rather than
 rejected: unevidenced-but-real risk is exactly what dissent is made of.
 
+Matching is mechanical — normalised exact substring, then trigram-Jaccard ≥ 0.85, then
+premise resolution for inferences. Repair is **one extra call per position** (never per
+claim), capped at 2,048 output tokens and budget-reserved like any other call, so
+extraction cost stays bounded. Full protocol: `docs/INTERFACES.md` §2.
+
 ### 5.2 Normalization preserves provenance
 
 ```
@@ -167,9 +173,17 @@ Originals are never destroyed; every derived number traces back to a member.
 Two-stage, because N² LLM calls over 30–60 claims is unaffordable and unnecessary:
 
 ```
-claims → cheap candidate generation (lexical/embedding) → top-K pairs
-       → LLM classification → RelationKind + confidence
+claims → normalise → trigram SimHash blocking → IDF-weighted cosine
+       → top-K pairs (K = 12) + polarity sweep → LLM classification
+       → RelationKind + confidence
 ```
+
+**Phase 1 ships no embedding model and no vector store.** Blocking is purely lexical;
+the LLM is the semantic step, so paraphrases are caught at classification rather than
+at candidate generation. A *polarity sweep* adds every cross-model pair attached to
+opposing options as a candidate regardless of lexical score, because the pairs that
+matter most are the ones worded differently. `Similarity` is an internal plane, so an
+embedding implementation drops in later without touching a stage.
 
 `RelationKind` is a closed enum: `Supports · Contradicts · Qualifies · Unrelated · Uncertain`.
 `Uncertain` is recorded and carries zero weight — the classifier declining to commit
@@ -184,11 +198,15 @@ have stabilised, or the judge can decide.
 **Hard bounds it can never exceed** (kernel-enforced, config-set):
 
 ```
-max_rounds       default 2 rebuttal rounds
+max_rounds       1 (--depth standard) · 3 (--depth deep) · hard ceiling 6
 max_cost         default $2.00
 max_tokens       configurable
 max_wall_time    default 300s
 ```
+
+The controller decides two things, not one: whether to continue, **and which disputes
+to spend the next round on**. Choosing 6 challenge pairs from 40 candidate disputes is
+adaptation even when a single round remains.
 
 ### 5.5 Judge
 
@@ -204,8 +222,18 @@ Claude · GPT · Gemini · Llama · Mistral
          aggregate (judge_count = 1 default; > 1 needs no redesign)
 ```
 
-The judge never sees model identity, provider, or panel order. Its score is **one
-term of confidence**, not the decision.
+The judge receives a **dossier per position**, not just final text: recommendation,
+that position's claims, and every challenge it received with its verbatim rebuttal and
+the resulting lifecycle transition. Counterargument Handling is therefore scored from
+observed exchanges, cross-checkable against the claim lifecycle.
+
+The judge never sees model identity, provider, or panel order, and surface form is
+normalised before judging (tables flattened, headings stripped, bullets unified).
+Style-based identity inference is *mitigated, not eliminated* — bounded by the judge
+scoring exchanges rather than picking a winner, by its weighted score being one term
+at 0.35 of confidence, and by optional multi-vendor judging. The
+`judge_identity_leakage` fixture measures the residual. Its score is **one term of
+confidence**, not the decision.
 
 | Metric | Weight | Definition |
 |---|---|---|
@@ -294,11 +322,19 @@ Claims supporting A + evidence quality + survival + judge assessment
 Evaluated in order; thresholds from config:
 
 ```
-INSUFFICIENT_EVIDENCE   evidence_mass < 0.35  OR  unresolved_critical_ratio > 0.40
+INSUFFICIENT_EVIDENCE   evidence_mass < 0.35 × truncation_factor
+                        OR unresolved_critical_ratio > 0.40
 SPLIT_DECISION          margin(top1, top2) < 0.15
 CONSENSUS               no surviving contradiction ≥ 0.30 AND every model aligned or silent
 MAJORITY_WITH_DISSENT   otherwise
 ```
+
+A run cut short by budget, deadline or provider failure carries
+`Completeness::Truncated{reason, missing_stages}`, raises the evidence floor by
+`truncation_factor` (×1.2) and subtracts a sixth confidence term,
+`truncation_penalty`. A truncated run can still be `MAJORITY_WITH_DISSENT` when the
+evidence gathered is genuinely strong — being cut short is not automatically being
+wrong.
 
 ### 6.7 Confidence — decomposed, never a single opaque number
 
@@ -400,6 +436,14 @@ Exact replay is cache-only with the network disabled.
 
 ≈400 KB per run with raw payloads, ≈90 KB without. 1,000 debates ≈ 400 MB / 90 MB.
 
+**Concurrency model: one writer per run, many readers, one lock for the shared index.**
+Concurrent `arbiter run` invocations never contend — they own different directories.
+`runs/<id>/run.lock` carries `{pid, boot_id, hostname, started_at}` and is broken only
+when the pid is dead *and* the lock is stale. `index.ndjson` appends take `flock` for
+microseconds; `reindex` scans, watermarks, delta-rescans, then renames under the lock,
+so a run finishing mid-reindex is never lost. Readers take no lock and stop at the last
+valid hash link. Full protocol: `docs/INTERFACES.md` §1.
+
 ### 8.1 Event envelope
 
 ```json
@@ -464,9 +508,14 @@ the failure mode being avoided.
 | **Stable** — public, versioned ABI | `Provider` · `Judge` · `Store` · `Exporter` | in-process traits **and** JSON-RPC / WASM |
 | **Internal** — traits only | `Stage` · `Extractor` · `Relation` · `Policy` | in-process traits |
 
-An internal plane becomes public when a second real implementation exists. A
-`plugin.toml` declares kind, capabilities, config schema and required permissions
-(network, filesystem).
+An internal plane becomes public when a second real implementation exists.
+
+Discovery, in precedence order: `./.arbiter/plugins/` (project) → `~/.arbiter/plugins/`
+(user) → `$ARBITER_PLUGIN_PATH` → builtin. Each plugin ships a `plugin.toml` declaring
+kind, ABI (`jsonrpc-1` | `wasm-1`), entrypoint, config schema and required permissions;
+the host enforces them — a WASM plugin reaches only its declared hosts, a subprocess
+plugin gets a scrubbed environment. Name collisions with builtins require
+`--allow-override`. Full schema: `docs/INTERFACES.md` §10.
 
 ---
 
@@ -537,8 +586,17 @@ ProvenanceKind : DebateClaim(claim_id) | DecisionField(path) | UserRequirement(i
                | ArchitectInference(rationale) | ExternalSource(uri)
 ```
 
-The gate is **zero unattributed assertions**. `ArchitectInference` is legal, counted
-and reported, so a reader can see how much of the spec the architect invented.
+Build stages emit **structured assertions**, not markdown; the document is rendered
+from them, which makes the gate mechanical rather than cultural:
+
+| Gate | Rule | Default |
+|---|---|---|
+| `Unattributed` | any assertion with no `ProvenanceKind` | zero tolerated |
+| `TooMuchInvention` | `ArchitectInference` share of substantive assertions | ≤ 0.40 |
+
+The second gate matters most: "zero unattributed" is trivially satisfied by labelling
+everything `ArchitectInference`. Capping that share is what keeps provenance meaningful,
+and the ratio is printed in the build report either way.
 
 ---
 
@@ -567,14 +625,15 @@ Output naming: `decision_record` (not "consensus"), `model_agreement` (not
 Language     Rust 2024 edition, rustc ≥ 1.90
 Core deps    serde · serde_json · blake3
 Kernel       tokio (async runtime) · reqwest (HTTPS) · eventsource-stream (SSE)
+Similarity   lexical only — trigram SimHash + IDF cosine. No embedding model.
+Storage      filesystem + NDJSON · fs4 (advisory file locks); no database
 CLI          clap · a small renderer; no TUI framework
 Plugins      JSON-RPC over stdio; wasmtime for sandboxed WASM
-Storage      filesystem + NDJSON; no database
-Test         cargo test · golden fixtures · hand-rolled property tests
+Test         cargo test · scripted mock provider · golden fixtures · property tests
 ```
 
-Not in this phase: HTTP server, auth, multi-tenancy, vector database, embeddings
-service, any UI.
+Not in this phase: HTTP server, auth, multi-tenancy, vector database, embedding model
+or service, any UI.
 
 ---
 
@@ -598,13 +657,26 @@ stream), HTTP API, IDE integration, public debate library.
 
 `arbiter-fixtures` carries golden runs:
 
-```
-simple_consensus · split_decision · strong_dissent · insufficient_evidence
-provider_timeout · malformed_claim · budget_exceeded · judge_failure · adaptive_stop
-```
+| Fixture | Proves |
+|---|---|
+| `simple_consensus` | happy path, all confidence terms populated |
+| `split_decision` | margin below τ, both options above floor |
+| `strong_dissent` | surviving contradiction retained in the record |
+| `insufficient_evidence` | evidence floor triggers before classification |
+| `malformed_claim` | schema violation → repair → accepted |
+| `ungrounded_claim` | repair fails → Unsupported at 0.15, still reaches the decision |
+| `provider_timeout` | `SkipItem`, reservation released, 4-model debate completes |
+| `budget_exceeded` | cap hit mid-round → truncated decision, penalty applied |
+| `judge_failure` | invalid judge JSON → retry → judge term degrades |
+| `adaptive_stop` | controller stops early on no-new-information |
+| `crash_midcall` | `CALL_STARTED` with no completion → cache recovery on resume |
+| `torn_log_tail` | truncated final line → verify → `LOG_REPAIRED` → resume |
+| `judge_identity_leakage` | model names swapped, score delta below threshold |
 
-Each is a recorded event log plus the expected `DecisionRecord`. CI runs the whole
-engine with the `mock` provider and **zero LLM tokens**.
+Each is a recorded event log plus the expected `DecisionRecord`. The mock provider is
+**scripted per call** — malformed JSON, timeouts, missing rubric metrics, slow
+responses — so the failure paths are exercised, not just the happy one. CI runs the
+whole engine with **zero LLM tokens**.
 
 Property tests on the decision core:
 - **Monotonicity** — adding supporting evidence never lowers standing
