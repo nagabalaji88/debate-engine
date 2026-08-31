@@ -1,6 +1,6 @@
 # Arbiter — Interface Definitions
 
-**Companion to** `ARCHITECTURE.md` v2.1. Where the spec says *what*, this says *how*.
+**Companion to** `ARCHITECTURE.md` v2.2. Where the spec says *what*, this says *how*.
 Every item here closes a numbered finding from the v2.0 review.
 
 ---
@@ -68,11 +68,29 @@ The extractor returns, per claim, a `grounding_hint`:
    **Cycle enforcement is explicit, not assumed.** After extraction and before
    `relations.analyze`, the premise graph of each position is topologically sorted
    (Kahn). A model can emit *A derived from B, B derived from A* — adversarially or by
-   accident — and nothing downstream would catch it. On a detected cycle, every claim
-   in the strongly-connected component degrades to `Grounding::Unsupported`
-   (`EvidenceKind::Unverified`, weight 0.15) and the run emits
-   `PREMISE_CYCLE_DETECTED { component: [ClaimId] }`. The claims survive into the
-   decision at low weight; only their *derivation* is rejected.
+   accident — and nothing downstream would catch it.
+
+   **Untangle before degrading.** Collapsing the whole strongly-connected component to
+   0.15 would punish a verifiable fact for a bogus derivation edge, and a fact dropping
+   from 1.00 to 0.15 can collapse an otherwise sound option in scoring. So degradation
+   is the last step, not the first:
+
+   ```
+   cycle detected in SCC
+     1. repair    the position's repair call (step 4) carries the cycle:
+                  "these claims cite each other as premises — name the base premise,
+                   or mark them independent"                    ≤1 call, already budgeted
+     2. cut       still cyclic → remove the minimum set of derivation edges that
+                  restores acyclicity. Exact for |SCC| ≤ 12, otherwise greedy by
+                  ascending extractor confidence
+     3. re-check  re-run grounding on every affected claim
+                    still has a verified DirectQuote → keeps its EvidenceKind
+                    sole grounding was a cut edge   → Grounding::Unsupported (0.15)
+   ```
+
+   `PREMISE_CYCLE_DETECTED { component, edges_cut, degraded, retained }` records exactly
+   what happened, so a reader can see that C-011 kept `Fact` while C-019 fell to
+   `Unverified`. Fixture: `premise_cycle_grounded_fact`.
 
    Note the distinction: **premise cycles are malformed extraction; relation cycles are
    not.** `A contradicts B contradicts A` is ordinary dialectic and is handled by the
@@ -142,6 +160,25 @@ pub struct SimilarityStack {                 // union of enabled tiers
     plugin: Option<Box<dyn Similarity>>,     // e.g. arbiter-similarity-embed
 }
 ```
+
+**T3 partitions above 60 claims.** A single prompt carrying 150+ claims dilutes
+attention and risks a truncated structured response — the failure would be silent claim
+loss, which is exactly what T3 exists to prevent. Two-level batching:
+
+```
+n ≤ t3_max_claims_per_batch (60)      one call, as before
+n >  t3_max_claims_per_batch
+   1. partition   union-find over the T1/T2 candidate graph → connected components
+   2. pack        first-fit-decreasing components into batches ≤ 60 claims
+                  and ≤ t3_max_input_tokens (8k, estimated at ~40 tok/claim)
+   3. group       one call per batch
+   4. stitch      one final call over the group representatives (one canonical text
+                  per group, typically ≤ n/3) → restores cross-batch synonymy
+```
+
+Calls stay `O(n/60 + 1)`. A batch whose structured response truncates falls back to
+T1/T2 for that batch and emits `CANDIDATES_SELECTED { tier: "t1t2_fallback", batch }` —
+degraded recall, never a dropped claim. Fixture: `t3_batch_partition` (180 claims).
 
 **K scales with the claim count** rather than being a hard-coded quality threshold:
 
@@ -466,9 +503,19 @@ The argumentation fixpoint must be **total**: it returns a deterministic answer 
 every input, including adversarial graphs.
 
 ```
-standing_{k+1} = clamp01( (1-λ)·standing_k + λ·(E + α·Σsupport − β·Σattack − γ·Σqualify) )
+support = min( Σ w·standing(s), support_cap )      support_cap = 2.0
+attack  = min( Σ w·standing(a), attack_cap  )      attack_cap  = 1.5
+qualify = min( Σ w·standing(q), attack_cap  )
+
+standing_{k+1} = clamp01( (1-λ)·standing_k + λ·(E + α·support − β·attack − γ·qualify) )
 λ = 0.5   α = 0.25   β = 0.60   γ = 0.15   ε = 1e-9   max_iterations = 64
 ```
+
+**Saturation is a correctness fix, not tuning.** The raw sums are unbounded, so in a
+dense graph ten weak attackers accumulate more defeat than one decisive refutation —
+wrong dialectically and arithmetically. Capping the aggregate before weighting means a
+well-evidenced fact cannot be buried under a pile of weak objections, while a single
+strong refutation still defeats it. Fixture: `attack_saturation`.
 
 - **Jacobi, not Gauss-Seidel** — every claim reads the previous iterate, so the result
   does not depend on iteration order, by construction rather than by discipline.
@@ -482,9 +529,29 @@ standing_{k+1} = clamp01( (1-λ)·standing_k + λ·(E + α·Σsupport − β·Σ
   still produced and still deterministic — a debate does not fail because its argument
   graph is pathological, but the record says the graph was.
 
-Two fixtures pin this: `premise_cycle` (extraction-time rejection, claims degraded to
-Unsupported) and `fixpoint_nonconvergence` (a hand-built oscillating graph that hits the
-iteration cap and still yields a byte-identical record on replay).
+Fixtures pin this: `premise_cycle` and `premise_cycle_grounded_fact` (extraction-time
+untangling), `fixpoint_nonconvergence` (a hand-built oscillating graph that hits the
+iteration cap and still yields a byte-identical record on replay), and
+`attack_saturation`.
+
+### Parameters are versioned, not settled
+
+`λ, α, β, γ` and both caps are tuning constants. β = 0.60 is a judgement call that dense
+cyclic graphs will test, and the right response is measurement, not confidence:
+
+```rust
+pub struct PolicyVersion(pub &'static str);   // "argument-v1"
+```
+
+The active set is recorded in every `DecisionRecord` as `policy_version`. Re-tuning mints
+a new version rather than silently changing what past decisions meant — **decisions are
+comparable only within a policy version**, `arbiter history` groups by it, and
+`arbiter replay` refuses to replay a run under a different one without `--repolicy`,
+which produces a new run id rather than overwriting the original record.
+
+A `tuning/` fixture set (graphs of varying density and cyclicity, each with a known
+qualitative outcome) supports parameter sweeps under `cargo test --features tuning`.
+That is a parameter study, not a unit test, and it is how β earns its default.
 
 
 ---
@@ -689,7 +756,30 @@ Gates: `Unattributed` (zero), `OrphanInference` (zero), `ChainTooDeep` (> 4),
 
 A subprocess plugin is a **trusted local executable**. Scrubbing the environment removes
 credentials it was not granted; it does not stop the process opening a socket or reading
-a file. Confinement is the operator's (container, seccomp, firewall), and phase 1 does
-not pretend otherwise. `arbiter plugins list` labels every plugin `SANDBOXED` or
-`TRUSTED`, and installing a `TRUSTED` plugin from a non-builtin root prints that label
-at load time.
+a file. `arbiter plugins list` labels every plugin `SANDBOXED` or `TRUSTED`, and
+installing a `TRUSTED` plugin from a non-builtin root prints that label at load time.
+
+**Optional confinement**, because "the operator's problem" is not a good answer when the
+CLI runs in CI:
+
+```toml
+[runtime]
+confinement = "bwrap"        # none | bwrap | sandbox-exec | container
+```
+
+| Value | Mechanism | Applies |
+|---|---|---|
+| `bwrap` | `bubblewrap`: read-only rootfs, private `/tmp`, `--unshare-net` unless hosts are declared | Linux |
+| `sandbox-exec` | seatbelt profile generated from the declared permissions | macOS |
+| `container` | the operator's own runtime; Arbiter only passes the manifest | any |
+| `none` | bare subprocess with a scrubbed environment | default for builtin |
+
+```
+ARBITER_PLUGIN_CONFINEMENT=required
+```
+
+refuses to load a `TRUSTED` plugin that cannot be confined — the recommended setting for
+CI and any multi-tenant use. This is **best-effort hardening, not parity with WASM**: a
+seatbelt profile or a bwrap namespace is weaker than a runtime that cannot express an
+un-declared syscall in the first place, and the labels stay honest about which one you
+are getting.
