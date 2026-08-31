@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DecisionConfig {
     pub weights: Weights,
@@ -126,17 +126,6 @@ impl Default for ConfidenceWeights {
             judge: 0.35,
             unresolved_penalty: 0.25,
             assumption_penalty: 0.15,
-        }
-    }
-}
-
-impl Default for DecisionConfig {
-    fn default() -> Self {
-        Self {
-            weights: Weights::default(),
-            graph: GraphParams::default(),
-            thresholds: Thresholds::default(),
-            confidence: ConfidenceWeights::default(),
         }
     }
 }
