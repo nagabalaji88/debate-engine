@@ -152,7 +152,14 @@ rejected: unevidenced-but-real risk is exactly what dissent is made of.
 Matching is mechanical — normalised exact substring, then trigram-Jaccard ≥ 0.85, then
 premise resolution for inferences. Repair is **one extra call per position** (never per
 claim), capped at 2,048 output tokens and budget-reserved like any other call, so
-extraction cost stays bounded. Full protocol: `docs/INTERFACES.md` §2.
+extraction cost stays bounded.
+
+Premise graphs are **topologically sorted (Kahn) before `relations.analyze`**. A model
+can emit *A derived from B, B derived from A*; on a detected cycle every claim in the
+component degrades to `Unsupported` at 0.15 weight and the run emits
+`PREMISE_CYCLE_DETECTED`. Premise cycles are malformed extraction — relation cycles
+(*A contradicts B contradicts A*) are ordinary dialectic and are handled by the
+fixpoint, not rejected. Full protocol: `docs/INTERFACES.md` §2.
 
 ### 5.2 Normalization preserves provenance
 
@@ -178,12 +185,27 @@ claims → normalise → trigram SimHash blocking → IDF-weighted cosine
        → RelationKind + confidence
 ```
 
-**Phase 1 ships no embedding model and no vector store.** Blocking is purely lexical;
-the LLM is the semantic step, so paraphrases are caught at classification rather than
-at candidate generation. A *polarity sweep* adds every cross-model pair attached to
-opposing options as a candidate regardless of lexical score, because the pairs that
-matter most are the ones worded differently. `Similarity` is an internal plane, so an
-embedding implementation drops in later without touching a stage.
+Candidate generation is a **union of three tiers**, because pure lexical blocking has a
+recall hole that corrupts arithmetic rather than just display: *"Kubernetes deployment
+overhead"* and *"container orchestration maintenance workload"* share no useful tokens,
+and missing the pair creates two canonical claims for one point — diluting
+`independence` and `corroboration`.
+
+| Tier | Method | Cost |
+|---|---|---|
+| T1 lexical | trigram SimHash blocking → IDF cosine → top-K (K=12) | free |
+| T2 polarity | every cross-model pair attached to opposing options | free |
+| T3 batch-LLM | **one** call over the whole claim set: "group claims stating the same point" | ≈ $0.01 |
+
+T3 closes the synonymy hole at O(1) calls — the objection to LLM similarity was
+pair-wise cost, which a single batched grouping call does not incur. Still **no
+embedding model and no vector store**: a local ONNX sidecar would add a native build
+dependency, a 23–90 MB model to version, and float drift across runtimes, while being
+weaker at *"is this the same claim"* than a cheap model reading them. It remains
+available as a plugin behind the `Similarity` trait.
+
+Selected pairs are recorded as `CANDIDATES_SELECTED`, and exact replay reads the
+recorded set — so T3's non-determinism can never change a replayed decision.
 
 `RelationKind` is a closed enum: `Supports · Contradicts · Qualifies · Unrelated · Uncertain`.
 `Uncertain` is recorded and carries zero weight — the classifier declining to commit
@@ -294,6 +316,11 @@ Damped Jacobi iteration (λ = 0.5), ≤64 iterations, ε = 1e-9. Jacobi rather t
 Gauss-Seidel so the result is **order-independent by construction**, not by
 convention. Attacks bite harder than support: a refuted claim should fall faster than
 a corroborated one rises.
+
+The fixpoint is **total**. If the cap is reached with `Δ > ε`, the engine emits
+`FIXPOINT_NOT_CONVERGED { max_delta, iterations }`, keeps the last iterate and applies
+a `convergence_penalty` to confidence: a pathological argument graph degrades the
+confidence report, it never fails the debate.
 
 Every defeat is explainable: *"C-024 fell to C-011 — higher evidence, survived challenge."*
 
@@ -416,8 +443,16 @@ available $2.00
   → commit actuals, release remainders
 ```
 
-**Cache** — `(provider, model, params, prompt_hash) → response`, content-addressed.
-Exact replay is cache-only with the network disabled.
+**Cache** — `(provider, model, params, prompt_hash) → response`, content-addressed,
+streamed to `.part` and renamed on completion. Exact replay is cache-only with the
+network disabled.
+
+**Idempotency** — adapters declare `ProviderCapabilities::idempotency`; where a provider
+supports a key the kernel sends `blake3(prompt_hash ‖ reservation_id)`, so a retry
+cannot be billed twice. Capability-gated rather than assumed: the current Anthropic
+Messages API reference documents no such header, so that adapter ships `None`, while
+several OpenAI-compatible gateways accept one. The provider `request_id` is recorded at
+response-start so orphaned calls can be reconciled against a usage export.
 
 ---
 
@@ -625,7 +660,9 @@ Output naming: `decision_record` (not "consensus"), `model_agreement` (not
 Language     Rust 2024 edition, rustc ≥ 1.90
 Core deps    serde · serde_json · blake3
 Kernel       tokio (async runtime) · reqwest (HTTPS) · eventsource-stream (SSE)
-Similarity   lexical only — trigram SimHash + IDF cosine. No embedding model.
+Similarity   lexical (trigram SimHash + IDF cosine) + polarity sweep + one batched
+             LLM grouping call. No embedding model or vector store; ONNX embedding
+             available as a plugin.
 Storage      filesystem + NDJSON · fs4 (advisory file locks); no database
 CLI          clap · a small renderer; no TUI framework
 Plugins      JSON-RPC over stdio; wasmtime for sandboxed WASM
@@ -672,6 +709,8 @@ stream), HTTP API, IDE integration, public debate library.
 | `crash_midcall` | `CALL_STARTED` with no completion → cache recovery on resume |
 | `torn_log_tail` | truncated final line → verify → `LOG_REPAIRED` → resume |
 | `judge_identity_leakage` | model names swapped, score delta below threshold |
+| `premise_cycle` | circular derivation → component degraded to Unsupported |
+| `fixpoint_nonconvergence` | oscillating graph hits the cap → deterministic record |
 
 Each is a recorded event log plus the expected `DecisionRecord`. The mock provider is
 **scripted per call** — malformed JSON, timeouts, missing rubric metrics, slow
