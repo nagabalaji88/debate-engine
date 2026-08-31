@@ -1,6 +1,6 @@
 # AI Debate & Decision Engine — Architecture Specification
 
-**Version:** 2.0 (frozen for implementation)
+**Version:** 2.1 (frozen for implementation)
 **Status:** approved — implementation in progress
 **Supersedes:** v1.0 (Python · LangGraph · Postgres · FastAPI · WebSocket · React)
 **Companion:** `docs/INTERFACES.md` — concrete trait definitions and protocols
@@ -181,7 +181,7 @@ Two-stage, because N² LLM calls over 30–60 claims is unaffordable and unneces
 
 ```
 claims → normalise → trigram SimHash blocking → IDF-weighted cosine
-       → top-K pairs (K = 12) + polarity sweep → LLM classification
+       → top-K pairs (K scales with n) + polarity sweep → LLM classification
        → RelationKind + confidence
 ```
 
@@ -193,7 +193,7 @@ and missing the pair creates two canonical claims for one point — diluting
 
 | Tier | Method | Cost |
 |---|---|---|
-| T1 lexical | trigram SimHash blocking → IDF cosine → top-K (K=12) | free |
+| T1 lexical | trigram SimHash blocking → IDF cosine → top-K (K scales with claim count) | free |
 | T2 polarity | every cross-model pair attached to opposing options | free |
 | T3 batch-LLM | **one** call over the whole claim set: "group claims stating the same point" | ≈ $0.01 |
 
@@ -297,11 +297,25 @@ E(c) = kind_weight × survival × independence × corroboration × judge_factor
 |---|---|
 | `kind_weight` | Fact 1.00 · Inference 0.75 · Assumption 0.50 · Opinion 0.35 · Unverified 0.15 |
 | `survival` | Defended 1.00 · Unchallenged 1.00 · Pending 0.90 · Modified 0.70 · Withdrawn 0.00 |
-| `independence` | `(distinct_providers + 0.25 × correlated_members) / members` |
+| `independence` | `(groups + λ·(members − groups)) / members`, λ = 0.25 |
 | `corroboration` | 1 provider 0.85 · ≥2 providers 1.00 |
 | `judge_factor` | `0.6 + 0.4 × evidence_quality` — a harsh judge discounts, never erases |
 
-`independence` is why four models from one vendor cannot manufacture agreement.
+**`independence`, defined exactly.** Members are partitioned into *correlation groups*;
+`groups` is the number of non-empty groups and `members − groups` is the count of
+members beyond the first in each group. A member's group defaults to its `provider_id`
+and is overridable in config (two vendors serving the same base model can be grouped).
+
+```
+members = 4 · providers {OpenAI×2, Anthropic×1, Google×1}
+groups  = 3 · members − groups = 1
+independence = (3 + 0.25×1) / 4 = 0.8125
+
+members = 1 → (1 + 0) / 1 = 1.0
+members = 3, all one provider → (1 + 0.25×2) / 3 = 0.50
+```
+
+This is why four models from one vendor cannot manufacture agreement.
 
 ### 6.3 Argumentation fixpoint
 
@@ -349,12 +363,30 @@ Claims supporting A + evidence quality + survival + judge assessment
 Evaluated in order; thresholds from config:
 
 ```
-INSUFFICIENT_EVIDENCE   evidence_mass < 0.35 × truncation_factor
-                        OR unresolved_critical_ratio > 0.40
-SPLIT_DECISION          margin(top1, top2) < 0.15
-CONSENSUS               no surviving contradiction ≥ 0.30 AND every model aligned or silent
-MAJORITY_WITH_DISSENT   otherwise
+1. INSUFFICIENT_EVIDENCE   evidence_mass < τ_min × truncation_factor
+                           OR unresolved_critical_ratio > τ_open
+                           OR score(top1) < option_floor
+2. SPLIT_DECISION          margin(top1, top2) < τ_gap
+                           AND score(top1) ≥ option_floor
+                           AND score(top2) ≥ option_floor
+3. CONSENSUS               no live contradiction against top1 ≥ τ_dissent
+                           AND every other option < option_floor
+                           AND evidence_mass ≥ τ_min
+4. MAJORITY_WITH_DISSENT   otherwise
 ```
+
+Two corrections worth naming, because both were latent bugs:
+
+**`option_floor` (default 0.20) is required in rules 1–3.** Without it,
+`score(A)=0.11, score(B)=0.08` classifies as `SPLIT_DECISION` — a "split" between two
+options neither of which is evidenced. That is `INSUFFICIENT_EVIDENCE`, and rule 1 now
+catches it.
+
+**`CONSENSUS` is defined from claim standing, never from model alignment.** The earlier
+wording ("every model aligned or silent") reintroduced vote counting through the back
+door, contradicting Principle 1. Consensus now means *no surviving contradiction and no
+other option carrying evidence*. `model_agreement` remains a purely descriptive field
+in the record.
 
 A run cut short by budget, deadline or provider failure carries
 `Completeness::Truncated{reason, missing_stages}`, raises the evidence floor by
@@ -365,18 +397,44 @@ wrong.
 
 ### 6.7 Confidence — decomposed, never a single opaque number
 
+Confidence is **three evidence dimensions minus four penalties** — not "five terms",
+which stopped being true the moment truncation and convergence were added.
+
 ```
-evidence_mass       0.88   × 0.35
-decision_margin     0.81   × 0.30
-judge_score         0.91   × 0.35
-unresolved_penalty −0.07
-assumption_penalty −0.04
-──────────────────────────
-confidence          0.84
+base = 0.35·evidence_mass + 0.30·decision_margin + 0.35·judge_score
+
+confidence = clamp01( base − unresolved_penalty
+                           − assumption_penalty
+                           − truncation_penalty
+                           − convergence_penalty )
 ```
 
-Every component is stored and printed by `arbiter explain`, so "84%" always answers
-"why?".
+| Term | Source | Weight |
+|---|---|---|
+| `evidence_mass` | mean standing of claims decisive for the winning option | 0.35 |
+| `decision_margin` | `share(top1) − share(top2)` | 0.30 |
+| `judge_score` | weighted 9-metric rubric | 0.35 |
+| `unresolved_penalty` | `0.25 × unresolved_critical_ratio` | — |
+| `assumption_penalty` | `0.15 × assumption_dependency_ratio` | — |
+| `truncation_penalty` | `0.10` when `Completeness::Truncated` | — |
+| `convergence_penalty` | `0.05` when `FIXPOINT_NOT_CONVERGED` | — |
+
+Worked example — the arithmetic is the specification, and a golden fixture pins it:
+
+```
+base = 0.35×0.88 + 0.30×0.81 + 0.35×0.91
+     = 0.3080  + 0.2430   + 0.3185      = 0.8695
+
+penalties  unresolved 0.25×0.08 = 0.0200
+           assumption 0.15×0.07 = 0.0105
+           truncation           = 0
+           convergence          = 0
+
+confidence = 0.8695 − 0.0305 = 0.8390  →  reported 0.84
+```
+
+Every component is stored and printed by `arbiter explain`, so "84" always answers
+"why?" — and the implementation must not invent this formula, only evaluate it.
 
 ### 6.8 Counterfactual change triggers
 
@@ -403,9 +461,12 @@ Computed, not generated by a model.
   "recommendation": { "option_id": "opt_monolith", "label": "Modular monolith" },
   "confidence": {
     "total": 0.84,
-    "evidence_mass": 0.88, "decision_margin": 0.81, "judge_score": 0.91,
-    "unresolved_penalty": -0.07, "assumption_penalty": -0.04
+    "dimensions": { "evidence_mass": 0.88, "decision_margin": 0.81, "judge_score": 0.91 },
+    "penalties":  { "unresolved": 0.0200, "assumption": 0.0105,
+                    "truncation": 0.0,    "convergence": 0.0 },
+    "base": 0.8695
   },
+  "completeness": { "state": "complete" },
   "model_agreement": { "aligned": 3, "total": 5 },     // reported, never an input
   "options": [ { "id": "…", "label": "…", "raw": 2.41, "share": 0.62 } ],
   "claims": { "agreed": 18, "disputed": 9, "unresolved": 5, "defeated": 2 },
@@ -414,6 +475,13 @@ Computed, not generated by a model.
   "change_triggers": [ { "claim_id": "C-031", "direction": "if_true",
                          "new_winner": "opt_microservices" } ],
   "unresolved_claims": ["C-031", "C-014"],
+  "assumptions": [                                     // decisive assumptions, first-class
+    { "claim_id": "C-024", "text": "12 engineers can run 6–8 services unaided",
+      "standing": 0.38, "decision_impact": "high" },
+    { "claim_id": "C-014", "text": "regulator accepts logical separation",
+      "standing": 0.31, "decision_impact": "medium" }
+  ],
+  "acceptance": null,                                  // set by `arbiter accept`
   "judge": { "count": 1, "weighted": 0.86 },
   "inputs_hash": "blake3:…",
   "engine_version": "0.1.0"
@@ -464,7 +532,7 @@ response-start so orphaned calls can be reconciled against a usage export.
     manifest.json          config snapshot, status, engine + prompt-pack hashes
     events.ndjson          append-only, seq-numbered, hash-chained ← source of truth
     artifacts/<name>.json  typed, schema-versioned
-    cache/<sha256>.json    provider responses
+    cache/<blake3>.json    provider responses
     decision.json          the DecisionRecord
   index.ndjson             derived; rebuildable with `arbiter reindex`
 ```
@@ -519,15 +587,31 @@ everything else syncs at the stage checkpoint. Uniform per-event fsync would cos
 
 ## 9. Event contract
 
-Sixteen event types, emitted as NDJSON on stdout in machine mode and consumed
-identically by the CLI today and any UI or API later.
+Emitted as NDJSON on stdout in machine mode and consumed identically by the CLI today
+and any UI or API later. The event set is a **taxonomy of seven families**, not a flat
+list of sixteen — the earlier count omitted every event the crash-recovery, grounding
+and integrity designs actually depend on.
 
 ```
-RUN_STARTED · PANEL_RESOLVED · POSITION_STARTED · POSITION_COMPLETE
-CLAIM_EXTRACTED · CLAIM_NORMALISED · RELATIONSHIP_FOUND · DISPUTE_PRIORITISED
-CHALLENGE_ISSUED · REBUTTAL_RECEIVED · ROUND_STARTED · ROUND_COMPLETE
-TOKENS_BILLED · JUDGE_SCORED · DECISION_SYNTHESIZED · RUN_COMPLETED
+Lifecycle   RUN_STARTED · RUN_COMPLETED · RUN_FAILED
+Stage       STAGE_STARTED · STAGE_COMPLETED · STAGE_FAILED · STAGE_CHECKPOINT
+Provider    CALL_STARTED · CALL_REQUEST_ID · CALL_COMPLETED
+            CALL_RETRYING · CALL_RECOVERED · CALL_ORPHANED
+Budget      BUDGET_RESERVED · BUDGET_COMMITTED · BUDGET_RELEASED · BUDGET_EXHAUSTED
+Debate      PANEL_RESOLVED · POSITION_STARTED · POSITION_COMPLETED
+            CLAIM_EXTRACTED · CLAIM_UNGROUNDED · CLAIM_NORMALISED
+            CANDIDATES_SELECTED · RELATIONSHIP_FOUND · DISPUTE_PRIORITISED
+            CHALLENGE_ISSUED · REBUTTAL_RECEIVED
+            ROUND_STARTED · ROUND_COMPLETED · CONTROLLER_DECIDED
+Decision    JUDGE_SCORED · DECISION_SYNTHESIZED
+            DECISION_ACCEPTED · DECISION_OVERRIDDEN
+Integrity   PREMISE_CYCLE_DETECTED · FIXPOINT_NOT_CONVERGED · LOG_REPAIRED
 ```
+
+The authoritative enum lives in `docs/INTERFACES.md` §13. Consumers detect loss by
+sequence gap and prove integrity by hash chain; **unknown event types are skipped by
+readers but still chained**, so adding a variant is additive and does not break an
+older consumer.
 
 Consumers detect loss by sequence gap; the hash chain proves nothing was altered.
 
@@ -544,6 +628,13 @@ the failure mode being avoided.
 | **Internal** — traits only | `Stage` · `Extractor` · `Relation` · `Policy` | in-process traits |
 
 An internal plane becomes public when a second real implementation exists.
+
+**Trust model, stated plainly.** WASM plugins are *sandboxed*: the runtime enforces the
+declared network hosts and filesystem access. JSON-RPC subprocess plugins are *trusted
+local executables* — the environment is scrubbed and the declared permissions are
+recorded and displayed, but a subprocess can still reach the filesystem and network
+unless the operator confines it (container, seccomp, firewall). `arbiter plugins list`
+labels every plugin `SANDBOXED` or `TRUSTED` so the distinction is never implicit.
 
 Discovery, in precedence order: `./.arbiter/plugins/` (project) → `~/.arbiter/plugins/`
 (user) → `$ARBITER_PLUGIN_PATH` → builtin. Each plugin ships a `plugin.toml` declaring
@@ -613,12 +704,41 @@ CORE DEBATE ENGINE
           Product  Technical  Dev prompt
 ```
 
-**Provenance, not citation.** "Use PostgreSQL" is a derived decision, not a factual
-assertion needing a URL. Every substantive assertion carries:
+**Acceptance gates generation.** Build Studio does not run off a fresh `DecisionRecord`;
+it runs off an *accepted* one:
 
 ```
-ProvenanceKind : DebateClaim(claim_id) | DecisionField(path) | UserRequirement(id)
-               | ArchitectInference(rationale) | ExternalSource(uri)
+DecisionRecord → arbiter accept [--override path=value --reason "…"] → Build Studio
+```
+
+`DecisionAcceptance { accepted_by, accepted_at, overrides }` and
+`DecisionOverride { path, from, to, reason }` are recorded as `DECISION_ACCEPTED` /
+`DECISION_OVERRIDDEN`. A user who accepts "modular monolith" but substitutes Azure for
+AWS produces an override with a reason, and the substitution enters the spec as
+`Provenance::UserOverride` rather than silently as an architect's idea.
+
+**Provenance is a chain, not a label.** "Use PostgreSQL" is a derived decision, not a
+factual assertion needing a URL — but a bare `ArchitectInference` label is a loophole:
+*"Redis is required because the system needs distributed caching"* passes a label check
+while smuggling in an unsourced premise. So every assertion carries a link, and
+inferences must terminate:
+
+```
+Provenance { kind, source_id, source_path, derivation_reason, parent: Option<AssertionId> }
+
+kind : DebateClaim(claim_id) | DecisionField(path) | UserRequirement(id)
+     | UserOverride(override_id) | ExternalSource(uri) | ArchitectInference(rationale)
+```
+
+`ArchitectInference` is the only kind that may have a parent, and its chain must reach a
+non-inferential root within `max_chain_depth` (default 4). An inference with no chain to
+a root is a violation, not a labelled pass.
+
+```
+"Use Redis"                        ArchitectInference
+  └─ parent → "distributed cache required"   DecisionField(technical.caching)
+       └─ parent → "30 concurrent workers"   DebateClaim(C-042)
+            └─ root                          UserRequirement(req-7)
 ```
 
 Build stages emit **structured assertions**, not markdown; the document is rendered
@@ -626,7 +746,9 @@ from them, which makes the gate mechanical rather than cultural:
 
 | Gate | Rule | Default |
 |---|---|---|
-| `Unattributed` | any assertion with no `ProvenanceKind` | zero tolerated |
+| `Unattributed` | any assertion with no `Provenance` | zero tolerated |
+| `OrphanInference` | `ArchitectInference` whose chain reaches no root | zero tolerated |
+| `ChainTooDeep` | derivation chain longer than `max_chain_depth` | 4 |
 | `TooMuchInvention` | `ArchitectInference` share of substantive assertions | ≤ 0.40 |
 
 The second gate matters most: "zero unattributed" is trivially satisfied by labelling
@@ -642,7 +764,7 @@ and the ratio is printed in the build report either way.
 | Debate | The entire exchange of positions and challenges |
 | Deliberation | How claims are examined and contested |
 | Decision | The final recommendation |
-| Confidence | Trust in the decision, decomposed into five terms |
+| Confidence | Trust in the decision: 3 evidence dimensions minus 4 penalties |
 | Dissent | Justified disagreement that survives challenge |
 | Consensus | Agreement among models — used only when true |
 | Standing | A claim's computed position in the argument graph |
@@ -658,6 +780,9 @@ Output naming: `decision_record` (not "consensus"), `model_agreement` (not
 
 ```
 Language     Rust 2024 edition, rustc ≥ 1.90
+Hashing      BLAKE3-256 everywhere — events, artifacts, stage keys, cache filenames,
+             idempotency keys. One algorithm, no exceptions; hashes carry a `blake3:`
+             prefix in JSON fields
 Core deps    serde · serde_json · blake3
 Kernel       tokio (async runtime) · reqwest (HTTPS) · eventsource-stream (SSE)
 Similarity   lexical (trigram SimHash + IDF cosine) + polarity sweep + one batched
@@ -711,6 +836,9 @@ stream), HTTP API, IDE integration, public debate library.
 | `judge_identity_leakage` | model names swapped, score delta below threshold |
 | `premise_cycle` | circular derivation → component degraded to Unsupported |
 | `fixpoint_nonconvergence` | oscillating graph hits the cap → deterministic record |
+| `confidence_arithmetic` | every term independently hand-computed; pins the formula |
+| `option_floor` | two weak options, small margin → INSUFFICIENT, not SPLIT |
+| `decision_override` | accepted with an override → provenance carries UserOverride |
 
 Each is a recorded event log plus the expected `DecisionRecord`. The mock provider is
 **scripted per call** — malformed JSON, timeouts, missing rubric metrics, slow
@@ -718,7 +846,11 @@ responses — so the failure paths are exercised, not just the happy one. CI run
 whole engine with **zero LLM tokens**.
 
 Property tests on the decision core:
-- **Monotonicity** — adding supporting evidence never lowers standing
+- **Monotonicity, scoped honestly** — on an *acyclic* argument graph, raising `E(c)`
+  with everything else fixed never lowers `standing(c)`. Global monotonicity is **not**
+  claimed and is not true: if `c` supports `d` and `d` attacks `c`, raising `E(c)`
+  strengthens its own attacker. The property test runs on DAG fixtures; cyclic
+  behaviour is pinned by golden fixtures instead
 - **Determinism** — identical inputs give identical output regardless of iteration order
 - **Independence** — correlated members never outscore independent ones
 - **Admission** — an ungrounded claim reaches the decision at low weight, never zero
@@ -751,7 +883,39 @@ The implementation is successful when:
 - `arbiter explain` accounts for every confidence point and names the decision-changing claims
 - The decision core passes all golden fixtures **without a single LLM token**
 - Exact replay of a run reproduces its `DecisionRecord` byte-for-byte
-- A killed process resumes from its last checkpoint with no duplicated spend
+- A killed process resumes from its last checkpoint and **never intentionally repeats a
+  completed provider call**; an in-flight charge that cannot be recovered is surfaced as
+  orphaned spend rather than silently absorbed. Universal "no duplicate spend" is not
+  claimable — a provider can bill a response that never reached disk, and not every
+  provider offers an idempotency key
 - Cost per debate stays under $0.50; wall-clock under 3 minutes
 - The engine never exceeds its configured bounds, under any controller decision
 - A third-party plugin written in Python loads and runs without recompiling the engine
+
+
+---
+
+## 20. Changelog
+
+**v2.1** — correction pass before implementation, no architectural change.
+
+| # | Correction |
+|---|---|
+| 1 | Confidence formula stated exactly; the worked example's arithmetic was wrong (0.8695 − 0.11 = 0.76, not 0.84). Penalties re-derived from their own formulas so the canonical 0.84 holds |
+| 2 | "Five terms" replaced by 3 evidence dimensions + 4 penalties |
+| 3 | Event contract replaced by a seven-family taxonomy; the old sixteen omitted every event crash-recovery, grounding and integrity depend on |
+| 4 | `CALL_REQUEST_ID` became its own event — an append-only log cannot amend `CALL_STARTED` |
+| 5 | "No duplicated spend" narrowed to what is actually guaranteed |
+| 6 | BLAKE3 everywhere; the `sha256` cache filename was an inconsistency |
+| 7 | `independence` defined over correlation groups, with worked examples |
+| 8 | Monotonicity scoped to acyclic graphs; global monotonicity is false and is no longer claimed |
+| 9 | `CONSENSUS` defined from claim standing, not model alignment — the old wording reintroduced voting |
+| 10 | `option_floor` added so two weak options cannot classify as `SPLIT_DECISION` |
+| 11 | Candidate `K` scales with claim count instead of a hard-coded 12 |
+| 12 | Provenance became a chain with a required root, closing the labelled-inference loophole |
+| 13 | Plugin trust model stated: WASM sandboxed, subprocess trusted |
+| 14 | `DecisionAcceptance` / `DecisionOverride` gate Build Studio |
+| 15 | `assumptions` promoted to a first-class `DecisionRecord` field |
+
+**v2.0** — Rust kernel, pure decision core, NDJSON store, CLI-first. Superseded v1.0
+(Python · LangGraph · Postgres · FastAPI · WebSocket · React).

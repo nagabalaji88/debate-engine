@@ -1,6 +1,6 @@
 # Arbiter — Interface Definitions
 
-**Companion to** `ARCHITECTURE.md` v2.0. Where the spec says *what*, this says *how*.
+**Companion to** `ARCHITECTURE.md` v2.1. Where the spec says *what*, this says *how*.
 Every item here closes a numbered finding from the v2.0 review.
 
 ---
@@ -110,7 +110,7 @@ arithmetic, not just the display.
 
 ```
 T1  lexical      normalise → trigrams → 64-bit SimHash blocking
-                 → IDF-weighted cosine → top-K per claim (K = 12)       always on, free
+                 → IDF-weighted cosine → top-K per claim (K scales)     always on, free
 T2  polarity     every cross-model pair attached to opposing options    always on, free
 T3  batch-LLM    ONE call over all claims on a cheap model:             default on
                  "group claims that state the same underlying point"    ~3k in / 1k out
@@ -142,6 +142,18 @@ pub struct SimilarityStack {                 // union of enabled tiers
     plugin: Option<Box<dyn Similarity>>,     // e.g. arbiter-similarity-embed
 }
 ```
+
+**K scales with the claim count** rather than being a hard-coded quality threshold:
+
+```
+K = clamp( ceil(k_factor · log2(n + 1)), k_min, k_max )
+k_factor = 3.0 · k_min = 8 · k_max = 24 · global cap max_candidate_pairs = 2000
+
+n =  12 → 11      n =  32 → 16      n = 100 → 20      n = 300 → 24 (capped)
+```
+
+A fixed K=12 is a recall bottleneck at 100 claims and wasteful at 12. All four values
+are config, so a policy plugin can retune them without touching a stage.
 
 **Replay determinism is protected by recording, not by purity.** The selected pair set
 is written to the log as `CANDIDATES_SELECTED { pairs, tier }`, and exact replay reads
@@ -185,10 +197,17 @@ same debate, model names swapped, scores compared.
 
 ```
 1. append CALL_STARTED{call_id, prompt_hash, reservation_id, estimate}   durable, fsync
-2. …provider call…
-3. write cache/<prompt_hash>.json via tmp + rename                       atomic
-4. append CALL_COMPLETED{call_id, response_hash, actual_cost}            durable, fsync
+2. …provider call; response headers arrive…
+3. append CALL_REQUEST_ID{call_id, request_id}                           durable, fsync
+4. …body streams to cache/<prompt_hash>.part…
+5. rename .part → cache/<prompt_hash>.json                               atomic
+6. append CALL_COMPLETED{call_id, response_hash, actual_cost}            durable, fsync
 ```
+
+Step 3 is **its own event**. An append-only log cannot amend `CALL_STARTED`, so the
+provider request id — which is what makes an orphaned charge reconcilable against a
+usage export — must be appended when the headers arrive, not folded into an earlier
+record.
 
 **On `resume`, for every `CALL_STARTED` with no `CALL_COMPLETED`:**
 
@@ -207,10 +226,10 @@ buy:
    tokens arrive and renamed on completion. A crash mid-response leaves a partial
    artifact that resume can report; a crash after the last token but before the rename
    is recoverable because the bytes are already on disk.
-2. **Record the provider request id.** Response headers carry a request identifier
-   (`request_id` on Anthropic). It is written into `CALL_STARTED`'s completion event as
-   soon as headers arrive — before the body finishes — so an orphaned call can be
-   reconciled against the provider's own usage export afterwards.
+2. **Record the provider request id as its own event.** Response headers carry a
+   request identifier (`request_id` on Anthropic); `CALL_REQUEST_ID` is appended the
+   moment they arrive, before the body finishes, so an orphaned call is reconcilable
+   against the provider's usage export afterwards.
 3. **Send an idempotency key where the provider supports one** —
    `blake3(prompt_hash ‖ reservation_id)`, stable across retries of the same logical
    call and distinct between calls. This is **capability-gated, not assumed**:
@@ -466,3 +485,210 @@ standing_{k+1} = clamp01( (1-λ)·standing_k + λ·(E + α·Σsupport − β·Σ
 Two fixtures pin this: `premise_cycle` (extraction-time rejection, claims degraded to
 Unsupported) and `fixpoint_nonconvergence` (a hand-built oscillating graph that hits the
 iteration cap and still yields a byte-identical record on replay).
+
+
+---
+
+## 13. Event taxonomy  *(review #3, #4)*
+
+The authoritative enum. Seven families; `#[serde(rename_all = "SCREAMING_SNAKE_CASE")]`.
+
+```rust
+pub enum EventType {
+    // Lifecycle
+    RunStarted, RunCompleted, RunFailed,
+
+    // Stage
+    StageStarted, StageCompleted, StageFailed, StageCheckpoint,
+
+    // Provider — the crash-recovery protocol (§5) depends on all six
+    CallStarted, CallRequestId, CallCompleted,
+    CallRetrying, CallRecovered, CallOrphaned,
+
+    // Budget — the reservation protocol
+    BudgetReserved, BudgetCommitted, BudgetReleased, BudgetExhausted,
+
+    // Debate
+    PanelResolved, PositionStarted, PositionCompleted,
+    ClaimExtracted, ClaimUngrounded, ClaimNormalised,
+    CandidatesSelected, RelationshipFound, DisputePrioritised,
+    ChallengeIssued, RebuttalReceived,
+    RoundStarted, RoundCompleted, ControllerDecided,
+
+    // Decision
+    JudgeScored, DecisionSynthesized, DecisionAccepted, DecisionOverridden,
+
+    // Integrity
+    PremiseCycleDetected, FixpointNotConverged, LogRepaired,
+}
+```
+
+**Forward compatibility.** Adding a variant is additive: readers skip unknown
+`event_type` values but still include the line in the hash chain, so an older consumer
+never breaks the integrity check on a newer log. Removing or renaming a variant requires
+a `schema_version` bump.
+
+---
+
+## 14. The confidence formula  *(review #1, #2)*
+
+Three evidence dimensions, four penalties. The implementation evaluates this; it does
+not invent it.
+
+```rust
+pub struct ConfidenceBreakdown {
+    pub evidence_mass: f64,       // mean standing of claims decisive for the winner
+    pub decision_margin: f64,     // share(top1) − share(top2)
+    pub judge_score: f64,         // weighted 9-metric rubric
+    pub base: f64,                // 0.35·mass + 0.30·margin + 0.35·judge
+
+    pub unresolved_penalty: f64,  // 0.25 × unresolved_critical_ratio
+    pub assumption_penalty: f64,  // 0.15 × assumption_dependency_ratio
+    pub truncation_penalty: f64,  // 0.10 when Completeness::Truncated
+    pub convergence_penalty: f64, // 0.05 when FixpointNotConverged
+
+    pub total: f64,               // clamp01(base − Σ penalties)
+}
+```
+
+Invariants asserted in code and pinned by the `confidence_arithmetic` fixture:
+
+```
+dimension weights sum to 1.0
+base ∈ [0,1]                         each dimension is clamped before weighting
+total == clamp01(base − Σ penalties) recomputed, never stored independently
+every field serialised                so `arbiter explain` can print the derivation
+```
+
+The v2.0 worked example was internally inconsistent — 0.8695 − 0.07 − 0.04 = 0.76, not
+the 0.84 printed beside it. The fixture exists so that error cannot recur.
+
+---
+
+## 15. Correlation groups  *(review #7)*
+
+`independence` is computed from an explicit partition, not inferred from counts.
+
+```rust
+pub struct ClaimMember {
+    pub model: ModelId,
+    pub provider: ProviderId,
+    pub correlation_group: GroupId,   // defaults to provider; config-overridable
+    // …
+}
+
+fn independence(members: &[ClaimMember], lambda: f64) -> f64 {
+    let n = members.len();
+    if n == 0 { return 0.0; }
+    let groups = distinct(members.iter().map(|m| &m.correlation_group));
+    ((groups as f64) + lambda * ((n - groups) as f64)) / n as f64
+}
+```
+
+```
+{OpenAI, OpenAI, Anthropic, Google}  n=4 groups=3  →  (3 + 0.25)/4   = 0.8125
+{Anthropic}                          n=1 groups=1  →  (1 + 0)/1      = 1.0
+{OpenAI, OpenAI, OpenAI}             n=3 groups=1  →  (1 + 0.5)/3    = 0.50
+```
+
+The override exists because provider identity is a proxy, not the truth: two vendors
+serving the same base weights are correlated and should share a group.
+
+---
+
+## 16. Monotonicity, scoped  *(review #8)*
+
+Global monotonicity over the argument graph is **false**, and the specification no
+longer claims it. Counterexample: `c` supports `d`, `d` attacks `c`. Raising `E(c)`
+raises `standing(d)`, which raises the attack on `c`.
+
+What is claimed and tested:
+
+| Property | Scope |
+|---|---|
+| **Local monotonicity** — raising `E(c)`, all else fixed, never lowers `standing(c)` | acyclic graphs only |
+| **Attack monotonicity** — raising an attacker's evidence never raises its target's standing | acyclic graphs only |
+| **Determinism** — identical inputs give identical output, any iteration order | all graphs |
+| **Totality** — a result is produced within `max_iterations` for every graph | all graphs |
+| **Independence** — correlated members never outscore independent ones | all graphs |
+
+Cyclic behaviour is pinned by golden fixtures rather than asserted as a law.
+
+---
+
+## 17. Decision acceptance and override  *(review #14)*
+
+Build Studio consumes an **accepted** decision. A debate concludes; a human decides
+whether to act on it, and may act on a modified version.
+
+```rust
+pub struct DecisionAcceptance {
+    pub accepted_by: String,
+    pub accepted_at: Timestamp,
+    pub overrides: Vec<DecisionOverride>,
+}
+
+pub struct DecisionOverride {
+    pub id: OverrideId,
+    pub path: FieldPath,     // e.g. "technical.cloud_provider"
+    pub from: JsonValue,
+    pub to: JsonValue,
+    pub reason: String,      // required — an unexplained override is rejected
+}
+```
+
+`arbiter accept <run> [--override path=value --reason "…"]` emits `DECISION_ACCEPTED`
+and one `DECISION_OVERRIDDEN` per change. Build stages refuse to run without an
+acceptance record, and every overridden value enters the generated spec as
+`Provenance::UserOverride(override_id)` — so a reader can tell what the debate decided
+from what a human changed afterwards.
+
+---
+
+## 18. Provenance chains  *(review #12)*
+
+A label is not provenance. *"Redis is required because the system needs distributed
+caching"* passes a label check while smuggling an unsourced premise, so inferences must
+point at what they derive from and terminate at a real root.
+
+```rust
+pub struct Provenance {
+    pub kind: ProvenanceKind,
+    pub source_id: Option<SourceId>,
+    pub source_path: Option<FieldPath>,
+    pub derivation_reason: Option<String>,
+    pub parent: Option<AssertionId>,      // only ArchitectInference may set this
+}
+
+pub enum ProvenanceKind {
+    DebateClaim(ClaimId), DecisionField(FieldPath), UserRequirement(RequirementId),
+    UserOverride(OverrideId), ExternalSource(Uri),   // roots
+    ArchitectInference(String),                      // must chain to a root
+}
+```
+
+```
+"Use Redis"                      ArchitectInference
+  └─ parent → "distributed cache required"    DecisionField(technical.caching)
+       └─ parent → "30 concurrent workers"    DebateClaim(C-042)
+            └─ root                           UserRequirement(req-7)
+```
+
+Gates: `Unattributed` (zero), `OrphanInference` (zero), `ChainTooDeep` (> 4),
+`TooMuchInvention` (`ArchitectInference` share > 0.40).
+
+---
+
+## 19. Plugin trust model  *(review #13)*
+
+| Mechanism | Isolation | Permissions |
+|---|---|---|
+| **WASM** (`wasm-1`) | sandboxed by the runtime | enforced — declared hosts only, no ambient filesystem |
+| **JSON-RPC subprocess** (`jsonrpc-1`) | separate process, scrubbed environment | **declared and displayed, not enforced** |
+
+A subprocess plugin is a **trusted local executable**. Scrubbing the environment removes
+credentials it was not granted; it does not stop the process opening a socket or reading
+a file. Confinement is the operator's (container, seccomp, firewall), and phase 1 does
+not pretend otherwise. `arbiter plugins list` labels every plugin `SANDBOXED` or
+`TRUSTED`, and installing a `TRUSTED` plugin from a non-builtin root prints that label
+at load time.
