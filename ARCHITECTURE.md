@@ -1,6 +1,6 @@
 # AI Debate & Decision Engine — Architecture Specification
 
-**Version:** 2.2.1 (frozen for implementation)
+**Version:** 2.3 (frozen for implementation)
 **Status:** approved — implementation in progress
 **Supersedes:** v1.0 (Python · LangGraph · Postgres · FastAPI · WebSocket · React)
 **Companion:** `docs/INTERFACES.md` — concrete trait definitions and protocols
@@ -15,6 +15,12 @@ to disagree with its own formula.
 | Golden fixture list | `ARCHITECTURE.md` §17 | INTERFACES describes mock mechanics only |
 | Trait signatures, wire protocols, event enum | `docs/INTERFACES.md` | ARCHITECTURE narrates, does not enumerate |
 | Confidence formula | `docs/INTERFACES.md` §14 (struct + invariants) | ARCHITECTURE §6.7 explains and worked-examples it |
+
+Four things live **only** in the companion, because they are contracts rather than
+design: the exact confidence weights and the four penalty formulas (§14), the full
+`EventType` enum (§13), `ProviderCapabilities` and idempotency styles (§5), and the
+option-clustering and focus-selection algorithms (§20–21). Reading `ARCHITECTURE.md`
+alone gives you the design; implementing from it alone does not.
 **Last updated:** 2026-08-31
 
 ---
@@ -49,7 +55,7 @@ point in code, not just a statement of intent.
 | Postgres + SQLAlchemy | **Filesystem + hash-chained NDJSON** | ~400 KB/run, no query workload beyond "list and filter my runs". A CLI must run with zero infrastructure. `Store` traits keep SQLite/Postgres available as plugins. |
 | FastAPI + WebSocket + React | **CLI first; NDJSON event stream on stdout** | The same stream a UI or API would consume. Building the frontend later makes it a consumer of a proven engine. |
 | 5 "pillars" as services | **Pure kernel + 7 extension planes in two tiers** | Pillars were layers, not seams. Seams must be typed contracts with a versioned ABI. |
-| Confidence = judge output | **Confidence decomposed into 5 reported terms** | The judge scores one input among several. Arithmetic never happens inside a model. |
+| Confidence = judge output | **Confidence = 3 evidence dimensions − 4 penalties** | The judge scores one input among several. Arithmetic never happens inside a model. |
 | Consensus by claim counting | **Weighted argumentation fixpoint** | "Claims are evaluated" requires actual defeat logic, not tallies. |
 | Fixed 1 rebuttal round | **Adaptive controller inside hard bounds** | The controller may stop early; it can never exceed rounds, cost, tokens or wall-clock. |
 | Cost tracked per operation | **Budget *reserved* before each call** | Concurrent calls that each read "$0.40 remaining" can collectively overspend. Reservation is atomic against the ledger. |
@@ -114,11 +120,11 @@ everything else depends on `kernel`; nothing depends on `cli`.
 
 ---
 
-## 5. Pipeline (14 stages)
+## 5. Pipeline (15 stages)
 
 ```
 init → panel.resolve → positions.generate → claims.extract → claims.normalize
-  → relations.analyze → disputes.rank → challenge.plan → challenge.run
+  → options.cluster → relations.analyze → disputes.rank → challenge.plan → challenge.run
   → rebuttal.run → controller.decide ⟲ → judge.evaluate → decision.synthesize
                                                                 │
                                                     (optional)  ▼
@@ -132,6 +138,7 @@ init → panel.resolve → positions.generate → claims.extract → claims.norm
 | `positions.generate` | parallel, independent, no cross-talk | yes |
 | `claims.extract` | structured claims + grounding, with a repair loop | yes |
 | `claims.normalize` | cluster equivalent claims across models; **members preserved** | cheap similarity + LLM tie-break on top-K |
+| `options.cluster` | derive the candidate recommendations and attach claims to them | one batched call |
 | `relations.analyze` | candidate pairs by cheap similarity → LLM classifies top-K only | yes (bounded) |
 | `disputes.rank` | deterministic dispute-priority score | no |
 | `challenge.plan` | select targeted pairs within budget; never all-pairs | no |
@@ -192,7 +199,32 @@ ClaimMember    { claim_id, model, provider, position, original_text, grounding }
 
 Originals are never destroyed; every derived number traces back to a member.
 
-### 5.3 Relationship detection
+### 5.3 Options and claim attachment
+
+Everything downstream of `decision.synthesize` scores *options*, and until v2.3 nothing
+said where options come from — the largest gap left in the specification.
+
+```
+position.recommendation ×5
+   └─► normalise + cluster        → 2–4 DecisionOptions with stable ids
+                                     (id = blake3 of canonical text; stable across rounds)
+   └─► attachment matrix          → one batched call: for each (claim, option),
+                                     Supports | Opposes | Neutral + confidence
+   └─► relation propagation       → deterministic: a claim contradicting a supporter
+                                     of O counts against O, through the relation graph
+```
+
+The LLM decides **direct** attachment only; propagation through the relation graph is
+pure. After a rebuttal round, membership updates deterministically — a `Modified{v}`
+claim inherits its predecessor's attachment, a `Withdrawn` claim drops out, and claims
+first stated in a rebuttal are attached by the next round's matrix pass. A model that
+proposes a genuinely new course of action mid-debate creates a **new option**, which
+then has to earn evidence like any other.
+
+No option is ever invented by the engine: if nobody argued for the status quo, there is
+no status-quo option. Full contract: `docs/INTERFACES.md` §20.
+
+### 5.4 Relationship detection
 
 Two-stage, because N² LLM calls over 30–60 claims is unaffordable and unnecessary:
 
@@ -236,7 +268,7 @@ recorded set — so T3's non-determinism can never change a replayed decision.
 `Uncertain` is recorded and carries zero weight — the classifier declining to commit
 is data, not a failure.
 
-### 5.4 Adaptive controller
+### 5.5 Adaptive controller
 
 Continues while critical claims remain disputed, evidence is contradictory, or
 positions are still converging. Stops when no new information is arriving, positions
@@ -253,9 +285,20 @@ max_wall_time    default 300s
 
 The controller decides two things, not one: whether to continue, **and which disputes
 to spend the next round on**. Choosing 6 challenge pairs from 40 candidate disputes is
-adaptation even when a single round remains.
+adaptation even when a single round remains — and it drives both quality and cost, so
+the ranking is a deterministic, unit-testable formula rather than a phrase:
 
-### 5.5 Judge
+```
+priority(c) = 0.35·contested_mass + 0.35·decision_leverage
+            + 0.20·evidence_gap   − 0.10·resolution_cost
+```
+
+`decision_leverage` reuses the counterfactual machinery — flip `c`, re-run the fixpoint,
+measure the change in margin — so the controller spends its budget on the disputes that
+could actually change the answer, rather than on the loudest ones. Full formula and pair
+selection: `docs/INTERFACES.md` §21.
+
+### 5.6 Judge
 
 ```
 Claude · GPT · Gemini · Llama · Mistral
@@ -266,7 +309,7 @@ Claude · GPT · Gemini · Llama · Mistral
               │
          9-metric rubric → Scorecard per position
               │
-         aggregate (judge_count = 1 default; > 1 needs no redesign)
+         aggregate (1 judge at --depth standard · 2 cross-vendor at --depth deep)
 ```
 
 The judge receives a **dossier per position**, not just final text: recommendation,
@@ -278,8 +321,12 @@ The judge never sees model identity, provider, or panel order, and surface form 
 normalised before judging (tables flattened, headings stripped, bullets unified).
 Style-based identity inference is *mitigated, not eliminated* — bounded by the judge
 scoring exchanges rather than picking a winner, by its weighted score being one term
-at 0.35 of confidence, and by optional multi-vendor judging. The
-`judge_identity_leakage` fixture measures the residual. Its score is **one term of
+at 0.35 of confidence, and by multi-vendor judging — which is why **`--depth deep`
+defaults to two judges from different vendors** where the roster allows it, cross-vendor
+scoring being the only real mitigation rather than a mitigation in principle. The
+`judge_identity_leakage` fixture measures the residual as both an absolute score delta
+and a rank correlation: a judge that shifts every score uniformly is far less harmful
+than one that reorders the positions. Its score is **one term of
 confidence**, not the decision.
 
 | Metric | Weight | Definition |
@@ -342,6 +389,12 @@ members = 3, all one provider → (1 + 0.25×2) / 3 = 0.50
 
 This is why four models from one vendor cannot manufacture agreement.
 
+**Provider identity is an optimistic proxy.** Distinct vendors increasingly serve the
+same base weights or train on overlapping corpora, so defaulting a correlation group to
+the provider systematically *overstates* independence. A seed `correlation.toml` ships
+with known shared-lineage groupings, and a `CorrelationSource` hook lets an operator
+supply a better table as the model landscape moves.
+
 ### 6.3 Argumentation fixpoint
 
 ```
@@ -394,7 +447,8 @@ Agreed      standing ≥ 0.50 with no live attacker
 
 ### 6.5 Option scoring
 
-Options are recommendation clusters. `raw = Σ standing(supporting) − 0.5 · Σ standing(opposing)`,
+Options are the recommendation clusters produced by `options.cluster` (§5.3).
+`raw = Σ standing(supporting) − 0.5 · Σ standing(opposing)`,
 normalised to `share ∈ [0,1]`. Model vote share is not an input at any point.
 
 ```
@@ -871,6 +925,13 @@ tracking (data collected, analytics later), smart panel recommendation (a plugin
 **Deferred:** web UI / single-page app (decided later — it consumes the same NDJSON
 stream), HTTP API, IDE integration, public debate library.
 
+**Stated limitation — phase 1 is English-centric.** Grounding's fuzzy match and T1
+lexical blocking both assume whitespace-delimited tokens and Latin-script trigrams, and
+degrade on CJK and morphologically rich languages. T3 grouping and the LLM relation
+classifier are language-agnostic and partially compensate, but the honest position is
+that non-English debates are untested. `Extractor` and `Similarity` are the replacement
+points, and neither is on the phase-1 critical path.
+
 ---
 
 ## 17. Test strategy
@@ -900,6 +961,11 @@ stream), HTTP API, IDE integration, public debate library.
 | `premise_cycle_grounded_fact` | cycle member with a direct quote keeps Fact weight |
 | `attack_saturation` | ten weak attackers cannot defeat one strong fact |
 | `t3_batch_partition` | 180 claims → partitioned batches + stitch pass, no claim lost |
+| `option_clustering` | 5 recommendations → 3 options, attachment matrix, stable ids |
+| `option_emerges_midround` | new option proposed in a rebuttal earns its own cluster |
+| `focus_selection` | dispute ranking picks leverage-bearing disputes, not the loudest |
+| `paraphrase_corpus` | T1/T2 recall measured against T3-assisted recall |
+| `large_panel_deep` | 7 models × deep depth stays inside bounds and under $2 |
 
 Each is a recorded event log plus the expected `DecisionRecord`. The mock provider is
 **scripted per call** — malformed JSON, timeouts, missing rubric metrics, slow
@@ -991,6 +1057,19 @@ The implementation is successful when:
 **v2.0** — Rust kernel, pure decision core, NDJSON store, CLI-first. Superseded v1.0
 (Python · LangGraph · Postgres · FastAPI · WebSocket · React).
 
+
+**v2.3** — closes the last algorithmic gap and specifies the load-bearing policies.
+
+| # | Change | Worth it because |
+|---|---|---|
+| 1 | `options.cluster` stage specified: recommendation clustering, batched attachment matrix, deterministic relation propagation, round-to-round membership rules | everything downstream of `decision.synthesize` scored options that nothing defined |
+| 2 | Dispute ranking is a deterministic formula, with `decision_leverage` from the counterfactual pass | the controller's focus choice drives quality and cost, and was one phrase |
+| 3 | Grouping biased toward splitting: merge errors corrupt `independence`, split errors only dilute | asymmetric failure deserves an asymmetric threshold |
+| 4 | `--depth deep` defaults to 2 cross-vendor judges; leakage fixture adds rank correlation | the only real mitigation for residual identity leakage |
+| 5 | Seed `correlation.toml` + `CorrelationSource` hook | provider-as-group systematically overstates independence |
+| 6 | Phase 1 documented as English-centric | grounding and lexical blocking assume Latin-script tokens |
+| 7 | Five fixtures added, incl. `large_panel_deep` and `paraphrase_corpus` | the empirical assumptions were untested |
+| 8 | Stale "5 reported terms" corrected; pointer added for companion-only contracts | leftover from v2.0 |
 
 **v2.2.1** — consistency pass. The v2.2 review raised no new findings, so this fixes
 only drift discovered while verifying its claims against the files:

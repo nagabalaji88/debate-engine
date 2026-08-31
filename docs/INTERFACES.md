@@ -1,6 +1,6 @@
 # Arbiter — Interface Definitions
 
-**Companion to** `ARCHITECTURE.md` v2.2.1. Where the spec says *what*, this says *how*.
+**Companion to** `ARCHITECTURE.md` v2.3. Where the spec says *what*, this says *how*.
 Every item here closes a numbered finding from the v2.0 review.
 
 ---
@@ -179,6 +179,16 @@ n >  t3_max_claims_per_batch
 Calls stay `O(n/60 + 1)`. A batch whose structured response truncates falls back to
 T1/T2 for that batch and emits `CANDIDATES_SELECTED { tier: "t1t2_fallback", batch }` —
 degraded recall, never a dropped claim. Fixture: `t3_batch_partition` (180 claims).
+
+**Grouping is biased toward splitting.** T3's two failure modes are not symmetric: a
+*wrong merge* fuses two distinct claims into one canonical claim, inflating its
+`independence` and `corroboration` and corrupting the decision arithmetic silently. A
+*missed merge* leaves two claims that each carry a share of the evidence — dilution,
+visible in the record, recoverable. So groups carry a confidence, groups below
+`t3_merge_threshold` (0.75) are split rather than merged, and the grouping prompt is
+written to prefer "not sure — keep separate". `paraphrase_corpus` measures what that
+costs in recall against a hand-labelled set of hard paraphrases; the threshold is tuned
+against it, not guessed.
 
 **K scales with the claim count** rather than being a hard-coded quality threshold:
 
@@ -652,7 +662,19 @@ fn independence(members: &[ClaimMember], lambda: f64) -> f64 {
 ```
 
 The override exists because provider identity is a proxy, not the truth: two vendors
-serving the same base weights are correlated and should share a group.
+serving the same base weights are correlated and should share a group. Because that
+landscape moves faster than a release cycle, the table is data, not code:
+
+```rust
+pub trait CorrelationSource: Send + Sync {          // internal plane
+    fn group_for(&self, model: &ModelId, provider: &ProviderId) -> GroupId;
+}
+```
+
+A seed `correlation.toml` ships with known shared-lineage groupings; an operator can
+replace it. Absent a better table, provider-as-group **overstates** independence — the
+error is in the optimistic direction and the docs say so rather than implying the
+default is neutral.
 
 ---
 
@@ -775,3 +797,112 @@ CI and any multi-tenant use. This is **best-effort hardening, not parity with WA
 seatbelt profile or a bwrap namespace is weaker than a runtime that cannot express an
 un-declared syscall in the first place, and the labels stay honest about which one you
 are getting.
+
+
+---
+
+## 20. `options.cluster` — option clustering contract  *(v2.3 — the last algorithmic gap)*
+
+`decision.synthesize` scores options. Nothing defined where options came from, so this
+does.
+
+```rust
+pub trait OptionClusterer: Send + Sync {            // internal plane
+    fn cluster(&self, positions: &[Position], ctx: &StageContext<'_>)
+        -> Result<Vec<DecisionOption>, StageError>;
+
+    fn attach(&self, claims: &[CanonicalClaim], options: &[DecisionOption],
+              ctx: &StageContext<'_>) -> Result<AttachmentMatrix, StageError>;
+}
+
+pub struct AttachmentMatrix {                       // recorded as an artifact
+    pub cells: BTreeMap<(ClaimId, OptionId), Attachment>,
+}
+pub struct Attachment { pub polarity: Polarity, pub confidence: f64, pub source: AttachSource }
+pub enum Polarity   { Supports, Opposes, Neutral }
+pub enum AttachSource { Authored, Classified, Propagated }
+```
+
+**Step 1 — cluster the recommendations.** Each position carries a structured
+`recommendation`. Cluster them with the same machinery as claims (lexical + one batched
+LLM grouping call), yielding 2–4 options for a typical 5-model panel. An option's id is
+`blake3` of its canonical text, so it is **stable across rounds and across replays**.
+
+**Step 2 — attach claims.** One batched call produces the (claim × option) polarity
+matrix. `|C| × |O|` pairwise calls — 32 × 3 = 96 — is exactly the cost mistake T3 was
+introduced to avoid, so it is one call for the whole matrix, chunked by the same
+partition rule as T3 when `|C|` is large. Claims from a position that recommended `O`
+start as `AttachSource::Authored` toward `O` and may be revised by the classifier.
+
+**Step 3 — propagate deterministically.** No LLM:
+
+```
+c contradicts s ∧ s supports O   →  c opposes O      (strength × relation confidence)
+c supports    s ∧ s supports O   →  c supports O
+c qualifies   s ∧ s supports O   →  c opposes O at γ weight
+```
+
+propagated to depth `attachment_propagation_depth` (default 2), tagged `Propagated`.
+This is why the classifier only has to see direct attachment: the graph does the rest,
+and it does it identically on replay.
+
+**Step 4 — round-to-round membership.** Deterministic, no re-classification:
+
+| Event | Effect on attachment |
+|---|---|
+| `Modified{v}` | inherits its predecessor's cells; standing changes, membership does not |
+| `Withdrawn` / `Rejected` | cells dropped |
+| new claim from a rebuttal | attached in the next round's matrix pass |
+| new recommendation in a rebuttal | **new option**, clustered like any other, starting with no evidence |
+
+**What the engine never does:** invent an option nobody argued for. If no model proposed
+the status quo, there is no status-quo option — the debate answers the question that was
+asked, not one the engine improvised.
+
+Fixtures: `option_clustering`, `option_emerges_midround`.
+
+---
+
+## 21. `disputes.rank` / `challenge.plan` — focus selection  *(v2.3)*
+
+The controller returns `Continue { round, focus }`. The contents of `focus` decide what
+the next round's money buys, so the ranking is a formula, not a heuristic.
+
+```rust
+pub fn dispute_priority(c: &CanonicalClaim, g: &ResolvedGraph, cfg: &PolicyConfig) -> f64 {
+      cfg.w_contested * contested_mass(c, g)
+    + cfg.w_leverage  * decision_leverage(c, g)
+    + cfg.w_gap       * evidence_gap(c)
+    - cfg.w_cost      * resolution_cost(c)
+}
+// defaults: 0.35 · 0.35 · 0.20 · 0.10
+```
+
+| Term | Definition | Why it earns its weight |
+|---|---|---|
+| `contested_mass` | `Σ standing(attackers) + Σ standing(defenders)` around `c`, normalised | a claim nobody contests is not a dispute |
+| `decision_leverage` | flip `c`, re-run the fixpoint, take `\|Δ margin(top1, top2)\|` | **the only term that asks "could this change the answer?"** |
+| `evidence_gap` | `1 − E(c)` | challenge the unevidenced, not the well-evidenced |
+| `resolution_cost` | estimated tokens for the exchange ÷ remaining budget | a cheap dispute beats an equally useful expensive one |
+
+`decision_leverage` reuses the counterfactual pass already built for change triggers:
+one fixpoint per candidate claim, ~32 runs of a 64-iteration loop over ≤100 nodes —
+microseconds, and entirely deterministic.
+
+**Pair selection**, after ranking:
+
+```
+for each dispute, top-down until challenge_budget is spent:
+    defender   = the claim's author
+    challenger = the model whose claim most strongly contradicts it
+                 (relation confidence × attacker standing)
+    skip if    challenger == defender
+    skip if    that model already has max_challenges_per_model this round (default 2)
+```
+
+The per-model cap exists for two reasons: it keeps fan-out parallel across providers,
+and it stops one prolific model from monopolising a round's budget by having generated
+the most contradictions.
+
+Fixture: `focus_selection` — a graph where the loudest dispute has near-zero leverage
+and a quiet one flips the outcome; the ranking must choose the quiet one.
