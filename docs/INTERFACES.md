@@ -405,20 +405,6 @@ response is addressed by call index and stage kind, so a fixture can inject a ma
 body, a timeout, a missing rubric metric or a slow response at a precise point in the
 run, and assert what the engine *did* rather than only what it decided.
 
----|---|
-| `simple_consensus` | happy path, all four confidence terms populated |
-| `split_decision` | margin below τ, both options above floor |
-| `strong_dissent` | surviving contradiction, dissent retained in the record |
-| `insufficient_evidence` | evidence floor triggers before classification |
-| `malformed_claim` | schema violation → repair → accepted |
-| `ungrounded_claim` | repair fails → Unsupported at 0.15, still reaches the decision |
-| `provider_timeout` | `SkipItem`, reservation released, 4-model debate completes |
-| `budget_exceeded` | cap hit mid-round → truncated decision, penalty applied |
-| `judge_failure` | invalid judge JSON → retry → judge term degrades gracefully |
-| `adaptive_stop` | controller stops early on no-new-information |
-| `crash_midcall` | `CALL_STARTED` with no completion → cache recovery on resume |
-| `torn_log_tail` | truncated final line → verify → `LOG_REPAIRED` → resume |
-| `judge_identity_leakage` | scores with model names swapped, delta below threshold |
 
 ---
 
