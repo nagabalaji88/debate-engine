@@ -1,6 +1,6 @@
 # AI Debate & Decision Engine — Architecture Specification
 
-**Version:** 2.4 (frozen for implementation)
+**Version:** 2.5 (frozen for implementation)
 **Status:** approved — implementation in progress
 **Supersedes:** v1.0 (Python · LangGraph · Postgres · FastAPI · WebSocket · React)
 **Companion:** `docs/INTERFACES.md` — concrete trait definitions and protocols
@@ -12,7 +12,7 @@ to disagree with its own formula.
 | Subject | Owner | The other file |
 |---|---|---|
 | Pipeline, decision math, scope, criteria | `ARCHITECTURE.md` | — |
-| Golden fixture list | `ARCHITECTURE.md` §17 | INTERFACES describes mock mechanics only |
+| Golden fixture list | `ARCHITECTURE.md` §18 | INTERFACES describes mock mechanics only |
 | Trait signatures, wire protocols, event enum | `docs/INTERFACES.md` | ARCHITECTURE narrates, does not enumerate |
 | Confidence formula | `docs/INTERFACES.md` §14 (struct + invariants) | ARCHITECTURE §6.7 explains and worked-examples it |
 
@@ -55,7 +55,7 @@ point in code, not just a statement of intent.
 | Postgres + SQLAlchemy | **Filesystem + hash-chained NDJSON** | ~400 KB/run, no query workload beyond "list and filter my runs". A CLI must run with zero infrastructure. `Store` traits keep SQLite/Postgres available as plugins. |
 | FastAPI + WebSocket + React | **CLI first; NDJSON event stream on stdout** | The same stream a UI or API would consume. Building the frontend later makes it a consumer of a proven engine. |
 | 5 "pillars" as services | **Pure kernel + 7 extension planes in two tiers** | Pillars were layers, not seams. Seams must be typed contracts with a versioned ABI. |
-| Confidence = judge output | **Confidence = 3 evidence dimensions − 4 penalties** | The judge scores one input among several. Arithmetic never happens inside a model. |
+| Confidence = judge output | **Confidence = 3 evidence dimensions − 5 penalties** | The judge scores one input among several. Arithmetic never happens inside a model. |
 | Consensus by claim counting | **Weighted argumentation fixpoint** | "Claims are evaluated" requires actual defeat logic, not tallies. |
 | Fixed 1 rebuttal round | **Adaptive controller inside hard bounds** | The controller may stop early; it can never exceed rounds, cost, tokens or wall-clock. |
 | Cost tracked per operation | **Budget *reserved* before each call** | Concurrent calls that each read "$0.40 remaining" can collectively overspend. Reservation is atomic against the ledger. |
@@ -133,7 +133,7 @@ init → panel.resolve → positions.generate → claims.extract → claims.norm
 
 | Stage | Does | LLM |
 |---|---|---|
-| `init` | validate question, snapshot config, seed RNG, open log | no |
+| `init` | validate question, snapshot config **and prompt pack hash**, seed RNG, open log | no |
 | `panel.resolve` | resolve an **explicit** panel, or ask the recommender plugin. Explicit selection is the default path; recommendation is never a mandatory dependency | only if recommending |
 | `positions.generate` | parallel, independent, no cross-talk | yes |
 | `claims.extract` | structured claims + grounding, with a repair loop | yes |
@@ -215,7 +215,7 @@ said where options come from — the largest gap left in the specification.
 ```
 position.recommendation ×5
    └─► normalise + cluster        → 2–4 DecisionOptions with stable ids
-                                     (id = blake3 of canonical text; stable across rounds)
+                                     (id = cluster identity, NOT the text hash)
    └─► attachment matrix          → one batched call: for each (claim, option),
                                      Supports | Opposes | Neutral + confidence
    └─► relation propagation       → deterministic: a claim contradicting a supporter
@@ -228,6 +228,14 @@ claim inherits its predecessor's attachment, a `Withdrawn` claim drops out, and 
 first stated in a rebuttal are attached by the next round's matrix pass. A model that
 proposes a genuinely new course of action mid-debate creates a **new option**, which
 then has to earn evidence like any other.
+
+**Option identity is the cluster; option text is a version of it.** Hashing the
+recommendation text would mint a new id every time a rebuttal refined the wording
+("modular monolith" → "modular monolith with enforced boundaries"), orphaning every
+attachment cell mid-debate. So `OptionId` is the cluster's stable identity, `option_version`
+is the blake3 of the current canonical text, and a genuinely different course of action
+creates a new option carrying `supersedes: Option(id, version)`. Attachment cells follow
+the lineage head; superseded versions are retired from scoring but kept in the record.
 
 No option is ever invented by the engine: if nobody argued for the status quo, there is
 no status-quo option. Full contract: `docs/INTERFACES.md` §20.
@@ -301,6 +309,15 @@ priority(c) = 0.35·contested_mass + 0.35·decision_leverage
             + 0.20·evidence_gap   − 0.10·resolution_cost
 ```
 
+**The challenge budget is derived from money, not from panel size.** A per-model count
+(`max_challenges_per_model × panel × rounds`) scales with the panel and silently breaks
+the cap: 7 models × 3 rounds × 2 challenges is 42 exchanges, which prices out at ≈$2.03
+against a $2.00 cap — the run cannot finish. So each round takes
+`remaining_budget ÷ remaining_rounds`, reserves the judge's share first, and spends what
+is left on the highest-priority disputes; the per-model cap is a *fairness* limit within
+that envelope, never the thing that sizes it. `large_panel_deep` asserts exactly this:
+seven models at deep depth reduce the challenge count and finish inside the cap.
+
 `decision_leverage` reuses the counterfactual machinery — flip `c`, re-run the fixpoint,
 measure the change in margin — so the controller spends its budget on the disputes that
 could actually change the answer, rather than on the loudest ones. Full formula and pair
@@ -318,6 +335,8 @@ Claude · GPT · Gemini · Llama · Mistral
          9-metric rubric → Scorecard per position
               │
          aggregate (1 judge at --depth standard · 2 cross-vendor at --depth deep)
+              │
+         judge_dispersion → confidence penalty when judges disagree
 ```
 
 The judge receives a **dossier per position**, not just final text: recommendation,
@@ -334,7 +353,17 @@ defaults to two judges from different vendors** where the roster allows it, cros
 scoring being the only real mitigation rather than a mitigation in principle. The
 `judge_identity_leakage` fixture measures the residual as both an absolute score delta
 and a rank correlation: a judge that shifts every score uniformly is far less harmful
-than one that reorders the positions. Its score is **one term of
+than one that reorders the positions.
+
+**Two judges are not automatically two opinions.** When `judge_count ≥ 2`, the engine
+records `judge_dispersion` — the spread of weighted scores over the same anonymised
+dossier — and subtracts a `dispersion_penalty` when it exceeds 0.15, because a judge
+signal the judges themselves disagree about deserves less weight in confidence.
+
+The honest limit: dispersion detects *instability*, not *correlated bias*. If both judges
+infer the same authorship from the same formatting tells, they agree, dispersion is low,
+and the leakage is invisible to this metric. Cross-vendor selection is what reduces that
+correlation; the penalty only catches the case where the judges are visibly unreliable. Its score is **one term of
 confidence**, not the decision.
 
 | Metric | Weight | Definition |
@@ -406,6 +435,13 @@ config or `ARBITER_CORRELATION_TABLE` in the environment. A `CorrelationSource` 
 can compute groups instead of reading a file. The table is data with its own release
 cadence, not a constant compiled into the engine.
 
+It is **not** fetched from the network at run time. An offline-first CLI that silently
+reaches out for a scoring input would break determinism and add a supply-chain path into
+the decision arithmetic. `arbiter correlation update [--from <url>]` is an explicit
+operator action that writes the local cache and records the new `table_version`, which
+the manifest then pins — so a run can always be explained against the table that was
+actually in force.
+
 ### 6.3 Argumentation fixpoint
 
 ```
@@ -438,9 +474,25 @@ The fixpoint is **total**. If the cap is reached with `Δ > ε`, the engine emit
 a `convergence_penalty` to confidence: a pathological argument graph degrades the
 confidence report, it never fails the debate.
 
-**The parameters are provisional and versioned.** `λ, α, β, γ` and the caps are tuning
-constants, not laws; β = 0.60 in particular is a judgement call that dense cyclic graphs
-will test. The active set is recorded as `policy_version` (`argument-v1`) in every
+**Where these numbers come from, plainly: judgement, not measurement.** They are chosen
+by analogy with weighted argumentation semantics — attacks dominant, support corrective,
+qualification mild — and then checked for sane behaviour on hand-built graphs:
+
+```
+fact E=1.0, one strong attacker  (standing 1.0)  → 1.00 − 0.60 = 0.40   Disputed
+fact E=1.0, two strong attackers (sum 2.0 → 1.5) → 1.00 − 0.90 = 0.10   Defeated
+fact E=1.0, one strong supporter (standing 1.0)  → 1.00 + 0.25 = 1.00   clamped
+attacker:supporter influence ratio                                       2.4×
+```
+
+One decisive refutation should leave a fact contested rather than dead; two should kill
+it. That is the behaviour these constants produce, and it is the whole of their
+justification.
+
+**The gate: `argument-v1` is pinned by the tuning corpus before the first release, not
+after.** The fragmentation risk in re-tuning is real, but it only bites once decision
+records exist — so the sweep runs while there is no history to fragment, and the values
+it selects are what ships. After that, changes mint `argument-v2`. The active set is recorded as `policy_version` (`argument-v1`) in every
 `DecisionRecord`, so re-tuning produces a new version rather than silently changing what
 past decisions meant. **Decisions are only comparable within a policy version**, and
 `arbiter history` groups by it.
@@ -507,7 +559,7 @@ wrong.
 
 ### 6.7 Confidence — decomposed, never a single opaque number
 
-Confidence is **three evidence dimensions minus four penalties** — not "five terms",
+Confidence is **three evidence dimensions minus five penalties** — not "five terms",
 which stopped being true the moment truncation and convergence were added.
 
 ```
@@ -516,7 +568,8 @@ base = 0.35·evidence_mass + 0.30·decision_margin + 0.35·judge_score
 confidence = clamp01( base − unresolved_penalty
                            − assumption_penalty
                            − truncation_penalty
-                           − convergence_penalty )
+                           − convergence_penalty
+                           − dispersion_penalty )
 ```
 
 | Term | Source | Weight |
@@ -528,6 +581,7 @@ confidence = clamp01( base − unresolved_penalty
 | `assumption_penalty` | `0.15 × assumption_dependency_ratio` | — |
 | `truncation_penalty` | `0.10` when `Completeness::Truncated` | — |
 | `convergence_penalty` | `0.05` when `FIXPOINT_NOT_CONVERGED` | — |
+| `dispersion_penalty` | `0.20 × max(0, judge_dispersion − 0.15)`, zero when `judge_count = 1` | — |
 
 Worked example — the arithmetic is the specification, and a golden fixture pins it:
 
@@ -539,6 +593,7 @@ penalties  unresolved 0.25×0.08 = 0.0200
            assumption 0.15×0.07 = 0.0105
            truncation           = 0
            convergence          = 0
+           dispersion           = 0        (single judge)
 
 confidence = 0.8695 − 0.0305 = 0.8390  →  reported 0.84
 ```
@@ -654,8 +709,9 @@ response-start so orphaned calls can be reconciled against a usage export.
 Concurrent `arbiter run` invocations never contend — they own different directories.
 `runs/<id>/run.lock` carries `{pid, boot_id, hostname, started_at}` and is broken only
 when the pid is dead *and* the lock is stale. `index.ndjson` appends take `flock` for
-microseconds; `reindex` scans, watermarks, delta-rescans, then renames under the lock,
-so a run finishing mid-reindex is never lost. Readers take no lock and stop at the last
+microseconds; `reindex` does its full scan **outside** the lock and takes it only for the
+final tail-merge and rename, so the held window is proportional to rows added since the
+watermark rather than to the number of runs. Readers take no lock and stop at the last
 valid hash link. Full protocol: `docs/INTERFACES.md` §1.
 
 ### 8.1 Event envelope
@@ -876,11 +932,21 @@ from them, which makes the gate mechanical rather than cultural:
 | `Unattributed` | any assertion with no `Provenance` | zero tolerated |
 | `OrphanInference` | `ArchitectInference` whose chain reaches no root | zero tolerated |
 | `ChainTooDeep` | derivation chain longer than `max_chain_depth` | 4 |
-| `TooMuchInvention` | `ArchitectInference` share of substantive assertions | ≤ 0.40 |
+| `TooMuchInvention` | `ArchitectInference` share of **substantive** assertions | ≤ 0.40 (config) |
+| `CitesDefeatedClaim` | provenance pointing at a claim whose standing is `Defeated` | zero tolerated |
 
 The second gate matters most: "zero unattributed" is trivially satisfied by labelling
 everything `ArchitectInference`. Capping that share is what keeps provenance meaningful,
 and the ratio is printed in the build report either way.
+
+Two ways a build stage could game the ratio, and the answers: **padding** — inflating the
+denominator with trivially-attributed prose — is why only *substantive* assertions count,
+meaning those in normative sections (constraints, requirements, deliverables, contracts);
+and **spurious attribution** — citing a claim that exists but was demolished in the debate
+— is why `CitesDefeatedClaim` is its own gate. Cited claim ids are resolved against the
+record, not trusted as strings. The 0.40 threshold itself is a config default, not a law:
+a decision whose evidence is thin will legitimately need more bridging, and the build
+report shows the ratio and the chain-depth distribution so a reader can judge.
 
 ---
 
@@ -903,7 +969,34 @@ Output naming: `decision_record` (not "consensus"), `model_agreement` (not
 
 ---
 
-## 15. Technology
+## 15. Prompt packs
+
+Exact replay is only as reproducible as the prompts, so a prompt pack is a versioned,
+content-addressed asset — not strings inlined in stage code.
+
+```
+prompts/<pack_name>/<version>/
+  positions.generate.md      claims.extract.md      claims.repair.md
+  claims.group.md            options.cluster.md     options.attach.md
+  relations.classify.md      challenge.issue.md     rebuttal.respond.md
+  judge.evaluate.md          build.product.md       build.technical.md
+  build.prompt.md            manifest.toml          → pack_hash
+```
+
+Each template declares its variable schema; `prompt_hash` is `blake3(rendered template ‖
+variable schema)` and is recorded on every `CALL_STARTED`. The pack hash is snapshotted
+by `init` into the manifest.
+
+**Replay refuses a pack mismatch.** A run recorded under pack `v3` cannot be exactly
+replayed under `v4` — that would be a re-run wearing a replay's clothes. `--repack` makes
+the substitution explicit and mints a new run id, exactly as `--repolicy` does for
+scoring constants. Prompts, policy constants and the correlation table are the three
+inputs that are neither code nor user data, and all three are versioned, recorded and
+pinned for the same reason.
+
+---
+
+## 16. Technology
 
 ```
 Language     Rust 2024 edition, rustc ≥ 1.90
@@ -926,7 +1019,7 @@ or service, any UI.
 
 ---
 
-## 16. Scope
+## 17. Scope
 
 **In:** kernel, full pipeline, complete decision core, all 7 plugin planes (2 tiers),
 providers (mock + anthropic + openai-compatible), filesystem store, CLI, Build Studio,
@@ -949,7 +1042,7 @@ points, and neither is on the phase-1 critical path.
 
 ---
 
-## 17. Test strategy
+## 18. Test strategy
 
 `arbiter-fixtures` carries golden runs:
 
@@ -959,7 +1052,7 @@ measures the script.
 
 | Suite | When | LLM | Contents |
 |---|---|---|---|
-| **CI** | every commit | none — scripted mock | the 24 below |
+| **CI** | every commit | none — scripted mock | the 28 below |
 | **Integration** | nightly, opt-in, budgeted | real providers | `paraphrase_corpus`, `judge_identity_leakage` |
 | **Tuning** | `cargo test --features tuning` | none | the `tuning/` graph corpus, parameter sweeps |
 
@@ -995,7 +1088,11 @@ it produces the recall number `t3_merge_threshold` is tuned against.
 | `option_clustering` | 5 recommendations → 3 options, attachment matrix, stable ids |
 | `option_emerges_midround` | new option proposed in a rebuttal earns its own cluster |
 | `focus_selection` | dispute ranking picks leverage-bearing disputes, not the loudest |
-| `large_panel_deep` | 7 models × deep depth stays inside bounds and under the cap |
+| `option_supersede` | rebuttal refines a recommendation → lineage head moves, cells follow |
+| `judge_dispersion` | two judges disagree → dispersion penalty applied and reported |
+| `cites_defeated_claim` | build assertion citing a defeated claim → stage fails |
+| `prompt_pack_mismatch` | replay under a different pack is refused without `--repack` |
+| `large_panel_deep` | 7 models × deep depth: controller cuts challenge count, stays under the cap |
 
 ### Integration suite — real providers, nightly
 
@@ -1021,7 +1118,22 @@ Property tests on the decision core:
 
 ---
 
-## 18. Build order
+## 19. Delivery phases and build order
+
+The specification is large, and shipping it as one release is the main *delivery* risk —
+distinct from the technical risks catalogued above. Scope is not being cut: Build Studio
+stays in, as decided, and "optional and isolated" is exactly what makes it separable.
+
+| Phase | Contents | Gate to the next |
+|---|---|---|
+| **1.0 — core** | 15-stage pipeline, decision core, filesystem store, CLI (`run` … `accept`), mock + 2 providers, in-process plugin traits, 28 CI fixtures | CI green with zero tokens; `paraphrase_corpus` and the tuning sweep run once against real providers to pin `argument-v1` and `t3_merge_threshold` |
+| **1.5 — build & extend** | `arbiter-build` and its own fixture suite, `arbiter build` CLI, WASM plugin host, JSON-RPC host, confinement | — |
+
+Everything in 1.5 sits behind an interface that 1.0 defines and exercises, so deferring
+it costs no rework. A debate that stops at `decision.synthesize` is complete by design;
+1.0 is therefore a shippable product, not a half-built one.
+
+### Build order
 
 1. `arbiter-core` — types, closed enums, decision core, property tests ← *in progress*
 2. `arbiter-fixtures` — golden runs for the four outcome classes
@@ -1035,7 +1147,7 @@ Property tests on the decision core:
 
 ---
 
-## 19. Success criteria
+## 20. Success criteria
 
 The implementation is successful when:
 
@@ -1063,7 +1175,7 @@ The implementation is successful when:
 
 ---
 
-## 20. Changelog
+## 21. Changelog
 
 **v2.1** — correction pass before implementation, no architectural change.
 
@@ -1098,6 +1210,20 @@ The implementation is successful when:
 **v2.0** — Rust kernel, pure decision core, NDJSON store, CLI-first. Superseded v1.0
 (Python · LangGraph · Postgres · FastAPI · WebSocket · React).
 
+
+**v2.5** — eight concerns; one was a cap breach, one a spec bug.
+
+| # | Change | Worth it because |
+|---|---|---|
+| 1 | Delivery split into 1.0 (core) and 1.5 (Build Studio, plugin hosts) — scope kept, sequencing added | shipping the whole spec at once was the main delivery risk; 1.5 sits behind interfaces 1.0 already defines |
+| 2 | Fixpoint constants: derivation stated as judgement with worked numbers, and `argument-v1` pinned by the tuning sweep **before** first release | re-tuning fragments history only once history exists — so tune before there is any |
+| 3 | Challenge budget derived from remaining money, not panel size × rounds | 7 models × 3 rounds × 2 priced at **$2.03 against a $2.00 cap** — `large_panel_deep` could not have passed |
+| 4 | `dispersion_penalty` added when `judge_count ≥ 2`; confidence is now 3 dimensions − 5 penalties | judges that disagree are a weaker signal; stated limit — it cannot see *correlated* leakage |
+| 5 | `OptionId` is cluster identity, `option_version` the text hash, with `supersedes` lineage | hashing the text minted a new id whenever a rebuttal refined wording, orphaning attachment cells |
+| 6 | `CitesDefeatedClaim` gate; "substantive" defined; 0.40 made config | the ratio was gameable by padding the denominator or citing demolished claims |
+| 7 | Reindex scan moved outside the lock; only tail-merge and rename hold it | the held window scaled with total runs, not with rows added |
+| 8 | Prompt packs versioned, content-addressed, `--repack` to cross versions | replay is only as reproducible as the prompts, which were unspecified |
+| — | Correlation table updated by explicit command, not run-time fetch | a scoring input pulled from the network breaks determinism and adds a supply-chain path |
 
 **v2.4** — pre-coding checklist; seven gaps, all real.
 

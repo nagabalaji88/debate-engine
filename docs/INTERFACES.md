@@ -1,6 +1,6 @@
 # Arbiter — Interface Definitions
 
-**Companion to** `ARCHITECTURE.md` v2.4. Where the spec says *what*, this says *how*.
+**Companion to** `ARCHITECTURE.md` v2.5. Where the spec says *what*, this says *how*.
 Every item here closes a numbered finding from the v2.0 review.
 
 ---
@@ -38,8 +38,10 @@ Staleness requires *both* a dead pid and `mtime > stale_after` (default 15 min),
 paused-but-live process is never robbed of its run.
 
 **`reindex` vs. a live run.** Reindex scans run directories — the source of truth —
-records the highest `mtime` it saw, then re-scans for anything newer before taking the
-index lock for the final `rename`. A run that completes mid-reindex is picked up by
+outside the lock, records the highest `mtime` it saw, then takes the lock only to merge
+rows added since that watermark and `rename`. The held window is therefore proportional
+to *rows added during the scan*, not to the number of runs: at ten thousand runs the scan
+may take seconds while the lock is held for a handful of appends. A run that completes mid-reindex is picked up by
 the delta pass; a run that completes after the rename appends normally. Neither is lost.
 
 **Readers and torn tails.** `RunReader::events()` stops at the last line whose
@@ -207,7 +209,14 @@ stitch(reps):
 ```
 
 Depth 2 covers ~3,600 claims, far past any realistic debate; the fallback exists so the
-algorithm is total rather than because the branch is expected.
+algorithm is total rather than because the branch is expected. The intermediate case is
+the ordinary one and needs no fallback: 200 claims yielding 80 components produces 80
+representatives, over the 60 limit, so the stitch simply recurses one level and completes.
+
+**The distribution is measured, not assumed.** `CANDIDATES_SELECTED` carries
+`{ components, sizes_p50, sizes_p95, batches, stitch_depth }`, and `stitch_depth_exceeded`
+is a tracked rate. If it fires on more than 5% of runs the partition constant is wrong,
+not the algorithm — that is a tuning signal with a threshold, rather than a hope.
 
 Calls stay `O(n/60 + 1)`. A batch whose structured response truncates falls back to
 T1/T2 for that batch and emits `CANDIDATES_SELECTED { tier: "t1t2_fallback", batch }` —
@@ -439,7 +448,7 @@ The mock provider is **scripted per call**, not canned per stage:
 { "call": 7, "kind": "judge",   "response": { "…": "missing required metric" } }
 ```
 
-**The fixture list itself lives in `ARCHITECTURE.md` §17 and is authoritative there.**
+**The fixture list itself lives in `ARCHITECTURE.md` §18 and is authoritative there.**
 It is not repeated here: the two lists had already drifted to 21 entries against 13,
 which is exactly the failure this split prevents.
 
@@ -648,6 +657,7 @@ pub struct ConfidenceBreakdown {
     pub assumption_penalty: f64,  // 0.15 × assumption_dependency_ratio
     pub truncation_penalty: f64,  // 0.10 when Completeness::Truncated
     pub convergence_penalty: f64, // 0.05 when FixpointNotConverged
+    pub dispersion_penalty: f64,  // 0.20 × max(0, judge_dispersion − 0.15); 0 if judge_count == 1
 
     pub total: f64,               // clamp01(base − Σ penalties)
 }
@@ -662,6 +672,12 @@ base ∈ [0,1]                         each dimension is clamped before weightin
 total == clamp01(base − Σ penalties) recomputed, never stored independently
 every field serialised                so `arbiter explain` can print the derivation
 ```
+
+`judge_dispersion` is the population standard deviation of the judges' weighted scores
+over the same anonymised dossier. It measures **instability, not bias**: two judges that
+independently infer the same authorship agree, dispersion is low, and nothing here sees
+it. Cross-vendor selection is what addresses correlated leakage; this penalty only stops
+a visibly unreliable judge signal carrying full weight.
 
 The v2.0 worked example was internally inconsistent — 0.8695 − 0.07 − 0.04 = 0.76, not
 the 0.84 printed beside it. The fixture exists so that error cannot recur.
@@ -798,7 +814,23 @@ pub enum ProvenanceKind {
 ```
 
 Gates: `Unattributed` (zero), `OrphanInference` (zero), `ChainTooDeep` (> 4),
-`TooMuchInvention` (`ArchitectInference` share > 0.40).
+`CitesDefeatedClaim` (zero), `TooMuchInvention` (`ArchitectInference` share of
+**substantive** assertions > 0.40, config).
+
+```rust
+fn is_substantive(a: &Assertion) -> bool {
+    matches!(a.section.kind(),
+        SectionKind::Constraint | SectionKind::Requirement
+      | SectionKind::Deliverable | SectionKind::Contract)
+}
+```
+
+Both gate the two ways the ratio is gameable: **padding** the denominator with
+trivially-attributed prose (only substantive assertions count) and **spurious
+attribution** to a claim the debate demolished (`CitesDefeatedClaim` resolves every cited
+id against the record and rejects `Defeated` standing). Chain-depth distribution is
+reported alongside the ratio, since one four-hop chain is a different risk from twelve
+one-hop ones.
 
 ---
 
@@ -886,6 +918,29 @@ c qualifies   s ∧ s supports O   →  c opposes O at γ weight
 propagated to depth `attachment_propagation_depth` (default 2), tagged `Propagated`.
 This is why the classifier only has to see direct attachment: the graph does the rest,
 and it does it identically on replay.
+
+**Step 3b — option lineage.** `OptionId` is the cluster's identity and does **not** move
+when wording changes; `option_version` is `blake3` of the current canonical text.
+
+```rust
+pub struct DecisionOption {
+    pub id: OptionId,                    // stable cluster identity
+    pub version: OptionVersion,          // blake3 of canonical text
+    pub supersedes: Option<(OptionId, OptionVersion)>,
+    pub retired: bool,                   // superseded versions are kept, not scored
+    // …
+}
+```
+
+| Round-2 event | Effect |
+|---|---|
+| recommendation **reworded** ("modular monolith" → "…with enforced boundaries") | same `id`, new `version`; attachment cells carry over untouched |
+| recommendation **materially changed** (different course of action) | new `id`, `supersedes` set, cells re-derived by the next matrix pass |
+| option **abandoned** (no live claim supports it) | `retired = true`; falls below `option_floor` naturally, never deleted |
+
+Scoring always runs over lineage heads. Hashing the text into the id — the v2.3
+formulation — would have minted a new option on every refinement and orphaned its
+attachment mid-debate. Fixture: `option_supersede`.
 
 **Step 4 — round-to-round membership.** Deterministic, no re-classification:
 
@@ -1008,3 +1063,43 @@ Two properties the renderer depends on and the schema guarantees: every number c
 the inputs it was computed from (`derived_from`, `steps`, `margin_before/after`), and
 `contribution` fields sum to `total` within 1e-9 — so *"why 84?"* is answered by
 arithmetic present in the payload rather than by prose generated beside it.
+
+
+---
+
+## 23. Prompt packs  *(v2.5)*
+
+Replay reproduces a decision only if the prompts are as pinned as the code. Templates are
+assets, not string literals in stage code.
+
+```
+prompts/<pack>/<version>/<stage>.md + manifest.toml
+```
+
+```rust
+pub struct PromptPack { pub name: String, pub version: String, pub hash: PackHash }
+
+pub struct PromptTemplate {
+    pub stage: StageName,
+    pub body: String,
+    pub variables: VariableSchema,      // declared, validated before render
+}
+
+// recorded on every CALL_STARTED
+pub fn prompt_hash(t: &PromptTemplate, rendered: &str) -> Hash;   // blake3(rendered ‖ schema)
+```
+
+| Rule | Reason |
+|---|---|
+| `init` snapshots `pack_hash` into the manifest | the run states which prompts produced it |
+| every `CALL_STARTED` carries `prompt_hash` | a single template change is visible per call, not just per run |
+| variables validated against the declared schema before render | a missing variable is a stage error, never a silently malformed prompt |
+| exact replay **refuses** a differing `pack_hash` | replaying under new prompts is a re-run wearing a replay's clothes |
+| `--repack <version>` mints a new run id | the same escape hatch as `--repolicy`, and just as explicit |
+
+Prompts, scoring constants (`policy_version`) and the correlation table
+(`table_version`) are the three inputs that are neither code nor user data. All three are
+versioned, recorded in the manifest, and pinned on replay for exactly the same reason:
+without them, "the same inputs" is not a well-defined phrase.
+
+Fixture: `prompt_pack_mismatch`.
