@@ -1,6 +1,6 @@
 # Arbiter — Interface Definitions
 
-**Companion to** `ARCHITECTURE.md` v2.5. Where the spec says *what*, this says *how*.
+**Companion to** `ARCHITECTURE.md` v2.5.1. Where the spec says *what*, this says *how*.
 Every item here closes a numbered finding from the v2.0 review.
 
 ---
@@ -466,6 +466,19 @@ run, and assert what the engine *did* rather than only what it decided.
 pub enum StopReason {
     Converged, RoundLimit, NoNewInformation,
     BudgetExhausted, TokenLimit, Deadline, Cancelled, ProviderFailure,
+}
+
+// The two judged-looking reasons are computed from the round's own artifacts.
+// No extra call, no model opinion, both thresholds config.
+fn no_new_information(r: &RoundDelta, cfg: &PolicyConfig) -> bool {
+    r.new_canonical_claims < cfg.min_new_claims           // default 2
+        && r.max_standing_delta < cfg.min_standing_delta  // default 0.05
+}
+
+fn converged(g: &ResolvedGraph, o: &[OptionScore], cfg: &PolicyConfig) -> bool {
+    !g.has_live_attacker_against(o[0].id, cfg.thresholds.dissent)
+        && (o[0].share - o[1].share) >= cfg.thresholds.min_margin * cfg.converged_margin_factor
+        && g.unresolved_triggers().is_empty()
 }
 
 pub enum Completeness {

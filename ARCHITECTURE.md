@@ -1,6 +1,6 @@
 # AI Debate & Decision Engine — Architecture Specification
 
-**Version:** 2.5 (frozen for implementation)
+**Version:** 2.5.1 (frozen for implementation)
 **Status:** approved — implementation in progress
 **Supersedes:** v1.0 (Python · LangGraph · Postgres · FastAPI · WebSocket · React)
 **Companion:** `docs/INTERFACES.md` — concrete trait definitions and protocols
@@ -299,6 +299,21 @@ max_tokens       configurable
 max_wall_time    default 300s
 ```
 
+**Stop predicates are computed, not judged.** Both are evaluated from artifacts the round
+already produced — no extra call, no model opinion:
+
+```
+NoNewInformation   new_canonical_claims < min_new_claims (2)
+                   AND max |Δ standing| across all claims < min_standing_delta (0.05)
+
+Converged          no live attacker ≥ τ_dissent against the top option
+                   AND margin(top1, top2) ≥ τ_gap × converged_margin_factor (1.5)
+                   AND no unresolved claim is a change trigger
+```
+
+Both thresholds are config, and both are expected to move once real multi-round traces
+exist — which is why they are named constants rather than inline literals.
+
 The controller decides two things, not one: whether to continue, **and which disputes
 to spend the next round on**. Choosing 6 challenge pairs from 40 candidate disputes is
 adaptation even when a single round remains — and it drives both quality and cost, so
@@ -488,6 +503,11 @@ attacker:supporter influence ratio                                       2.4×
 One decisive refutation should leave a fact contested rather than dead; two should kill
 it. That is the behaviour these constants produce, and it is the whole of their
 justification.
+
+**Constants ship marked provisional.** `argument-v1`, `t3_merge_threshold`, and the two
+stop-predicate thresholds carry `provisional = true` in config until the gate below has
+run; `arbiter doctor` reports which constants are still provisional, and the 1.0 release
+checklist requires none to be.
 
 **The gate: `argument-v1` is pinned by the tuning corpus before the first release, not
 after.** The fragmentation risk in re-tuning is real, but it only bites once decision
@@ -831,14 +851,25 @@ First-class, not an afterthought.
   evidence gathered so far and the record says it was cut short
 
 ```
-Positions        5 calls   18.2k tok   $0.181
-Extraction       5 calls    9.4k tok   $0.038
-Relationships    1 call     3.1k tok   $0.011
-Cross-exam       6 calls    7.8k tok   $0.084
-Rebuttals        6 calls    6.0k tok   $0.061
-Judge            1 call    11.5k tok   $0.068
-────────────────────────────────────────────
-Total           24 calls   56.0k tok   $0.443   (22% of $2.00 cap)
+Positions            5 calls   18.2k tok   $0.181
+Extraction           5 calls    9.4k tok   $0.038
+Repair (typical)     1 call     3.8k tok   $0.007
+T3 grouping          1 call     5.2k tok   $0.010
+Option clustering    1 call     4.0k tok   $0.008
+Attachment matrix    1 call     5.5k tok   $0.012
+Relationships        1 call     3.1k tok   $0.011
+Cross-exam           6 calls    7.8k tok   $0.084
+Rebuttals            6 calls    6.0k tok   $0.061
+Judge                1 call    11.5k tok   $0.068
+────────────────────────────────────────────────
+Total (standard)    28 calls   74.5k tok   $0.480   (24% of cap, target $0.50)
+
+Grouping, clustering and attachment are **first-class line items**, not overhead folded
+into a rounding allowance — the four cheap-tier calls add $0.036, which is what moves the
+standard profile from $0.443 to $0.480 against a $0.50 target. The margin is thin by
+design: it is what the per-profile targets in §20 exist to make visible. At deep depth
+attachment re-runs each round, which is correct — new claims need attaching — and is why
+the deep target is $1.20 rather than a multiple of the standard one.
 ```
 
 ---
@@ -957,7 +988,7 @@ report shows the ratio and the chain-depth distribution so a reader can judge.
 | Debate | The entire exchange of positions and challenges |
 | Deliberation | How claims are examined and contested |
 | Decision | The final recommendation |
-| Confidence | Trust in the decision: 3 evidence dimensions minus 4 penalties |
+| Confidence | Trust in the decision: 3 evidence dimensions minus 5 penalties |
 | Dissent | Justified disagreement that survives challenge |
 | Consensus | Agreement among models — used only when true |
 | Standing | A claim's computed position in the argument graph |
@@ -1099,6 +1130,7 @@ it produces the recall number `t3_merge_threshold` is tuned against.
 | Fixture | Measures |
 |---|---|
 | `paraphrase_corpus` | T1/T2 recall vs T3-assisted recall on hand-labelled paraphrases; sets `t3_merge_threshold` |
+| `recommendation_corpus` | recommendation-cluster precision/recall and attachment-classifier agreement against hand-labelled runs |
 | `judge_identity_leakage` | score delta **and rank correlation** with model names swapped |
 
 Each CI fixture is a recorded event log plus the expected `DecisionRecord`. The mock
@@ -1210,6 +1242,19 @@ The implementation is successful when:
 **v2.0** — Rust kernel, pure decision core, NDJSON store, CLI-first. Superseded v1.0
 (Python · LangGraph · Postgres · FastAPI · WebSocket · React).
 
+
+**v2.5.1** — four small corrections; two items in the review needed no change.
+
+| # | Change | Worth it because |
+|---|---|---|
+| 1 | Terminology table corrected to 5 penalties | it still said 4 after `dispersion_penalty` was added — a factual inconsistency the authority table was meant to prevent |
+| 2 | Grouping, clustering, attachment and repair added to the pre-flight cost table | four real calls were missing; the standard profile is $0.480, not $0.443, against a $0.50 target |
+| 3 | `NoNewInformation` and `Converged` given computed predicates and named thresholds | "positions have stabilised" was an invitation to invent policy during implementation |
+| 4 | `recommendation_corpus` added to the Integration suite | T3 quality was measured and clustering quality was not — an asymmetry with no justification |
+| — | Constants ship `provisional = true`; `arbiter doctor` reports them | the tuning gate was specified but nothing surfaced which values were still unpinned |
+
+Judge dispersion vs correlated leakage, and reindex at scale, were reviewed and need no
+change — both are already stated with their limits.
 
 **v2.5** — eight concerns; one was a cap breach, one a spec bug.
 
