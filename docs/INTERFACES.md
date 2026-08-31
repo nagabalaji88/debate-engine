@@ -1,6 +1,6 @@
 # Arbiter — Interface Definitions
 
-**Companion to** `ARCHITECTURE.md` v2.3. Where the spec says *what*, this says *how*.
+**Companion to** `ARCHITECTURE.md` v2.4. Where the spec says *what*, this says *how*.
 Every item here closes a numbered finding from the v2.0 review.
 
 ---
@@ -101,8 +101,25 @@ The extractor returns, per claim, a `grounding_hint`:
 5. **Admit** — still failing ⇒ `Grounding::Unsupported`, `EvidenceKind::Unverified`
    (weight 0.15), event `CLAIM_UNGROUNDED`.
 
+**Repair runs on `repair_model`, not on the claim's author.** The task is *"find the
+substring of this text that supports this claim"* — extraction over fixed text, where the
+position is the source of truth and the author's identity is irrelevant. Paying the
+author's rate for it is pure waste, and the spread is wide enough to matter:
+
+```
+15 repair calls (5 models × deep) ≈ 45k in / 30k out
+  cheapest tier   ≈ $0.20    10% of the $2.00 cap
+  mid tier        ≈ $0.40    20%
+  frontier tier   ≈ $0.99    50%
+```
+
+`repair_model` therefore defaults to the cheapest model the configured providers expose,
+and `repair_budget_fraction` (default 0.15) caps cumulative repair spend independently of
+the call count — whichever binds first stops repairs, and remaining failures are admitted
+as `Unsupported`.
+
 **Bounds.** `max_repair_calls_per_position = 1`, `max_repair_output_tokens = 2048`,
-`max_repair_calls_per_run = panel_size` (config). The repair call is budget-reserved
+`max_repair_calls_per_run = panel_size`, `repair_budget_fraction = 0.15` (config). The repair call is budget-reserved
 like any other, so it cannot be a hidden cost sink: worst case is one extra small call
 per model per round.
 
@@ -175,6 +192,22 @@ n >  t3_max_claims_per_batch
    4. stitch      one final call over the group representatives (one canonical text
                   per group, typically ≤ n/3) → restores cross-batch synonymy
 ```
+
+**The stitch pass recurses when it has to.** At n = 300 the representatives alone are
+~100, over the batch limit, so a single stitch call would overflow exactly as a single
+grouping call would:
+
+```
+stitch(reps):
+    reps ≤ 60            → one call, done
+    reps >  60           → partition reps by T1/T2 components, stitch each,
+                           then stitch the resulting representatives   (depth ≤ 2)
+    still > 60 at depth 2 → T1/T2 only for the remainder,
+                            emit CANDIDATES_SELECTED { tier: "stitch_depth_exceeded" }
+```
+
+Depth 2 covers ~3,600 claims, far past any realistic debate; the fallback exists so the
+algorithm is total rather than because the branch is expected.
 
 Calls stay `O(n/60 + 1)`. A batch whose structured response truncates falls back to
 T1/T2 for that batch and emits `CANDIDATES_SELECTED { tier: "t1t2_fallback", batch }` —
@@ -671,7 +704,15 @@ pub trait CorrelationSource: Send + Sync {          // internal plane
 }
 ```
 
-A seed `correlation.toml` ships with known shared-lineage groupings; an operator can
+```
+crates/arbiter-core/data/correlation.toml     shipped seed, updated in patch releases
+correlation_table_path = "…"                  config override
+ARBITER_CORRELATION_TABLE=/path/…             environment override
+CorrelationSource plugin                      computed, for operators with better data
+```
+
+The seed is versioned with its own `table_version` and recorded in the manifest, so a run
+can be explained against the grouping that was actually in force. An operator can
 replace it. Absent a better table, provider-as-group **overstates** independence — the
 error is in the optimistic direction and the docs say so rather than implying the
 default is neutral.
@@ -906,3 +947,64 @@ the most contradictions.
 
 Fixture: `focus_selection` — a graph where the loudest dispute has near-zero leverage
 and a quiet one flips the outcome; the ranking must choose the quiet one.
+
+
+---
+
+## 22. `arbiter explain --json` schema  *(v2.4)*
+
+Human output is a rendering of this structure, never a separate code path — otherwise the
+future UI reimplements the explanation and the two drift.
+
+```jsonc
+{
+  "schema_version": 1,
+  "run_id": "run_01J…",
+  "policy_version": "argument-v1",
+  "subject": { "kind": "decision" },          // or { "kind": "claim", "id": "C-024" }
+
+  "confidence": {
+    "total": 0.84,
+    "base": 0.8695,
+    "dimensions": [
+      { "name": "evidence_mass",   "value": 0.88, "weight": 0.35, "contribution":  0.3080,
+        "derived_from": ["C-002", "C-011", "C-018"] },
+      { "name": "decision_margin", "value": 0.81, "weight": 0.30, "contribution":  0.2430 },
+      { "name": "judge_score",     "value": 0.91, "weight": 0.35, "contribution":  0.3185 }
+    ],
+    "penalties": [
+      { "name": "unresolved",  "input": 0.08, "rate": 0.25, "contribution": -0.0200,
+        "derived_from": ["C-031", "C-014"] },
+      { "name": "assumption",  "input": 0.07, "rate": 0.15, "contribution": -0.0105 },
+      { "name": "truncation",  "input": 0.0,  "rate": 0.10, "contribution":  0.0 },
+      { "name": "convergence", "input": 0.0,  "rate": 0.05, "contribution":  0.0 }
+    ]
+  },
+
+  "defeat_chains": [                           // why a claim stands where it does
+    { "claim_id": "C-024", "standing": 0.38, "evidence": 0.50,
+      "steps": [
+        { "by": "C-011", "relation": "contradicts", "attacker_standing": 0.84,
+          "weight": 0.60, "delta": -0.29 },
+        { "by": "C-027", "relation": "qualifies",   "attacker_standing": 0.62,
+          "weight": 0.15, "delta": -0.06 }
+      ],
+      "saturated": false }
+  ],
+
+  "change_triggers": [
+    { "claim_id": "C-031", "direction": "if_true", "new_winner": "opt_microservices",
+      "margin_before": 0.19, "margin_after": -0.04 }
+  ],
+
+  "options": [
+    { "id": "opt_monolith", "share": 0.62,
+      "supported_by": ["C-002", "C-011", "C-018"], "opposed_by": ["C-006"] }
+  ]
+}
+```
+
+Two properties the renderer depends on and the schema guarantees: every number carries
+the inputs it was computed from (`derived_from`, `steps`, `margin_before/after`), and
+`contribution` fields sum to `total` within 1e-9 — so *"why 84?"* is answered by
+arithmetic present in the payload rather than by prose generated beside it.

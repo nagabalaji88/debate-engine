@@ -1,6 +1,6 @@
 # AI Debate & Decision Engine — Architecture Specification
 
-**Version:** 2.3 (frozen for implementation)
+**Version:** 2.4 (frozen for implementation)
 **Status:** approved — implementation in progress
 **Supersedes:** v1.0 (Python · LangGraph · Postgres · FastAPI · WebSocket · React)
 **Companion:** `docs/INTERFACES.md` — concrete trait definitions and protocols
@@ -171,6 +171,14 @@ Matching is mechanical — normalised exact substring, then trigram-Jaccard ≥ 
 premise resolution for inferences. Repair is **one extra call per position** (never per
 claim), capped at 2,048 output tokens and budget-reserved like any other call, so
 extraction cost stays bounded.
+
+**Repair runs on the cheap extractor model, not the author.** A repair asks *"which
+substring of this text supports this claim"* — an extraction task over fixed text, not an
+act of authorship — so there is no reason to pay the author's rate for it. The difference
+is not marginal: 15 repair calls in a deep debate cost ≈$0.20 on the cheapest tier and
+≈$0.99 on the most expensive, i.e. **10% versus 50% of the $2.00 cap**. `repair_model`
+defaults to the cheapest model the panel's providers expose, and `repair_budget_fraction`
+(default 0.15) caps repair spend regardless.
 
 Premise graphs are **topologically sorted (Kahn) before `relations.analyze`**. A model
 can emit *A derived from B, B derived from A*, and the naive response — degrade the whole
@@ -391,9 +399,12 @@ This is why four models from one vendor cannot manufacture agreement.
 
 **Provider identity is an optimistic proxy.** Distinct vendors increasingly serve the
 same base weights or train on overlapping corpora, so defaulting a correlation group to
-the provider systematically *overstates* independence. A seed `correlation.toml` ships
-with known shared-lineage groupings, and a `CorrelationSource` hook lets an operator
-supply a better table as the model landscape moves.
+the provider systematically *overstates* independence. A seed `correlation.toml` ships at
+`crates/arbiter-core/data/correlation.toml`, is updated in patch releases as
+shared-lineage models are identified, and is overridden by `correlation_table_path` in
+config or `ARBITER_CORRELATION_TABLE` in the environment. A `CorrelationSource` plugin
+can compute groups instead of reading a file. The table is data with its own release
+cadence, not a constant compiled into the engine.
 
 ### 6.3 Argumentation fixpoint
 
@@ -783,12 +794,16 @@ arbiter run <question|file>   --panel · --depth · --budget · --json · --stre
 arbiter resume <run_id>
 arbiter show <run_id>         [--claims | --decision | --transcript]
 arbiter explain <run_id> [claim_id]    confidence terms · defeat chains · triggers
+                              [--json] → the structured schema the human renderer
+                              itself consumes (`docs/INTERFACES.md` §22)
 arbiter claims <run_id>       [--state agreed|disputed|unresolved]
 arbiter replay <run_id>       exact event replay, no provider calls
                               [--repolicy <version>] → re-derives under a different
                               policy version, minting a new run id
 arbiter accept <run_id>       record a DecisionAcceptance; required before Build Studio
                               [--override path=value --reason "…"]
+arbiter build <run_id>        run Build Studio; refuses without an acceptance record
+                              [--stage product|technical|prompt] [--all]
 arbiter history               [--outcome · --since · --min-confidence]
 arbiter export <run_id>       --format json|markdown
 arbiter plugins list|info
@@ -938,6 +953,23 @@ points, and neither is on the phase-1 critical path.
 
 `arbiter-fixtures` carries golden runs:
 
+Fixtures are **three suites, not one**, because "CI runs the whole engine with zero LLM
+tokens" is only true of the first. A recall measurement taken against a scripted mock
+measures the script.
+
+| Suite | When | LLM | Contents |
+|---|---|---|---|
+| **CI** | every commit | none — scripted mock | the 24 below |
+| **Integration** | nightly, opt-in, budgeted | real providers | `paraphrase_corpus`, `judge_identity_leakage` |
+| **Tuning** | `cargo test --features tuning` | none | the `tuning/` graph corpus, parameter sweeps |
+
+`judge_identity_leakage` sits in Integration deliberately: against a scripted mock,
+swapping the model names changes nothing, so the fixture would pass while measuring
+nothing at all. `paraphrase_corpus` is likewise a measurement rather than an assertion —
+it produces the recall number `t3_merge_threshold` is tuned against.
+
+### CI suite — zero LLM tokens
+
 | Fixture | Proves |
 |---|---|
 | `simple_consensus` | happy path, all confidence terms populated |
@@ -952,7 +984,6 @@ points, and neither is on the phase-1 critical path.
 | `adaptive_stop` | controller stops early on no-new-information |
 | `crash_midcall` | `CALL_STARTED` with no completion → cache recovery on resume |
 | `torn_log_tail` | truncated final line → verify → `LOG_REPAIRED` → resume |
-| `judge_identity_leakage` | model names swapped, score delta below threshold |
 | `premise_cycle` | circular derivation → component degraded to Unsupported |
 | `fixpoint_nonconvergence` | oscillating graph hits the cap → deterministic record |
 | `confidence_arithmetic` | every term independently hand-computed; pins the formula |
@@ -964,11 +995,17 @@ points, and neither is on the phase-1 critical path.
 | `option_clustering` | 5 recommendations → 3 options, attachment matrix, stable ids |
 | `option_emerges_midround` | new option proposed in a rebuttal earns its own cluster |
 | `focus_selection` | dispute ranking picks leverage-bearing disputes, not the loudest |
-| `paraphrase_corpus` | T1/T2 recall measured against T3-assisted recall |
-| `large_panel_deep` | 7 models × deep depth stays inside bounds and under $2 |
+| `large_panel_deep` | 7 models × deep depth stays inside bounds and under the cap |
 
-Each is a recorded event log plus the expected `DecisionRecord`. The mock provider is
-**scripted per call** — malformed JSON, timeouts, missing rubric metrics, slow
+### Integration suite — real providers, nightly
+
+| Fixture | Measures |
+|---|---|
+| `paraphrase_corpus` | T1/T2 recall vs T3-assisted recall on hand-labelled paraphrases; sets `t3_merge_threshold` |
+| `judge_identity_leakage` | score delta **and rank correlation** with model names swapped |
+
+Each CI fixture is a recorded event log plus the expected `DecisionRecord`. The mock
+provider is **scripted per call** — malformed JSON, timeouts, missing rubric metrics, slow
 responses — so the failure paths are exercised, not just the happy one. CI runs the
 whole engine with **zero LLM tokens**.
 
@@ -1015,7 +1052,11 @@ The implementation is successful when:
   orphaned spend rather than silently absorbed. Universal "no duplicate spend" is not
   claimable — a provider can bill a response that never reached disk, and not every
   provider offers an idempotency key
-- Cost per debate stays under $0.50; wall-clock under 3 minutes
+- Cost per debate stays inside its profile's target — **standard ≤ $0.50, deep ≤ $1.20**,
+  both under the $2.00 hard cap; wall-clock under 3 minutes at standard depth, 8 at deep.
+  A single flat $0.50 target was wrong: deep depth triples cross-examination and
+  rebuttals, re-runs attachment each round and adds a second judge, landing near $1.00 by
+  construction
 - The engine never exceeds its configured bounds, under any controller decision
 - A third-party plugin written in Python loads and runs without recompiling the engine
 
@@ -1057,6 +1098,18 @@ The implementation is successful when:
 **v2.0** — Rust kernel, pure decision core, NDJSON store, CLI-first. Superseded v1.0
 (Python · LangGraph · Postgres · FastAPI · WebSocket · React).
 
+
+**v2.4** — pre-coding checklist; seven gaps, all real.
+
+| # | Change | Worth it because |
+|---|---|---|
+| 1 | `arbiter build` added to the CLI | Build Studio was gated by `accept` but had no invocation |
+| 2 | `arbiter explain --json` schema defined (INTERFACES §22) | the human renderer should consume the same structure a UI will |
+| 3 | Cost targets split per profile: standard ≤ $0.50, deep ≤ $1.20 | a flat $0.50 was false for half the configurations |
+| 4 | T3 stitch recurses when representatives exceed a batch | at 300 claims the stitch pass itself overflowed; the algorithm was not total |
+| 5 | `repair_model` pinned to the cheapest tier, `repair_budget_fraction` 0.15 | repairs are 10% of the cap on the cheapest model and **50% on the most expensive** — the choice was unstated |
+| 6 | `correlation.toml` path, override and update cadence specified | the table is data with its own release rhythm, not a constant |
+| 7 | Fixtures partitioned into CI / integration / tuning | a recall measurement against a scripted mock measures the script |
 
 **v2.3** — closes the last algorithmic gap and specifies the load-bearing policies.
 
