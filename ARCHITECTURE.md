@@ -1,6 +1,6 @@
 # AI Debate & Decision Engine — Architecture Specification
 
-**Version:** 2.5.1 (frozen for implementation)
+**Version:** 2.6 (frozen for implementation)
 **Status:** approved — implementation in progress
 **Supersedes:** v1.0 (Python · LangGraph · Postgres · FastAPI · WebSocket · React)
 **Companion:** `docs/INTERFACES.md` — concrete trait definitions and protocols
@@ -180,6 +180,13 @@ is not marginal: 15 repair calls in a deep debate cost ≈$0.20 on the cheapest 
 defaults to the cheapest model the panel's providers expose, and `repair_budget_fraction`
 (default 0.15) caps repair spend regardless.
 
+That fraction is **reserved per round, not per run**. Extraction is heaviest in round 1 —
+every position is new — so a run-level pool lets the first round consume the whole 15%
+and leave rounds 2 and 3 with no repair at all, degrading claims that a single cheap call
+would have rescued. Each round therefore draws `repair_budget_fraction ×
+(remaining_budget ÷ remaining_rounds)`; unspent repair money returns to the round's
+general envelope rather than accumulating.
+
 Premise graphs are **topologically sorted (Kahn) before `relations.analyze`**. A model
 can emit *A derived from B, B derived from A*, and the naive response — degrade the whole
 component to 0.15 — would punish a verifiable fact for a bogus derivation edge some model
@@ -297,7 +304,16 @@ max_rounds       1 (--depth standard) · 3 (--depth deep) · hard ceiling 6
 max_cost         default $2.00
 max_tokens       configurable
 max_wall_time    default 300s
+budget_headroom  default 0.05 of max_cost
 ```
+
+**`budget_headroom` is reserved, not spendable.** Every planner — challenge sizing, judge
+reservation, repair — sizes itself against `max_cost × (1 − budget_headroom)`, so the
+last 5% exists only to absorb the two things a planner cannot predict: a provider that
+prices a response above its own estimate, and a retry after a mid-call failure. It is
+released for use in the **final round only**, when there is no later round left to
+starve. Without it, a run that estimates to $1.98 against a $2.00 cap is one bad token
+count away from `BudgetExhausted`, and the fixture suite would be measuring luck.
 
 **Stop predicates are computed, not judged.** Both are evaluated from artifacts the round
 already produced — no extra call, no model opinion:
@@ -313,6 +329,15 @@ Converged          no live attacker ≥ τ_dissent against the top option
 
 Both thresholds are config, and both are expected to move once real multi-round traces
 exist — which is why they are named constants rather than inline literals.
+
+**At `--depth standard` the controller exits on `RoundLimit`, by construction.** With
+`max_rounds = 1` there is no second round to continue into, so the stop predicates are
+evaluated for the record — `StopReason` reports what *would* have stopped it — but they
+do not gate anything. This matters for reading `explain` output: a standard run whose
+`StopReason` is `RoundLimit` has not failed to converge, and `Converged` is a
+demanding bar to clear in one round regardless (τ_gap 0.15 × `converged_margin_factor`
+1.5 means margin ≥ 0.225, which a genuinely contested question will not reach). Only
+`--depth deep` exercises the predicates as control flow.
 
 The controller decides two things, not one: whether to continue, **and which disputes
 to spend the next round on**. Choosing 6 challenge pairs from 40 candidate disputes is
@@ -457,6 +482,17 @@ operator action that writes the local cache and records the new `table_version`,
 the manifest then pins — so a run can always be explained against the table that was
 actually in force.
 
+`arbiter doctor` warns on two staleness conditions, because a silently stale table
+inflates `independence` and therefore inflates confidence:
+
+| Condition | Warning |
+|---|---|
+| `table_version` older than the installed engine's seed table | `correlation table is older than the shipped seed — run 'arbiter correlation update'` |
+| A configured provider serves a model with no row in the table | `model '<id>' is not in the correlation table; it will be grouped by provider, which may overstate independence` |
+
+Neither is an error — a run proceeds — but both appear in `doctor` output and the second
+is recorded in the run manifest, so a decision made under an incomplete table says so.
+
 ### 6.3 Argumentation fixpoint
 
 ```
@@ -509,8 +545,18 @@ stop-predicate thresholds carry `provisional = true` in config until the gate be
 run; `arbiter doctor` reports which constants are still provisional, and the 1.0 release
 checklist requires none to be.
 
-**The gate: `argument-v1` is pinned by the tuning corpus before the first release, not
-after.** The fragmentation risk in re-tuning is real, but it only bites once decision
+**The gate has two halves, and the corpus is only one of them.** A tuning sweep measures
+the constants against graphs that arrive in good faith; it says nothing about a panel
+member that games them. So before `argument-v1` drops `provisional`, a recorded
+**red-team session** must also run: at least 20 hand-built adversarial cases probing the
+attacks the arithmetic invites — attacker flooding under the 1.5 saturation cap, support
+padding under the 2.0 cap, citation of defeated claims, premise-cycle construction, and
+recommendation splitting to inflate an option's cluster. Each case ships as a golden
+fixture with its expected outcome, so the exploit stays closed. Findings that need a
+constant change feed back into the sweep before it is pinned.
+
+**The corpus half: `argument-v1` is pinned by the tuning corpus before the first release,
+not after.** The fragmentation risk in re-tuning is real, but it only bites once decision
 records exist — so the sweep runs while there is no history to fragment, and the values
 it selects are what ships. After that, changes mint `argument-v2`. The active set is recorded as `policy_version` (`argument-v1`) in every
 `DecisionRecord`, so re-tuning produces a new version rather than silently changing what
@@ -1086,6 +1132,14 @@ measures the script.
 | **CI** | every commit | none — scripted mock | the 28 below |
 | **Integration** | nightly, opt-in, budgeted | real providers | `paraphrase_corpus`, `judge_identity_leakage` |
 | **Tuning** | `cargo test --features tuning` | none | the `tuning/` graph corpus, parameter sweeps |
+| **Red-team** | every commit, once written | none — scripted mock | ≥20 adversarial cases from the `argument-v1` gate session (§6.3) |
+
+Red-team cases are CI fixtures in every mechanical sense — scripted mock, zero tokens,
+deterministic — but they are listed separately because they are written *against* the
+arithmetic rather than for a pipeline path, and the set only grows: every exploit found
+after release lands here as a fixture rather than as a patch note. `attack_saturation` is
+the first member, written before the session existed. The 28 below are the pipeline
+suite and that count is fixed; the red-team suite has a floor, not a target.
 
 `judge_identity_leakage` sits in Integration deliberately: against a scripted mock,
 swapping the model names changes nothing, so the fixture would pass while measuring
@@ -1197,7 +1251,11 @@ The implementation is successful when:
   claimable — a provider can bill a response that never reached disk, and not every
   provider offers an idempotency key
 - Cost per debate stays inside its profile's target — **standard ≤ $0.50, deep ≤ $1.20**,
-  both under the $2.00 hard cap; wall-clock under 3 minutes at standard depth, 8 at deep.
+  both under the $2.00 hard cap. These are **soft targets measured against list prices
+  and estimated token counts**, not enforced bounds: only `max_cost` is enforced. The
+  $0.480 standard estimate leaves 4% of headroom, which one verbose panel erases, so the
+  first 20–30 live standard runs are tracked against it and the target is restated from
+  observed spend rather than defended; wall-clock under 3 minutes at standard depth, 8 at deep.
   A single flat $0.50 target was wrong: deep depth triples cross-examination and
   rebuttals, re-runs attachment each round and adds a second judge, landing near $1.00 by
   construction
@@ -1242,6 +1300,26 @@ The implementation is successful when:
 **v2.0** — Rust kernel, pure decision core, NDJSON store, CLI-first. Superseded v1.0
 (Python · LangGraph · Postgres · FastAPI · WebSocket · React).
 
+
+**v2.6** — two reviews; six changes worth making, two claims that did not survive checking.
+
+| # | Change | Worth it because |
+|---|---|---|
+| 1 | `budget_headroom` (5%) reserved from every planner, released only in the final round | the standard profile estimates at 96% of its own target; a planner that spends to the last cent fails on one mispriced response |
+| 2 | `repair_budget_fraction` reserved per round, not per run | round 1 extracts every position and could consume the whole repair pool, leaving later rounds unable to rescue a claim for one cheap call |
+| 3 | Red-team session (≥20 adversarial fixtures) added to the `argument-v1` gate | the tuning corpus measures good-faith graphs; nothing measured a panel gaming the saturation caps |
+| 4 | `arbiter doctor` warns on a stale correlation table and on models missing from it | a silently stale table overstates `independence`, which overstates confidence |
+| 5 | Standard depth documented as exiting on `RoundLimit` by construction | `StopReason: RoundLimit` reads as a failure to converge when it is the only reachable outcome at `max_rounds = 1` |
+| 6 | Cost targets restated as soft, list-price estimates to be re-based on 20–30 live runs | they were being read as guarantees; only `max_cost` is enforced |
+| — | INTERFACES §20 Step 1 corrected: `OptionId` is cluster identity, not `blake3(text)` | Step 1 still carried the pre-v2.5 text and contradicted Step 3b two paragraphs later |
+| — | INTERFACES §14 header corrected to five penalties | fourth occurrence of the same stale count |
+
+Two review claims were checked and rejected. The dispersion penalty is **not** aggressive:
+at judge scores 0.85/0.75 the penalty is exactly **0**, the threshold only engages past a
+0.30 spread, and the two-judge maximum is 0.070 — the arithmetic is in INTERFACES §14. And
+β = 0.60 needs no change: one decisive refutation leaves a fact contested, two kill it,
+which is the stated design behaviour, and the constant is already gated on the tuning
+sweep before release.
 
 **v2.5.1** — four small corrections; two items in the review needed no change.
 

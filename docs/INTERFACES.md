@@ -1,6 +1,6 @@
 # Arbiter — Interface Definitions
 
-**Companion to** `ARCHITECTURE.md` v2.5.1. Where the spec says *what*, this says *how*.
+**Companion to** `ARCHITECTURE.md` v2.6. Where the spec says *what*, this says *how*.
 Every item here closes a numbered finding from the v2.0 review.
 
 ---
@@ -228,9 +228,20 @@ degraded recall, never a dropped claim. Fixture: `t3_batch_partition` (180 claim
 *missed merge* leaves two claims that each carry a share of the evidence — dilution,
 visible in the record, recoverable. So groups carry a confidence, groups below
 `t3_merge_threshold` (0.75) are split rather than merged, and the grouping prompt is
-written to prefer "not sure — keep separate". `paraphrase_corpus` measures what that
-costs in recall against a hand-labelled set of hard paraphrases; the threshold is tuned
-against it, not guessed.
+written to prefer "not sure — keep separate". `paraphrase_corpus` measures what that costs in recall against a hand-labelled set; the
+threshold is tuned against it, not guessed — and 0.75 is a **starting point, not a
+discovered constant**:
+
+| Property | Requirement |
+|---|---|
+| Size | ≥ 300 claim pairs, ≥ 100 of them true paraphrases with low lexical overlap |
+| Labelling | two independent labellers; disagreements adjudicated, not dropped |
+| Objective | maximise F1 **subject to merge-precision ≥ 0.95** — the asymmetry above, expressed as a constraint |
+| Domains | ≥ 3, since paraphrase density differs sharply between e.g. architecture and policy text |
+| Status | living dataset, versioned with the table; threshold stays config-overridable |
+
+A corpus below that size cannot distinguish 0.75 from 0.80, and a threshold tuned on one
+domain will not transfer.
 
 **K scales with the claim count** rather than being a hard-coded quality threshold:
 
@@ -606,9 +617,20 @@ comparable only within a policy version**, `arbiter history` groups by it, and
 `arbiter replay` refuses to replay a run under a different one without `--repolicy`,
 which produces a new run id rather than overwriting the original record.
 
-A `tuning/` fixture set (graphs of varying density and cyclicity, each with a known
-qualitative outcome) supports parameter sweeps under `cargo test --features tuning`.
-That is a parameter study, not a unit test, and it is how β earns its default.
+A `tuning/` fixture set supports parameter sweeps under `cargo test --features tuning`.
+That is a parameter study, not a unit test, and it is how β earns its default — but only
+if the corpus is powered enough to distinguish candidate values:
+
+```
+≥ 20 graphs, covering every topology the fixpoint behaves differently on:
+  sparse trees · dense cliques · cyclic triangles · long attack chains
+  saturation edge cases (many weak attackers vs one strong)
+  mutual-attack pairs · disconnected components
+≥ 1 hand-verified known-outcome graph per topology
+```
+
+Under twenty graphs the sweep cannot separate β = 0.55 from β = 0.60, and pinning
+`argument-v1` on it would be theatre.
 
 
 ---
@@ -656,7 +678,7 @@ a `schema_version` bump.
 
 ## 14. The confidence formula  *(review #1, #2)*
 
-Three evidence dimensions, four penalties. The implementation evaluates this; it does
+Three evidence dimensions, five penalties. The implementation evaluates this; it does
 not invent it.
 
 ```rust
@@ -686,8 +708,21 @@ total == clamp01(base − Σ penalties) recomputed, never stored independently
 every field serialised                so `arbiter explain` can print the derivation
 ```
 
-`judge_dispersion` is the population standard deviation of the judges' weighted scores
-over the same anonymised dossier. It measures **instability, not bias**: two judges that
+`judge_dispersion` is the **population** standard deviation (÷n, not ÷n−1) of the judges'
+weighted scores over the same anonymised dossier. For two judges that is exactly half
+their gap, which makes the penalty deliberately permissive rather than aggressive:
+
+| scores | gap | dispersion | penalty |
+|---|---|---|---|
+| 0.85 / 0.75 | 0.10 | 0.050 | 0 |
+| 0.80 / 0.50 | 0.30 | 0.150 | 0 — the threshold, not past it |
+| 0.90 / 0.50 | 0.40 | 0.200 | 0.010 |
+| 1.00 / 0.00 | 1.00 | 0.500 | **0.070 — the maximum for two judges** |
+
+Two judges must differ by more than 0.30 on a weighted rubric score before anything is
+subtracted, and total disagreement costs 0.07 of confidence. This is a nudge, not a
+veto: it is a signal that the judge term is shaky, and the term itself is only 0.35 of
+`base`. It measures **instability, not bias**: two judges that
 independently infer the same authorship agree, dispersion is low, and nothing here sees
 it. Cross-vendor selection is what addresses correlated leakage; this penalty only stops
 a visibly unreliable judge signal carrying full weight.
@@ -841,7 +876,13 @@ fn is_substantive(a: &Assertion) -> bool {
 Both gate the two ways the ratio is gameable: **padding** the denominator with
 trivially-attributed prose (only substantive assertions count) and **spurious
 attribution** to a claim the debate demolished (`CitesDefeatedClaim` resolves every cited
-id against the record and rejects `Defeated` standing). Chain-depth distribution is
+id against the record and rejects `Defeated` standing).
+
+`Defeated` is terminal for a *version*, and there is no `Revived` lifecycle state by
+design: a claim that answers its refutation does so as `Modified{v+1}`, a new version
+carrying its own standing. The gate therefore resolves ids against **final** standing at
+`decision.synthesize`, so citing `C-024@v2` — which survived — is legal while citing
+`C-024@v1` — which did not — is not. Chain-depth distribution is
 reported alongside the ratio, since one four-hop chain is a different risk from twelve
 one-hop ones.
 
@@ -912,7 +953,8 @@ pub enum AttachSource { Authored, Classified, Propagated }
 **Step 1 — cluster the recommendations.** Each position carries a structured
 `recommendation`. Cluster them with the same machinery as claims (lexical + one batched
 LLM grouping call), yielding 2–4 options for a typical 5-model panel. An option's id is
-`blake3` of its canonical text, so it is **stable across rounds and across replays**.
+the **cluster's identity**, not a hash of its text — see Step 3b. Text goes into
+`option_version`; the id survives rewording.
 
 **Step 2 — attach claims.** One batched call produces the (claim × option) polarity
 matrix. `|C| × |O|` pairwise calls — 32 × 3 = 96 — is exactly the cost mistake T3 was
@@ -1107,6 +1149,7 @@ pub fn prompt_hash(t: &PromptTemplate, rendered: &str) -> Hash;   // blake3(rend
 | `init` snapshots `pack_hash` into the manifest | the run states which prompts produced it |
 | every `CALL_STARTED` carries `prompt_hash` | a single template change is visible per call, not just per run |
 | variables validated against the declared schema before render | a missing variable is a stage error, never a silently malformed prompt |
+| `prompt_hash` covers the **schema as well as** the rendered text | two prompts that render identically but declare different variables are different prompts, and must not share a cache entry |
 | exact replay **refuses** a differing `pack_hash` | replaying under new prompts is a re-run wearing a replay's clothes |
 | `--repack <version>` mints a new run id | the same escape hatch as `--repolicy`, and just as explicit |
 
