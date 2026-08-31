@@ -1,9 +1,20 @@
 # AI Debate & Decision Engine — Architecture Specification
 
-**Version:** 2.2 (frozen for implementation)
+**Version:** 2.2.1 (frozen for implementation)
 **Status:** approved — implementation in progress
 **Supersedes:** v1.0 (Python · LangGraph · Postgres · FastAPI · WebSocket · React)
 **Companion:** `docs/INTERFACES.md` — concrete trait definitions and protocols
+
+**Document authority.** Where the two files cover the same ground, one of them owns it.
+Duplicated statements are how a spec drifts — it is how the v2.0 confidence example came
+to disagree with its own formula.
+
+| Subject | Owner | The other file |
+|---|---|---|
+| Pipeline, decision math, scope, criteria | `ARCHITECTURE.md` | — |
+| Golden fixture list | `ARCHITECTURE.md` §17 | INTERFACES describes mock mechanics only |
+| Trait signatures, wire protocols, event enum | `docs/INTERFACES.md` | ARCHITECTURE narrates, does not enumerate |
+| Confidence formula | `docs/INTERFACES.md` §14 (struct + invariants) | ARCHITECTURE §6.7 explains and worked-examples it |
 **Last updated:** 2026-08-31
 
 ---
@@ -720,6 +731,10 @@ arbiter show <run_id>         [--claims | --decision | --transcript]
 arbiter explain <run_id> [claim_id]    confidence terms · defeat chains · triggers
 arbiter claims <run_id>       [--state agreed|disputed|unresolved]
 arbiter replay <run_id>       exact event replay, no provider calls
+                              [--repolicy <version>] → re-derives under a different
+                              policy version, minting a new run id
+arbiter accept <run_id>       record a DecisionAcceptance; required before Build Studio
+                              [--override path=value --reason "…"]
 arbiter history               [--outcome · --since · --min-confidence]
 arbiter export <run_id>       --format json|markdown
 arbiter plugins list|info
@@ -975,3 +990,14 @@ The implementation is successful when:
 
 **v2.0** — Rust kernel, pure decision core, NDJSON store, CLI-first. Superseded v1.0
 (Python · LangGraph · Postgres · FastAPI · WebSocket · React).
+
+
+**v2.2.1** — consistency pass. The v2.2 review raised no new findings, so this fixes
+only drift discovered while verifying its claims against the files:
+
+| Drift | Fix |
+|---|---|
+| Two fixture lists disagreed — 21 in ARCHITECTURE §17, a stale 13 in INTERFACES §8 | §17 is authoritative; INTERFACES §8 keeps mock-scripting mechanics and points at it |
+| `arbiter accept` used in §13 and INTERFACES §17, absent from the CLI surface | added to §12 |
+| `replay --repolicy` specified in INTERFACES §12, absent from the CLI surface | added to §12 |
+| No stated ownership for duplicated subjects | document-authority table added above |

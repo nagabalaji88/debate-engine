@@ -1,6 +1,6 @@
 # Arbiter — Interface Definitions
 
-**Companion to** `ARCHITECTURE.md` v2.2. Where the spec says *what*, this says *how*.
+**Companion to** `ARCHITECTURE.md` v2.2.1. Where the spec says *what*, this says *how*.
 Every item here closes a numbered finding from the v2.0 review.
 
 ---
@@ -396,10 +396,16 @@ The mock provider is **scripted per call**, not canned per stage:
 { "call": 7, "kind": "judge",   "response": { "…": "missing required metric" } }
 ```
 
-Mandatory CI fixtures — each asserts engine *behaviour*, not just a decision:
+**The fixture list itself lives in `ARCHITECTURE.md` §17 and is authoritative there.**
+It is not repeated here: the two lists had already drifted to 21 entries against 13,
+which is exactly the failure this split prevents.
 
-| Fixture | Proves |
-|---|---|
+What belongs here is the scripting contract every fixture is built from — a mock
+response is addressed by call index and stage kind, so a fixture can inject a malformed
+body, a timeout, a missing rubric metric or a slow response at a precise point in the
+run, and assert what the engine *did* rather than only what it decided.
+
+---|---|
 | `simple_consensus` | happy path, all four confidence terms populated |
 | `split_decision` | margin below τ, both options above floor |
 | `strong_dissent` | surviving contradiction, dissent retained in the record |
