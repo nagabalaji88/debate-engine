@@ -554,7 +554,8 @@ pub struct ConfidenceBreakdown {
 Invariants asserted in code and pinned by the `confidence_arithmetic` fixture:
 
 ```
-dimension weights sum to 1.0
+dimension weights sum to 1.0 ±1e-9   0.35+0.30+0.35 is 0.9999999999999999 in f64;
+                                     assert with an epsilon, never with ==
 base ∈ [0,1]                         each dimension is clamped before weighting
 total == clamp01(base − Σ penalties) recomputed, never stored independently
 every field serialised                so `arbiter explain` can print the derivation
