@@ -64,6 +64,19 @@ The extractor returns, per claim, a `grounding_hint`:
    quote. Hit ⇒ `DirectQuote` with the matched span.
 3. **Derived** — every premise must resolve to an already-accepted claim in the same
    position, and the premise graph must be acyclic. Hit ⇒ `Grounding::Derived`.
+
+   **Cycle enforcement is explicit, not assumed.** After extraction and before
+   `relations.analyze`, the premise graph of each position is topologically sorted
+   (Kahn). A model can emit *A derived from B, B derived from A* — adversarially or by
+   accident — and nothing downstream would catch it. On a detected cycle, every claim
+   in the strongly-connected component degrades to `Grounding::Unsupported`
+   (`EvidenceKind::Unverified`, weight 0.15) and the run emits
+   `PREMISE_CYCLE_DETECTED { component: [ClaimId] }`. The claims survive into the
+   decision at low weight; only their *derivation* is rejected.
+
+   Note the distinction: **premise cycles are malformed extraction; relation cycles are
+   not.** `A contradicts B contradicts A` is ordinary dialectic and is handled by the
+   fixpoint's damping (§12), not rejected.
 4. **Repair** — one extra call *per position* (never per claim), carrying only the
    failed claims plus the position text: *"return the exact substring supporting each,
    or mark it as an inference and name its premises."*
@@ -86,28 +99,54 @@ premises at step 3 or it is admitted at Unverified weight.
 The review is right that the spec contradicted itself. Resolution: **phase 1 ships no
 embedding model and no vector store.** The cheap stage is purely lexical:
 
+Pure lexical blocking has a real recall hole, and the review named it precisely:
+*"Kubernetes deployment overhead"* and *"container orchestration maintenance workload"*
+share almost no tokens and no useful character n-grams either, yet they are the same
+claim. Missing the pair produces two canonical claims for one point, which then dilutes
+`independence` and `corroboration` — the failure is silent and it corrupts the decision
+arithmetic, not just the display.
+
+**Candidate generation is therefore a union of three tiers, not one filter:**
+
 ```
-normalise → token trigrams → 64-bit SimHash blocking → IDF-weighted cosine on
-candidates → top-K per claim (K = 12) → LLM classifies
+T1  lexical      normalise → trigrams → 64-bit SimHash blocking
+                 → IDF-weighted cosine → top-K per claim (K = 12)       always on, free
+T2  polarity     every cross-model pair attached to opposing options    always on, free
+T3  batch-LLM    ONE call over all claims on a cheap model:             default on
+                 "group claims that state the same underlying point"    ~3k in / 1k out
+                                                                        ≈ $0.01
+candidates = T1 ∪ T2 ∪ T3  →  LLM pair classification
 ```
 
-Plus a **polarity sweep**: cross-model claim pairs attached to opposing options are
-always candidates regardless of lexical score, because the pairs that matter most are
-exactly the ones worded differently.
+T3 is what closes the synonymy hole. It is **one call for the whole claim set**, not
+O(n²) — the original objection to "use an LLM for similarity" was about pair-wise cost,
+which a single batched grouping call does not incur. On a 32-claim debate it costs about
+a cent and catches paraphrase far better than a small local embedding model would.
 
-**The LLM is the semantic step.** Lexical blocking only decides *what gets looked at*;
-paraphrase detection happens in classification, where it belongs. Accepted cost: recall
-loss on pairs that are both semantically related and lexically disjoint and not
-option-opposed.
+**Why not a local ONNX embedding sidecar in phase 1** (the review's suggestion): it adds
+a native build dependency (`ort`), a 23–90 MB model to distribute and version, and
+float-level output drift across runtime versions — and MiniLM-class embeddings are
+weaker at *"is this the same claim"* than a Haiku-class model reading the claims. It is
+supported as a plugin for users who want offline or zero-LLM-cost blocking, not as the
+default.
 
 ```rust
-pub trait Similarity: Send + Sync {      // internal plane
-    fn candidates(&self, claims: &[CanonicalClaim], k: usize) -> Vec<(ClaimId, ClaimId, f64)>;
+pub trait Similarity: Send + Sync {          // internal plane
+    fn candidates(&self, claims: &[CanonicalClaim], k: usize) -> Vec<CandidatePair>;
+}
+
+pub struct SimilarityStack {                 // union of enabled tiers
+    lexical: LexicalSimilarity,              // always
+    polarity: PolaritySweep,                 // always
+    batch_llm: Option<BatchGrouping>,        // default Some
+    plugin: Option<Box<dyn Similarity>>,     // e.g. arbiter-similarity-embed
 }
 ```
 
-`LexicalSimilarity` is the only implementation in phase 1. An embedding implementation
-drops in behind this trait without touching a stage.
+**Replay determinism is protected by recording, not by purity.** The selected pair set
+is written to the log as `CANDIDATES_SELECTED { pairs, tier }`, and exact replay reads
+those pairs rather than recomputing them. Neither LLM non-determinism in T3 nor float
+drift in a future embedding plugin can change a replayed decision.
 
 ---
 
@@ -161,12 +200,42 @@ cache miss                → release the reservation, emit CALL_ORPHANED, retry
 
 Cache is written *before* the completion event precisely so this recovery is possible.
 
-**Honest limit:** if the provider served and billed a call whose response never reached
-disk, that money is spent and Arbiter cannot know it. What the engine guarantees is no
-*duplicated work* on a cache hit, and an honest ledger: the run records
-`orphaned_reservations` and the cost report shows them separately rather than pretending
-the spend didn't happen. LLM APIs are not idempotent and no client-side protocol can
-make them so.
+**Narrowing the exposure window.** Three mechanisms, in order of how much they actually
+buy:
+
+1. **Stream to the cache file.** Responses are written to `cache/<prompt_hash>.part` as
+   tokens arrive and renamed on completion. A crash mid-response leaves a partial
+   artifact that resume can report; a crash after the last token but before the rename
+   is recoverable because the bytes are already on disk.
+2. **Record the provider request id.** Response headers carry a request identifier
+   (`request_id` on Anthropic). It is written into `CALL_STARTED`'s completion event as
+   soon as headers arrive — before the body finishes — so an orphaned call can be
+   reconciled against the provider's own usage export afterwards.
+3. **Send an idempotency key where the provider supports one** —
+   `blake3(prompt_hash ‖ reservation_id)`, stable across retries of the same logical
+   call and distinct between calls. This is **capability-gated, not assumed**:
+
+```rust
+pub struct ProviderCapabilities {
+    pub structured_output: bool,
+    pub streaming: bool,
+    pub idempotency: Option<IdempotencyStyle>,   // None = unsupported
+}
+pub enum IdempotencyStyle { Header(&'static str) }
+```
+
+Each adapter declares its own support from that provider's documentation; the kernel
+sends the key only when `Some`. At the time of writing, the Anthropic Messages API
+reference bundled with this project documents no idempotency header, so the Anthropic
+adapter ships `idempotency: None` until that changes. Several OpenAI-compatible
+gateways do accept `Idempotency-Key`, which is exactly why this is a per-adapter
+capability rather than a global assumption.
+
+**Honest limit, unchanged.** If a provider served and billed a call whose response never
+reached disk and that provider offers no idempotency key, the money is spent and Arbiter
+cannot recover it. What the engine guarantees is no *duplicated work* on a cache hit, a
+recorded `request_id` for after-the-fact reconciliation, and an honest ledger:
+`orphaned_reservations` are reported separately rather than quietly absorbed.
 
 **Idempotency key** for every stage:
 
@@ -368,3 +437,32 @@ ControlFlow::Continue { round, focus: Vec<ClaimId> }
 **Which disputes to spend the next round on** is adaptation even when only one round
 remains — a controller that must choose 6 challenge pairs out of 40 candidate disputes
 is doing the work regardless of how many rounds are left.
+
+
+---
+
+## 12. Fixpoint robustness  *(review #3, second half)*
+
+The argumentation fixpoint must be **total**: it returns a deterministic answer for
+every input, including adversarial graphs.
+
+```
+standing_{k+1} = clamp01( (1-λ)·standing_k + λ·(E + α·Σsupport − β·Σattack − γ·Σqualify) )
+λ = 0.5   α = 0.25   β = 0.60   γ = 0.15   ε = 1e-9   max_iterations = 64
+```
+
+- **Jacobi, not Gauss-Seidel** — every claim reads the previous iterate, so the result
+  does not depend on iteration order, by construction rather than by discipline.
+- **Damping plus clamping** keeps the update bounded on `[0,1]`; oscillation between
+  mutually attacking claims decays instead of ringing.
+- **Relation cycles are legitimate** and are *not* rejected: mutual contradiction is a
+  normal dialectic shape and the damped iteration settles it.
+- **Non-convergence is handled, not assumed away.** If `max_iterations` is reached with
+  `Δ > ε`, the engine emits `FIXPOINT_NOT_CONVERGED { max_delta, iterations }`, keeps
+  the last iterate, and applies a `convergence_penalty` to confidence. The decision is
+  still produced and still deterministic — a debate does not fail because its argument
+  graph is pathological, but the record says the graph was.
+
+Two fixtures pin this: `premise_cycle` (extraction-time rejection, claims degraded to
+Unsupported) and `fixpoint_nonconvergence` (a hand-built oscillating graph that hits the
+iteration cap and still yields a byte-identical record on replay).
