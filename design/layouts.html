@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arbiter — screen layouts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F2EEE7; --panel:#FAF7F2; --sunk:#EAE4DA; --line:#DCD4C8; --line2:#C6BCAC; --dash:#B5AA97;
+  --ink:#221F1A; --ink2:#463F36; --mut:#6E665A; --fade:#A2977F;
+  --acc:#1C5A4E; --accw:#DFEBE6; --pos:#2A7259; --neg:#AB412B; --qual:#9A6A1C; --judge:#3F6486;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:13px/1.5 'IBM Plex Sans',system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;padding:0 0 60px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.wrap{max-width:1200px;margin:0 auto;padding:0 24px}
+.lbl{font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--mut)}
+
+/* page head */
+.head{border-bottom:1px solid var(--line2);background:var(--panel);padding:20px 0 16px;margin-bottom:26px}
+.head h1{font-size:17px;font-weight:600;letter-spacing:-.01em}
+.head p{color:var(--mut);font-size:12.5px;margin-top:3px}
+.key{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;font-size:11px;color:var(--mut)}
+.key i{display:inline-block;width:22px;height:9px;border:1px dashed var(--dash);vertical-align:-1px;margin-right:6px}
+.key i.f{border-style:solid;border-color:var(--line2);background:var(--sunk)}
+.key i.s{border:1px solid var(--line);background:var(--bg)}
+
+/* screen block */
+.scr{margin-bottom:38px}
+.sh{display:flex;align-items:baseline;gap:11px;margin-bottom:9px}
+.sh .n{width:23px;height:23px;border-radius:4px;background:var(--acc);color:#F4F1EA;
+  display:grid;place-items:center;font-family:var(--mono);font-size:12px;font-weight:700;flex:0 0 23px}
+.sh h2{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.sh .p{color:var(--mut);font-size:12px}
+.sh .job{margin-left:auto;font-size:11px;color:var(--acc);background:var(--accw);
+  border:1px solid #BFD6CE;border-radius:3px;padding:1px 8px}
+
+/* diagram */
+.dgm{border:1px solid var(--line2);border-radius:6px;overflow:hidden;background:var(--panel)}
+.bar{height:30px;display:flex;align-items:center;gap:9px;padding:0 10px;background:var(--sunk);
+  border-bottom:1px solid var(--line2);font-size:11px;color:var(--ink2)}
+.bar .t{font-family:var(--mono);font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--mut)}
+.bar .h{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--fade)}
+.body{display:grid;min-height:430px}
+.reg{position:relative;padding:21px 10px 11px;display:flex;flex-direction:column;gap:5px;min-width:0;
+  border-right:1px dashed var(--dash)}
+.reg:last-child{border-right:0}
+.reg.stack{padding:0;gap:0}
+.reg.stack > .reg{border-right:0;border-bottom:1px dashed var(--dash)}
+.reg.stack > .reg:last-child{border-bottom:0}
+.reg::before{content:attr(data-n);position:absolute;top:5px;left:10px;font-family:var(--mono);
+  font-size:9.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--mut)}
+.reg::after{content:attr(data-w);position:absolute;top:5px;right:10px;font-family:var(--mono);
+  font-size:9.5px;color:var(--fade)}
+.it{border:1px solid var(--line);border-radius:3px;padding:4px 8px;background:var(--bg);font-size:11.5px;
+  display:flex;align-items:center;gap:7px;min-height:25px}
+.it b{font-weight:600;white-space:nowrap}
+.it s{text-decoration:none;color:var(--mut);font-size:10.5px;line-height:1.35}
+.it .r{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--fade);white-space:nowrap}
+.it.pri{border-color:var(--acc);background:var(--accw)}
+.it.gh{border-style:dashed;border-color:var(--dash);background:transparent;color:var(--mut)}
+.it.fill{flex:1;align-items:center;justify-content:center;color:var(--mut);font-size:11px;
+  border-style:dashed;border-color:var(--dash);background:transparent;text-align:center;padding:10px}
+.grp{display:flex;gap:5px}.grp > .it{flex:1}
+.cols{display:grid;gap:5px;flex:1;min-height:0}
+.note{font-size:10.5px;color:var(--fade);font-family:var(--mono);padding-top:2px}
+
+/* spec strip */
+.spec{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--line);
+  border-top:0;border-radius:0 0 6px 6px;background:var(--panel);margin-top:-6px}
+.spec > div{padding:9px 12px;border-right:1px solid var(--line);min-width:0}
+.spec > div:last-child{border-right:0}
+.spec .lbl{margin-bottom:4px}
+.spec p{font-size:11.5px;line-height:1.5;color:var(--ink2)}
+.spec code{font-family:var(--mono);font-size:10.5px;background:var(--sunk);border-radius:2px;padding:1px 4px}
+.dgm{border-radius:6px 6px 0 0}
+
+/* footer tables */
+.tbl{width:100%;border-collapse:collapse;font-size:12px;background:var(--panel);
+  border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.tbl th{text-align:left;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);
+  font-weight:600;padding:7px 11px;background:var(--sunk);border-bottom:1px solid var(--line)}
+.tbl td{padding:6px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+.tbl tr:last-child td{border-bottom:0}
+.tbl .m{font-family:var(--mono);font-size:11px;white-space:nowrap}
+h3{font-size:13px;font-weight:600;margin:0 0 9px}
+.hr{height:1px;background:var(--line2);margin:34px 0 26px}
+</style>
+</head>
+<body>
+
+<div class="head"><div class="wrap">
+  <h1>Screen layouts — five concepts</h1>
+  <p>Region maps for <span class="mono">design/concepts.html</span>. Structure and ownership, not pixels.
+     Every screen is viewport-locked: the page never scrolls, panes scroll independently.</p>
+  <div class="key">
+    <span><i></i>pane — owns one job, scrolls on its own</span>
+    <span><i class="f"></i>fixed chrome — never scrolls</span>
+    <span><i class="s"></i>content block</span>
+    <span class="mono">widths at a 1600px viewport · 1fr = fills the rest</span>
+  </div>
+</div></div>
+
+<div class="wrap">
+
+<!-- ─────────── A ─────────── -->
+<section class="scr">
+  <div class="sh"><span class="n">1</span><h2>Mission Control</h2>
+    <span class="p">a run in flight</span><span class="job">watch · control cost · kill</span></div>
+
+  <div class="dgm">
+    <div class="bar"><span class="t">app chrome</span><b style="font-size:11.5px">question</b>
+      <span style="color:var(--mut)">run id · depth · panel · elapsed</span>
+      <span class="h">46px · fixed · Kill button right-aligned</span></div>
+    <div class="body" style="grid-template-columns:236px 1fr 296px">
+
+      <div class="reg" data-n="stage rail" data-w="236px">
+        <div class="it"><b>init</b><s>validate · snapshot pack hash</s><span class="r">✓ 0.4s</span></div>
+        <div class="it"><b>positions.generate</b><s>parallel, no cross-talk</s><span class="r">✓ $0.104</span></div>
+        <div class="it"><b>claims.extract</b><s>+ grounding repair loop</s><span class="r">✓ $0.062</span></div>
+        <div class="it pri"><b>challenge.run</b><s>in flight</s><span class="r">4/6</span></div>
+        <div class="it gh"><b>rebuttal.run</b><s>queued</s></div>
+        <div class="it gh"><b>judge · synthesize</b><s>queued</s></div>
+        <div class="it" style="margin-top:auto;flex-direction:column;align-items:stretch;gap:3px">
+          <b style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--mut)">stop predicates</b>
+          <s style="white-space:normal">new_claims · Δstanding · margin, each against its threshold</s></div>
+        <div class="note">15 stages · scrolls · current stage pinned into view</div>
+      </div>
+
+      <div class="reg stack" data-w="1fr">
+        <div class="reg" data-n="claim intake — live feed" data-w="1.35fr" style="border-right:0">
+          <div class="it"><b>C-041</b><s>author · kind · grounding · standing bar</s><span class="r">0.81</span></div>
+          <div class="it"><b>C-042</b><s>ungrounded → repaired</s><span class="r">0.44</span></div>
+          <div class="it"><b>C-036</b><s>+ verbatim quote line when DirectQuote</s><span class="r">0.71</span></div>
+          <div class="it fill">newest at top · auto-scroll pauses on hover<br>withdrawn claims stay, struck through</div>
+        </div>
+        <div class="reg" data-n="event log — NDJSON tail" data-w="1fr" style="border-right:0">
+          <div class="it"><b class="mono">CHALLENGE_ISSUED</b><s>ts · type · payload, three columns</s></div>
+          <div class="it"><b class="mono">BUDGET_RESERVED</b><s>reservation id and amount</s></div>
+          <div class="it fill">the same lines <span class="mono">--stream</span> writes · hash-chain counter in the footer</div>
+        </div>
+      </div>
+
+      <div class="reg" data-n="budget ledger" data-w="296px">
+        <div class="it" style="flex-direction:column;align-items:stretch;gap:4px">
+          <b>spend gauge</b><s>bar · target tick · 5% headroom hatch</s></div>
+        <div class="it"><b>in flight</b><s>open reservations, per call</s></div>
+        <div class="it"><b>per stage</b><s>cost rollup incl. reserved judge</s></div>
+        <div class="it"><b>bounds</b><s>rounds · wall · tokens</s></div>
+        <div class="it"><b>panel health</b><s>provider dot + correlation group</s></div>
+        <div class="it gh"><s>independence warning when groups collide</s></div>
+        <div class="note">never scrolls past ~6 blocks</div>
+      </div>
+    </div>
+  </div>
+  <div class="spec">
+    <div><div class="lbl">Grid</div><p><code>236px 1fr 296px</code> under a 46px bar. Centre splits <code>1.35fr / 1fr</code>.</p></div>
+    <div><div class="lbl">Scroll</div><p>Four independent scrollers. Feed and log auto-follow; hover pauses.</p></div>
+    <div><div class="lbl">Primary action</div><p>Kill. Reachable at all times, top-right, never behind a menu.</p></div>
+    <div><div class="lbl">CLI</div><p><code>arbiter run … --stream</code> — echoed in the footer, copyable.</p></div>
+  </div>
+</section>
+
+<!-- ─────────── B ─────────── -->
+<section class="scr">
+  <div class="sh"><span class="n">2</span><h2>Argument Map</h2>
+    <span class="p">the claim graph</span><span class="job">interrogate structure</span></div>
+
+  <div class="dgm">
+    <div class="bar"><span class="t">pane header</span><b style="font-size:11.5px">claim graph</b>
+      <span style="color:var(--mut)">38 nodes · 51 edges · 1 premise cycle cut</span>
+      <span class="h">32px · edge legend right-aligned</span></div>
+    <div class="body" style="grid-template-columns:194px 1fr 318px">
+
+      <div class="reg" data-n="filter rail" data-w="194px">
+        <div class="it"><b>standing</b><s>agreed / disputed / unresolved / defeated</s></div>
+        <div class="it"><b>evidence kind</b><s>5 checkboxes, weight shown</s></div>
+        <div class="it"><b>author</b><s>per panel member, with counts</s></div>
+        <div class="it"><b>round</b><s>slider — rewinds the graph</s></div>
+        <div class="it"><b>layout</b><s>attack flow · option · author · round</s></div>
+        <div class="note">every filter is a set operation on nodes;<br>edges follow their endpoints</div>
+      </div>
+
+      <div class="reg" data-n="canvas — pan / zoom" data-w="1fr">
+        <div class="it fill" style="flex:1;flex-direction:column;gap:7px">
+          <b style="font-size:12px;color:var(--ink)">claim nodes on an infinite canvas</b>
+          <s style="white-space:normal;max-width:380px;text-align:center;line-height:1.6">
+            node = id · kind · standing bar · author · 2-line text<br>
+            edge colour = relation · thickness = weight · label = Δ standing<br>
+            selected node draws its defeat chain, everything else dims</s>
+        </div>
+        <div class="grp">
+          <div class="it gh"><s>defeated: struck through, 50% opacity</s></div>
+          <div class="it gh"><s>unresolved: amber border</s></div>
+        </div>
+        <div class="note">footer: zoom · fit · policy version</div>
+      </div>
+
+      <div class="reg" data-n="inspector — selected claim" data-w="318px">
+        <div class="it pri"><b>claim text</b><s>+ kind, grounding, author, round, version</s></div>
+        <div class="it"><b>standing arithmetic</b><s>evidence, then one row per attacker</s></div>
+        <div class="it"><b>provenance</b><s>derivation tree + depth against the gate</s></div>
+        <div class="it"><b>lifecycle</b><s>asserted → challenged → modified, per round</s></div>
+        <div class="it"><b>counterfactual</b><s>flip this claim → new margin</s></div>
+        <div class="note">empty state: graph-wide stats instead</div>
+      </div>
+    </div>
+  </div>
+  <div class="spec">
+    <div><div class="lbl">Grid</div><p><code>194px 1fr 318px</code>. Canvas fills; nodes are absolute over one SVG edge layer.</p></div>
+    <div><div class="lbl">Scroll</div><p>Rails scroll. Canvas pans instead — drag, ⌥-scroll to zoom, <code>F</code> to fit.</p></div>
+    <div><div class="lbl">Primary action</div><p>Select a node. Everything in the inspector is a consequence of it.</p></div>
+    <div><div class="lbl">CLI</div><p><code>arbiter explain &lt;run&gt; &lt;claim&gt;</code> — the inspector is its rendering.</p></div>
+  </div>
+</section>
+
+<div class="hr"></div>
+
+<!-- ─────────── C ─────────── -->
+<section class="scr">
+  <div class="sh"><span class="n">3</span><h2>Confidence Ledger</h2>
+    <span class="p">the arithmetic behind the answer</span><span class="job">calibrate trust · decide</span></div>
+
+  <div class="dgm">
+    <div class="bar" style="height:38px"><span class="t">answer bar</span>
+      <b style="font-size:11.5px">OUTCOME</b><span style="color:var(--mut)">winning option · option id</span>
+      <span class="h">58px · full width · margin, confidence, Override, Accept</span></div>
+    <div class="body" style="grid-template-columns:396px 1fr 306px">
+
+      <div class="reg" data-n="confidence waterfall" data-w="396px">
+        <div class="it"><b>3 dimensions</b><s>value × weight → contribution</s><span class="r">+0.87</span></div>
+        <div class="it" style="background:var(--sunk)"><b>base</b><s>subtotal row</s><span class="r">0.8695</span></div>
+        <div class="it"><b>5 penalties</b><s>inactive ones stay visible at 0</s><span class="r">−0.03</span></div>
+        <div class="it pri"><b>total</b><s>Σ contributions = total ±1e-9</s><span class="r">0.8390</span></div>
+        <div class="it"><b>judge rubric</b><s>9 metrics + anonymisation note</s></div>
+        <div class="note">hovering a row highlights the claims it<br>came from, in the matrix to the right</div>
+      </div>
+
+      <div class="reg" data-n="options + attachment matrix" data-w="1fr">
+        <div class="it pri"><b>option 1</b><s>share bar · support/oppose counts · authors</s><span class="r">0.58</span></div>
+        <div class="it"><b>option 2</b><s>same row shape</s><span class="r">0.27</span></div>
+        <div class="it"><b>option 3</b><s>flagged when below option_floor</s><span class="r">0.15</span></div>
+        <div class="cols" style="grid-template-columns:1.6fr repeat(3,1fr);align-content:start">
+          <div class="it" style="background:var(--sunk)"><b>claim</b></div>
+          <div class="it" style="background:var(--sunk);justify-content:center"><s>opt 1</s></div>
+          <div class="it" style="background:var(--sunk);justify-content:center"><s>opt 2</s></div>
+          <div class="it" style="background:var(--sunk);justify-content:center"><s>opt 3</s></div>
+          <div class="it"><b>C-011</b><s>short label</s></div>
+          <div class="it" style="justify-content:center;background:#E9F2EE"><s>+0.84</s></div>
+          <div class="it" style="justify-content:center;background:#F8ECE7"><s>−0.84</s></div>
+          <div class="it" style="justify-content:center;background:#F8ECE7"><s>−0.84</s></div>
+          <div class="it gh"><s>one row per attached claim</s></div>
+          <div class="it gh" style="justify-content:center"><s>±</s></div>
+          <div class="it gh" style="justify-content:center"><s>·</s></div>
+          <div class="it gh" style="justify-content:center"><s>±</s></div>
+        </div>
+        <div class="note">cell = signed standing · blank = not attached · header row sticks</div>
+      </div>
+
+      <div class="reg" data-n="change triggers" data-w="306px">
+        <div class="it"><b>trigger 1</b><s>if false → margin, new winner</s></div>
+        <div class="it"><b>trigger 2</b><s>+ preview-flip toggle</s></div>
+        <div class="it"><b>live dissent</b><s>why not CONSENSUS</s></div>
+        <div class="it"><b>run integrity</b><s>hash chain · fixpoint · completeness · policy</s></div>
+        <div class="grp"><div class="it"><b>Replay</b></div><div class="it pri"><b>Build →</b></div></div>
+        <div class="note">flipping a trigger restyles the two panes<br>to its left — it does not navigate away</div>
+      </div>
+    </div>
+  </div>
+  <div class="spec">
+    <div><div class="lbl">Grid</div><p><code>396px 1fr 306px</code> under a 58px answer bar spanning all three.</p></div>
+    <div><div class="lbl">Scroll</div><p>Three scrollers. The answer bar and matrix header row are sticky.</p></div>
+    <div><div class="lbl">Primary action</div><p>Accept — or Override with a reason. Both write a record.</p></div>
+    <div><div class="lbl">CLI</div><p><code>explain --json</code> is the payload; this is its renderer, not a second path.</p></div>
+  </div>
+</section>
+
+<!-- ─────────── D ─────────── -->
+<section class="scr">
+  <div class="sh"><span class="n">4</span><h2>Debate Floor</h2>
+    <span class="p">rounds, challenges, judging</span><span class="job">audit the process · replay</span></div>
+
+  <div class="dgm">
+    <div class="bar" style="height:34px"><span class="t">transport</span>
+      <span style="color:var(--mut)">⏮ ▶ ⏭ · speed · scrubber segmented by round · timecode · event index</span>
+      <span class="h">50px · scrubbing re-renders every pane</span></div>
+    <div class="body" style="grid-template-columns:186px 1fr 300px">
+
+      <div class="reg" data-n="round rail" data-w="186px">
+        <div class="it"><b>round 1</b><s>claims · Δ · cost</s></div>
+        <div class="it pri"><b>round 2</b><s>viewing</s></div>
+        <div class="it"><b>round 3</b><s>+ stop reason</s></div>
+        <div class="it"><b>standing drift</b><s>before → after, per claim</s></div>
+        <div class="note">click a round = jump the scrubber</div>
+      </div>
+
+      <div class="reg stack" data-w="1fr">
+        <div class="reg" data-n="round band — repeats per round" data-w="" style="border-right:0">
+          <div class="it" style="background:var(--sunk)"><b>band header</b><s>round no · challenge count · budget note</s></div>
+          <div class="it"><b>cross-exam strip</b><s>author C-x → target C-y · outcome pill (modified / withdrawn / defended)</s></div>
+          <div class="cols" style="grid-template-columns:repeat(5,1fr)">
+            <div class="it gh"><s>claude</s></div><div class="it gh"><s>gpt</s></div>
+            <div class="it gh"><s>gemini</s></div><div class="it gh"><s>mistral</s></div><div class="it gh"><s>llama</s></div>
+          </div>
+          <div class="note">5 model lanes · new claims outlined · withdrawn struck through · versions marked v2</div>
+        </div>
+        <div class="reg" data-n="later bands, dimmed until reached" data-w="" style="border-right:0;flex:1">
+          <div class="it fill">a stopped round shows the predicate arithmetic that stopped it</div>
+        </div>
+      </div>
+
+      <div class="reg" data-n="judge panel" data-w="300px">
+        <div class="it"><b>anonymised ballot</b><s>A–E → score, identity revealed after</s></div>
+        <div class="it"><b>9-metric heatmap</b><s>metrics × panel members</s></div>
+        <div class="it"><b>dispersion</b><s>spread vs threshold → penalty</s></div>
+        <div class="it"><b>leakage guard</b><s>score delta + rank correlation</s></div>
+        <div class="note">only pane that stays put while scrubbing</div>
+      </div>
+    </div>
+  </div>
+  <div class="spec">
+    <div><div class="lbl">Grid</div><p><code>186px 1fr 300px</code> under a 50px transport. Centre = vertical bands, each a 5-column lane grid.</p></div>
+    <div><div class="lbl">Scroll</div><p>Centre scrolls through rounds; band headers stick. Scrubbing scrolls it for you.</p></div>
+    <div><div class="lbl">Primary action</div><p>Scrub. Time is the axis — every other control sets a position on it.</p></div>
+    <div><div class="lbl">CLI</div><p><code>arbiter replay &lt;run&gt;</code> — deterministic, no provider calls.</p></div>
+  </div>
+</section>
+
+<div class="hr"></div>
+
+<!-- ─────────── E ─────────── -->
+<section class="scr">
+  <div class="sh"><span class="n">5</span><h2>Command Deck</h2>
+    <span class="p">CLI parity in a window</span><span class="job">power use · compare runs</span></div>
+
+  <div class="dgm">
+    <div class="bar" style="height:34px"><span class="t">command bar</span>
+      <span class="mono" style="font-size:11px">arbiter …</span>
+      <span style="color:var(--mut)">always focused · ⌘K opens the palette below it</span>
+      <span class="h">46px · New run right-aligned</span></div>
+    <div class="body" style="grid-template-columns:1fr 292px">
+
+      <div class="reg" data-n="result blocks — newest at top" data-w="1fr">
+        <div class="it pri" style="flex-direction:column;align-items:stretch;gap:3px">
+          <b>⌘K palette (overlay, ~474px)</b>
+          <s>fuzzy-matched arbiter commands + one-line descriptions</s></div>
+        <div class="it"><b>block ⌥1</b><s>header: status dot · exact command · row count · timing · jump key</s></div>
+        <div class="it"><b>block ⌥2</b><s>body: a table, an arithmetic listing, or a chart — whatever the command returns</s></div>
+        <div class="it"><b>block ⌥3</b><s>collapsible · pinnable · copy-command button</s></div>
+        <div class="it fill">blocks accumulate like a notebook<br>two runs side by side = two history blocks, not a diff mode</div>
+        <div class="note">footer: working directory · “every block is a real command”</div>
+      </div>
+
+      <div class="reg" data-n="pinned context" data-w="292px">
+        <div class="it"><b>active run</b><s>id · depth · panel · spend · pack hash</s></div>
+        <div class="it"><b>doctor</b><s>keys · correlation table staleness · provisional constants</s></div>
+        <div class="it"><b>recent runs</b><s>id + confidence, click to load</s></div>
+        <div class="it"><b>keys</b><s>the shortcut legend, always visible</s></div>
+        <div class="note">this rail replaces a settings screen</div>
+      </div>
+    </div>
+  </div>
+  <div class="spec">
+    <div><div class="lbl">Grid</div><p><code>1fr 292px</code> under a 46px command bar. Palette is an overlay, not a third column.</p></div>
+    <div><div class="lbl">Scroll</div><p>Block stack scrolls; ⌥1–9 jumps. Context rail is fixed height.</p></div>
+    <div><div class="lbl">Primary action</div><p>Type a command. The mouse is optional everywhere.</p></div>
+    <div><div class="lbl">CLI</div><p>All of them — this screen <em>is</em> the CLI surface.</p></div>
+  </div>
+</section>
+
+<div class="hr"></div>
+
+<h3>Shared across all five</h3>
+<table class="tbl" style="margin-bottom:26px">
+  <tr><th style="width:150px">Element</th><th style="width:120px">Size</th><th>Rule</th></tr>
+  <tr><td>Pane header</td><td class="m">32px</td><td>Label left, filters/counts centre, state right. Never scrolls.</td></tr>
+  <tr><td>Pane footer</td><td class="m">30px</td><td>Carries the command that produced the pane, plus one integrity fact.</td></tr>
+  <tr><td>Rails</td><td class="m">186–396px</td><td>Fixed. Content adapts; the column does not resize on its own.</td></tr>
+  <tr><td>Centre</td><td class="m">1fr</td><td>The only elastic column. Always holds the primary object.</td></tr>
+  <tr><td>Row height</td><td class="m">25–29px</td><td>Density 9/10 — 13px base, 11px meta, 10px uppercase labels.</td></tr>
+  <tr><td>Page scroll</td><td class="m">none</td><td><span class="mono">body.scrollHeight == viewport</span>. Verified at 1600×960.</td></tr>
+</table>
+
+<h3>Screens still to lay out</h3>
+<table class="tbl">
+  <tr><th style="width:170px">Screen</th><th style="width:190px">CLI equivalent</th><th>Shape it probably takes</th></tr>
+  <tr><td>Run launcher</td><td class="m">arbiter run</td><td>Single centred column — question, panel picker, depth, budget, live cost estimate before you commit.</td></tr>
+  <tr><td>History</td><td class="m">arbiter history</td><td>One dense table, filters as a left rail. Grouped by <span class="mono">policy_version</span>, because runs only compare within one.</td></tr>
+  <tr><td>Claims browser</td><td class="m">arbiter claims --state</td><td>Table alternative to screen 2 for people who do not want a canvas. Same data, sortable.</td></tr>
+  <tr><td>Acceptance / override</td><td class="m">arbiter accept --override</td><td>Modal over screen 3 — you should never leave the evidence to record a decision about it.</td></tr>
+  <tr><td>Build Studio</td><td class="m">arbiter build</td><td>Its own 3-stage shell, gated behind an acceptance record. Deliberately isolated.</td></tr>
+  <tr><td>Doctor</td><td class="m">arbiter doctor</td><td>A checklist page, not a dashboard. Reached from the context rail in screen 5.</td></tr>
+</table>
+
+</div>
+</body>
+</html>
