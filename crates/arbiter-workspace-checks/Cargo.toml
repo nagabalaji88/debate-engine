@@ -1,0 +1,16 @@
+[package]
+name = "arbiter-workspace-checks"
+description = "Not shipped. Asserts workspace-wide invariants that no single crate can check about itself — the dependency rule (ARCHITECTURE.md §4.1) chief among them."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints.rust]
+missing_debug_implementations = "warn"

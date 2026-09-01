@@ -1007,7 +1007,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | Task | Done | Commit | Deviations |
 |---|---|---|---|
 | X1 | ✅ | (this commit) | none |
-| X2 | ☐ | | |
+| X2 | ✅ | (this commit) | none |
 | C1 | ☐ | | |
 | C2 | ☐ | | |
 | C3 | ☐ | | |

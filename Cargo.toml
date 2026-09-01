@@ -9,6 +9,7 @@ members = [
     "crates/arbiter-cli",
     "crates/arbiter-fixtures",
     "crates/arbiter-build",
+    "crates/arbiter-workspace-checks",
 ]
 
 [workspace.package]
