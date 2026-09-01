@@ -30,16 +30,19 @@ pub fn survival_weight(lifecycle: ClaimLifecycle, w: &Weights) -> f64 {
     }
 }
 
-/// Members from one vendor are correlated, not independent. Four Anthropic models
-/// agreeing is closer to one observation than to four.
+/// `(groups + λ·(members − groups)) / members` — INTERFACES §15, exactly. Partitioned
+/// on `correlation_group`, never on provider identity directly: provider is only that
+/// group's *default*, and defaulting it unconditionally is what the spec calls "an
+/// optimistic proxy" (§6.2) — two vendors serving the same base weights are correlated
+/// and a correlation table can say so without this function changing.
 pub fn independence(claim: &CanonicalClaim, w: &Weights) -> f64 {
     let members = claim.members.len();
     if members == 0 {
         return 0.0;
     }
-    let distinct = claim.distinct_providers();
-    let correlated = members - distinct;
-    ((distinct as f64 + w.correlated_member * correlated as f64) / members as f64).clamp(0.0, 1.0)
+    let groups = claim.correlation_groups();
+    let correlated = members - groups;
+    ((groups as f64 + w.correlated_member * correlated as f64) / members as f64).clamp(0.0, 1.0)
 }
 
 /// Independent corroboration raises strength, with diminishing returns.
@@ -114,17 +117,17 @@ pub fn evidence_map(
 mod tests {
     use super::*;
     use crate::claim::{ClaimMember, TextSpan};
-    use crate::ids::{PositionId, ProviderId};
+    use crate::ids::{GroupId, PositionId, ProviderId};
 
     fn member(model: &str, provider: &str, grounding: Grounding) -> ClaimMember {
-        ClaimMember {
-            claim_id: ClaimId::new(format!("{model}-raw")),
-            model: ModelId::new(model),
-            provider: ProviderId::new(provider),
-            position: PositionId::new(format!("pos-{model}")),
-            original_text: "on-call load rises with service count".into(),
+        ClaimMember::new(
+            ClaimId::new(format!("{model}-raw")),
+            ModelId::new(model),
+            ProviderId::new(provider),
+            PositionId::new(format!("pos-{model}")),
+            "on-call load rises with service count",
             grounding,
-        }
+        )
     }
 
     fn quoted() -> Grounding {
@@ -243,6 +246,85 @@ mod tests {
         assert!(
             survival_weight(ClaimLifecycle::Modified { version: 2 }, &w)
                 > survival_weight(ClaimLifecycle::Withdrawn, &w)
+        );
+    }
+
+    /// INTERFACES §15's worked examples, pinned exactly.
+    #[test]
+    fn independence_matches_the_spec_worked_examples() {
+        let w = Weights::default();
+        assert_eq!(w.correlated_member, 0.25, "λ in the spec's formula");
+
+        // members=4, providers {OpenAI×2, Anthropic×1, Google×1}, groups=3
+        // -> (3 + 0.25*1) / 4 = 0.8125
+        let c = claim(
+            EvidenceKind::Fact,
+            ClaimLifecycle::Defended,
+            vec![
+                member("m1", "openai", quoted()),
+                member("m2", "openai", quoted()),
+                member("m3", "anthropic", quoted()),
+                member("m4", "google", quoted()),
+            ],
+        );
+        assert!((independence(&c, &w) - 0.8125).abs() < 1e-9);
+
+        // members=1 -> 1.0
+        let c = claim(
+            EvidenceKind::Fact,
+            ClaimLifecycle::Defended,
+            vec![member("m1", "openai", quoted())],
+        );
+        assert!((independence(&c, &w) - 1.0).abs() < 1e-9);
+
+        // members=3, all one provider -> (1 + 0.25*2) / 3 = 0.50
+        let c = claim(
+            EvidenceKind::Fact,
+            ClaimLifecycle::Defended,
+            vec![
+                member("m1", "openai", quoted()),
+                member("m2", "openai", quoted()),
+                member("m3", "openai", quoted()),
+            ],
+        );
+        assert!((independence(&c, &w) - 0.50).abs() < 1e-9);
+    }
+
+    /// The reason `correlation_group` exists as its own field rather than being
+    /// computed from `provider` inline: an operator's correlation table can say two
+    /// providers are correlated, and `independence` must follow the table, not the
+    /// providers. This is D6 in PLAN_DEVIATIONS.md.
+    #[test]
+    fn independence_follows_correlation_group_even_when_providers_differ() {
+        let w = Weights::default();
+
+        let mut m1 = member("m1", "vendor-a", quoted());
+        let mut m2 = member("m2", "vendor-b", quoted());
+        // Two distinct providers, but a correlation table says they share weights:
+        // both go in one group.
+        m1.correlation_group = GroupId::new("shared-base-model");
+        m2.correlation_group = GroupId::new("shared-base-model");
+        let grouped = claim(EvidenceKind::Fact, ClaimLifecycle::Defended, vec![m1, m2]);
+
+        // Same two providers, no override: two distinct default groups.
+        let ungrouped = claim(
+            EvidenceKind::Fact,
+            ClaimLifecycle::Defended,
+            vec![
+                member("m1", "vendor-a", quoted()),
+                member("m2", "vendor-b", quoted()),
+            ],
+        );
+
+        assert_eq!(
+            grouped.distinct_providers(),
+            ungrouped.distinct_providers(),
+            "providers unchanged"
+        );
+        assert!(
+            independence(&grouped, &w) < independence(&ungrouped, &w),
+            "the correlation table must be able to lower independence even though \
+             distinct_providers() alone would say nothing changed"
         );
     }
 }

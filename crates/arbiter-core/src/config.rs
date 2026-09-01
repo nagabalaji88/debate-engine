@@ -31,13 +31,26 @@ pub struct Weights {
     pub judge_floor: f64,
 }
 
+/// Fixpoint constants, ARCHITECTURE §6.3. Field names are English; the doc comments
+/// carry the Greek letters the spec tables use, so the two stay cross-referenceable
+/// without forcing every reader to memorise a symbol-to-identifier table.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GraphParams {
+    /// α — support weight.
     pub support_gain: f64,
+    /// β — attack weight.
     pub attack_gain: f64,
+    /// γ — qualify weight.
     pub qualify_gain: f64,
+    /// λ — damping factor between iterations.
     pub damping: f64,
+    /// Ten weak attackers must not outweigh one strong refutation: total attack
+    /// pressure on a claim saturates here before it is applied.
+    pub attack_cap: f64,
+    /// The support-side saturation cap, so a claim cannot be inflated past
+    /// usefulness by piling on corroboration either.
+    pub support_cap: f64,
     pub max_iterations: u32,
     pub epsilon: f64,
 }
@@ -55,10 +68,18 @@ pub struct Thresholds {
     pub min_evidence_mass: f64,
     /// Above this share of unresolved-critical claims the debate cannot conclude.
     pub max_unresolved_ratio: f64,
-    /// Below this margin between the top two options, the decision is split.
+    /// τ_gap. Below this margin between the top two options, the decision is split
+    /// (§6.6). Also multiplied by `converged_margin_factor` — a kernel-owned
+    /// constant (IMPLEMENTATION_PLAN.md §0.6) — for the controller's Converged
+    /// stop predicate (§5.5); this crate does not compute that predicate itself.
     pub min_margin: f64,
-    /// Surviving contradiction at or above this means dissent stands.
+    /// τ_dissent. Surviving contradiction at or above this means dissent stands,
+    /// which is what keeps an outcome from being CONSENSUS (§6.6).
     pub dissent: f64,
+    /// Required in outcome-classification rules 1–3 (§6.6). Without it,
+    /// `score(A)=0.11, score(B)=0.08` reads as a split between two options neither
+    /// of which is evidenced — that is INSUFFICIENT_EVIDENCE, not SPLIT_DECISION.
+    pub option_floor: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -98,6 +119,8 @@ impl Default for GraphParams {
             attack_gain: 0.60,
             qualify_gain: 0.15,
             damping: 0.50,
+            attack_cap: 1.5,
+            support_cap: 2.0,
             max_iterations: 64,
             epsilon: 1e-9,
         }
@@ -114,6 +137,7 @@ impl Default for Thresholds {
             max_unresolved_ratio: 0.40,
             min_margin: 0.15,
             dissent: 0.30,
+            option_floor: 0.20,
         }
     }
 }
@@ -127,5 +151,33 @@ impl Default for ConfidenceWeights {
             unresolved_penalty: 0.25,
             assumption_penalty: 0.15,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saturation_caps_match_the_spec() {
+        let g = GraphParams::default();
+        assert_eq!(g.attack_cap, 1.5);
+        assert_eq!(g.support_cap, 2.0);
+    }
+
+    #[test]
+    fn option_floor_matches_the_spec() {
+        assert_eq!(Thresholds::default().option_floor, 0.20);
+    }
+
+    #[test]
+    fn confidence_dimension_weights_sum_to_one_within_tolerance() {
+        // Not `== 1.0`: 0.35 + 0.30 + 0.35 is 0.9999999999999999 in f64.
+        let c = ConfidenceWeights::default();
+        let sum = c.evidence_mass + c.margin + c.judge;
+        assert!(
+            (sum - 1.0).abs() < 1e-9,
+            "sum was {sum}, not within 1e-9 of 1.0"
+        );
     }
 }

@@ -45,3 +45,69 @@ in-memory test double, inside `arbiter-kernel` itself, and let `arbiter-store` c
 now, unused, would slow every `cargo build`/`clippy` invocation for the rest of 1.0 for no
 present benefit — it violates §0.2 rule 2 ("do not widen scope"). Add it when the WASM
 host task actually starts, not before.
+
+---
+
+## D3 — C1 over-scoped: Build Studio provenance is not a core type
+
+**What the plan said.** C1 listed `provenance.rs` with `ProvenanceChain` and five gates
+(`Unattributed`, `OrphanInference`, `ChainTooDeep`, `CitesDefeatedClaim`,
+`TooMuchInvention`), citing "INTERFACES §13" as if it were core decision machinery.
+
+**What the spec actually says.** Those five gates and the `Provenance` enum
+(`UserOverride` / `ExternalSource` / `ArchitectInference`) are **Build Studio's**
+mechanism for validating generated build documents (ARCHITECTURE §13, INTERFACES §7,
+"Build Studio provenance, made mechanical") — they operate on `BuildDoc` and
+`ArchitectInference`, concepts that don't exist anywhere in the claim/relation/option
+graph. Build Studio is explicitly 1.5 and out of this plan's scope (§9).
+
+**Fix:** dropped `provenance.rs` from C1 entirely. It belongs to a future `arbiter-build`
+task, not written here.
+
+## D4 — `supersedes` belongs on `DecisionOption`, not `ClaimMember`
+
+**What the plan said.** C1 listed `supersedes: Option<ClaimId>` as a `claim.rs` addition.
+
+**What the spec says** (ARCHITECTURE §5.3, INTERFACES §20 Step 3b): `supersedes:
+Option<(OptionId, OptionVersion)>` is a field on `DecisionOption`. Claim versioning is
+already fully handled by the existing `ClaimLifecycle::Modified { version }` — a second,
+claim-level `supersedes` would be a redundant, spec-less mechanism.
+
+**Fix:** moved to C4's `option.rs` rework, where it belongs.
+
+## D5 — C1's constant list mixed core, kernel and store ownership
+
+**What the plan said.** C1 told `config.rs` to grow nine fields: `option_floor`,
+`tau_gap`, `tau_dissent`, `converged_margin_factor`, `min_new_claims`,
+`min_standing_delta`, `budget_headroom`, `repair_budget_fraction`, `blob_threshold`.
+
+**What's actually core.** Checked each against what C2–C8 (the pure decision functions)
+consume:
+
+| Constant | Consumed by | Owner |
+|---|---|---|
+| `option_floor` | C5 outcome classification | **core** — genuinely missing, added |
+| τ_gap | C5 outcome classification | **already exists**, as `Thresholds::min_margin` |
+| τ_dissent | C5 outcome classification | **already exists**, as `Thresholds::dissent` |
+| `converged_margin_factor`, `min_new_claims`, `min_standing_delta` | the controller's stop predicates (§5.5) — a kernel stage (G7), not a `decision.synthesize`-time computation | kernel |
+| `budget_headroom`, `repair_budget_fraction` | the budget ledger (§7, §11) | kernel |
+| `blob_threshold` | the blob store (§8.2) | store |
+
+**Fix:** C1 adds only `option_floor`. Two existing fields (`min_margin`, `dissent`) get a
+doc comment cross-referencing the spec's Greek-letter names rather than being renamed —
+renaming a correct, tested field to satisfy cosmetic symmetry would be scope creep in the
+other direction. The kernel/store constants stay in `IMPLEMENTATION_PLAN.md` §0.6 as a
+system-wide reference table (that table's job), but are added to code by K1/K4/S5, not C1.
+
+## D6 — `independence()` needs correlation groups, not provider counts
+
+Not an error in the plan, but a real upgrade the plan's C1 acceptance criteria missed
+stating explicitly. `decision/evidence.rs::independence()` computes the exact formula
+INTERFACES §15 specifies — `(groups + λ·(members − groups)) / members` — but currently
+treats `ProviderId` as the partition, which is only the *default*. The spec requires an
+explicit, config-overridable `correlation_group: GroupId` field on `ClaimMember`
+(INTERFACES §15), because "two vendors serving the same base weights are correlated and
+should share a group" and provider identity alone systematically overstates independence
+(§6.2). Fixed in C1: `correlation_group` added to `ClaimMember`; `independence()`
+repartitions on it. `corroboration()` is unaffected — the spec still defines it over
+distinct providers, not correlation groups.

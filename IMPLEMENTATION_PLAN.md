@@ -240,7 +240,8 @@ Add `.github/workflows/ci.yml` running fmt, clippy `-D warnings`, and `cargo tes
 **Acceptance**
 ```bash
 cargo build --workspace && cargo test --workspace
-test "$(cargo metadata --no-deps --format-version 1 | grep -o '"name":"arbiter-[a-z]*"' | wc -l)" = 8
+test "$(cargo metadata --no-deps --format-version 1 | grep -o '"name":"arbiter-[a-zA-Z-]*"' | sort -u | wc -l)" = 9
+# 8 shipped crates + arbiter-workspace-checks (dev-only, publish = false, X2's home)
 ```
 
 **Do not** add a dependency not named in §16. No `anyhow` in library crates — errors are
@@ -267,32 +268,50 @@ cargo test --test dependency_rule
 
 ### C1 · Core types to v2.9
 
-**Files:** extend `claim.rs`, `ids.rs`, `config.rs`; create `policy.rs`, `provenance.rs`
-**Spec:** §6.1, §6.2, §6.4, §11.1, INTERFACES §13
+**Files:** extend `claim.rs`, `ids.rs`, `config.rs`, `decision/evidence.rs`; create `policy.rs`
+**Spec:** §6.2, INTERFACES §15 (correlation groups) · **Corrected per** `PLAN_DEVIATIONS.md` D3–D6
 
 Existing files are at the v2.0 baseline. Add, without breaking the 6 passing tests:
 
-- `ids.rs`: `OptionId` (**cluster identity, NOT a hash of text**), `OptionVersion`
-  (`blake3` of canonical text), `ReservationId`, `CallId`, `Sequence`, `PolicyVersion`.
-- `claim.rs`: `correlation_group: GroupId` on `ClaimMember`; `supersedes: Option<ClaimId>`.
-- `policy.rs`: `PolicyVersion("argument-v1")`, every constant from §0.6 as a named field,
-  each carrying `provisional: bool`.
-- `provenance.rs`: `ProvenanceChain` and the five gates — `Unattributed`,
-  `OrphanInference`, `ChainTooDeep`, `CitesDefeatedClaim`, `TooMuchInvention`.
-- `config.rs`: add `option_floor`, `tau_gap`, `tau_dissent`, `converged_margin_factor`,
-  `min_new_claims`, `min_standing_delta`, `budget_headroom`, `repair_budget_fraction`,
-  `blob_threshold`.
+- `ids.rs`: `GroupId` (opaque, defaults to provider — id-style, arbitrary construction
+  is fine), `OptionVersion` (**constructible only from `blake3(canonical_text)`, no
+  public arbitrary `new`** — the v2.5 bug was letting anything call `OptionId::new(text)`),
+  `PolicyVersion` (opaque label, e.g. `"argument-v1"`).
+- `claim.rs`: `correlation_group: GroupId` on `ClaimMember`, defaulting to `provider`.
+- `decision/evidence.rs`: rewrite `independence()` to partition on `correlation_group`
+  (INTERFACES §15's exact function), not `distinct_providers()`. Leave `corroboration()`
+  alone — the spec defines it over providers, not groups.
+- `config.rs`: add `option_floor: f64` (0.20) to `Thresholds`. Add a doc comment on
+  `min_margin` and `dissent` noting they are τ_gap and τ_dissent respectively — **do not
+  rename them**, they are already correct and tested.
+- `policy.rs` (new): `Policy { version: PolicyVersion, provisional: bool, config:
+  DecisionConfig }` with `Policy::argument_v1()`. Also add `attack_cap: f64` (1.5) and
+  `support_cap: f64` (2.0) to `GraphParams` in `config.rs` — C2 needs them and nothing
+  in the codebase has them yet.
+
+**Not in C1** (moved or dropped — see `PLAN_DEVIATIONS.md`): `provenance.rs` (Build
+Studio, 1.5, D3) · `supersedes` (belongs on `DecisionOption`, C4's job, D4) ·
+`converged_margin_factor` / `min_new_claims` / `min_standing_delta` (kernel controller,
+G7) · `budget_headroom` / `repair_budget_fraction` (kernel budget ledger) ·
+`blob_threshold` (store) — all D5. `ReservationId` / `CallId` / `Sequence` belong to
+`arbiter-kernel`, added when K0/K1/S3 need them, not to `arbiter-core`.
 
 **Acceptance**
 ```bash
 cargo test -p arbiter-core
-cargo test -p arbiter-core policy::tests::every_constant_is_provisional_before_gate
+cargo test -p arbiter-core policy::tests::argument_v1_ships_provisional
+cargo test -p arbiter-core ids::tests::option_version_has_no_public_arbitrary_constructor
+cargo test -p arbiter-core decision::evidence::tests::independence_partitions_on_correlation_group_not_provider
 ```
-A test must assert `0.35 + 0.30 + 0.35` sums to 1.0 **within 1e-9** — not `== 1.0`, which
-is false in f64.
+A confidence-weights test must assert `0.35 + 0.30 + 0.35` sums to 1.0 **within 1e-9** —
+not `== 1.0`, which is false in f64 (this lands in C6, but the weights themselves are
+already in `config.rs` and worth asserting here too).
 
-**Do not** make `OptionId` a hash of option text. That was the v2.5 bug: rewording a
-recommendation minted a new id and orphaned every attachment cell.
+**Do not** make `OptionVersion` constructible from arbitrary text — only from
+`blake3(canonical_text)`. C4 is where this matters most: the v2.5 bug was letting
+anything call `OptionId::new(text)`, which minted a new id on every reword and orphaned
+every attachment cell. `OptionId` itself stays a plain opaque id in C1; `OptionVersion`
+is the one C1 must lock down, since C4 builds directly on it.
 
 ---
 
@@ -1008,7 +1027,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 |---|---|---|---|
 | X1 | ✅ | (this commit) | none |
 | X2 | ✅ | (this commit) | none |
-| C1 | ☐ | | |
+| C1 | ✅ | (this commit) | D3, D4, D5, D6 — see PLAN_DEVIATIONS.md |
 | C2 | ☐ | | |
 | C3 | ☐ | | |
 | C4 | ☐ | | |
