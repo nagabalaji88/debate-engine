@@ -1,6 +1,6 @@
 # Arbiter — Interface Definitions
 
-**Companion to** `ARCHITECTURE.md` v2.7.2. Where the spec says *what*, this says *how*.
+**Companion to** `ARCHITECTURE.md` v2.8. Where the spec says *what*, this says *how*.
 Every item here closes a numbered finding from the v2.0 review.
 
 ---
@@ -1287,3 +1287,69 @@ versioned, recorded in the manifest, and pinned on replay for exactly the same r
 without them, "the same inputs" is not a well-defined phrase.
 
 Fixture: `prompt_pack_mismatch`.
+
+## 24. `arbiter serve` — the loopback UI contract  *(v2.8)*
+
+Five endpoints and one page. The page is embedded in the binary; there is no build step,
+no bundler, and no second artifact to ship.
+
+| Method | Path | Does | Returns |
+|---|---|---|---|
+| `GET` | `/` | the embedded page | `text/html` |
+| `POST` | `/api/runs` | start a run — **spends money** | `{run_id}`, `202` |
+| `GET` | `/api/runs` | history | the `run_catalog` rows (ARCHITECTURE §8.5) |
+| `GET` | `/api/runs/:id` | one run | `explain --json` (§22), verbatim |
+| `GET` | `/api/runs/:id/events` | live stream | `text/event-stream`, one event per message |
+| `POST` | `/api/runs/:id/accept` | record an acceptance | the acceptance record |
+
+`GET /api/runs/:id` returns the §22 payload **unchanged** — not a UI-shaped projection of
+it. The moment the server reshapes it, the page and the CLI are explaining decisions
+through two different code paths, which is the drift §22 exists to prevent.
+
+**The SSE stream is the NDJSON stream.** Each `data:` line is one event envelope (§13),
+byte-identical to what `--stream` writes to stdout. A reconnect sends `Last-Event-ID` and
+the server resumes from `sequence + 1` — the events are already sequenced and durable, so
+this needs no buffering.
+
+### Request admission
+
+Every request, including `GET /`, is checked in this order and rejected at the first
+failure with `403` and no body. Rejection happens **before** any run state is read, so a
+probe cannot learn whether a run id exists.
+
+```
+1. bound socket is 127.0.0.1     — enforced at startup, not per request
+2. Host: 127.0.0.1[:p] | localhost[:p]
+3. Origin absent, or exactly this server's origin
+4. Sec-Fetch-Site absent, or same-origin
+5. token matches, compared in constant time
+```
+
+```rust
+pub struct ServeConfig {
+    pub port: u16,              // default 7777
+    pub open_browser: bool,
+    pub token: Token,           // 128-bit, per process, never persisted
+}
+```
+
+**Why each check exists.** The bind stops the obvious exposure. The `Host` check is the
+one that closes **DNS rebinding**: a hostile domain whose record resolves to `127.0.0.1`
+gives an attacker's page same-origin access to this server, and the only thing that
+distinguishes it is the `Host` header it sends. `Origin` and `Sec-Fetch-Site` stop a
+drive-by form post. The token stops everything else, including another local user on a
+shared machine.
+
+The token appears once, in the URL `--open` prints. It is never written to `~/.arbiter`,
+never logged, and never placed in an event payload — a token in the event log would
+outlive the process it authorises and end up in an exported run.
+
+`--no-token` exists for a single-user throwaway container and is **refused** unless the
+socket is loopback; it is never the documented path.
+
+### What the page may not do
+
+The page holds no state the engine does not, keeps nothing in `localStorage` beyond the
+active run id, and never computes a number. `serve` has no session, no account, and no
+concept of a user — one token, one machine, one person. Anything that needs more than
+that is the deferred public API, not a bigger `serve`.

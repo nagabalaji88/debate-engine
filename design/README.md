@@ -91,6 +91,19 @@ The playback is not decorative — it is driven by the pre-flight table in
 `ARCHITECTURE.md` §11, and a standard run reproduces it exactly: **$0.480, 28 calls,
 74.5k tokens**. Deep lands at $0.900 against a $1.20 target.
 
+## The minimal UI
+
+**[`minimal-ui.html`](minimal-ui.html)** — what `arbiter serve` renders. Four screens,
+keys `1`–`4`: new run, running, result, history. Deliberately plain — system font, one
+column, one accent, no dense rails. This is not concept 1–5 with the chrome removed; it
+is a different brief. The five concepts are for someone who lives in the tool. This is
+for someone who wants to ask a question and read an answer.
+
+Three things it does that a form usually doesn't: it shows the **cost estimate before
+you commit**, it says **"closing this page does not stop the run"**, and the result leads
+with the one live objection rather than burying it under the winner. Spec: ARCHITECTURE
+§17.1, INTERFACES §24.
+
 ## Design system
 
 Swiss/minimal, dashboard density (per `ui-ux-pro-max`: *Minimalism & Swiss

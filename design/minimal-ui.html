@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arbiter — minimal UI</title>
+<style>
+:root{
+  --bg:#F4F1EB; --card:#FBF9F5; --line:#DBD4C7; --line2:#C3B9A7;
+  --ink:#231F1A; --mut:#6B6357; --acc:#1C5A4E; --accw:#E2EDE8;
+  --pos:#2A7259; --neg:#AB412B; --qual:#9A6A1C;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);
+  font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased;padding-bottom:60px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.mut{color:var(--mut)}
+a{color:var(--acc)}
+button{font:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+
+/* the only chrome there is */
+header{border-bottom:1px solid var(--line);background:var(--card)}
+.bar{max-width:660px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:10px}
+.bar b{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.bar .url{margin-left:auto;font-family:var(--mono);font-size:12px;color:var(--mut)}
+main{max-width:660px;margin:0 auto;padding:26px 20px}
+
+h1{font-size:19px;font-weight:600;letter-spacing:-.01em;margin-bottom:4px}
+h2{font-size:13px;font-weight:600;margin:26px 0 9px;letter-spacing:.02em}
+p.sub{color:var(--mut);font-size:13.5px;margin-bottom:22px}
+
+label{display:block;font-size:13px;font-weight:600;margin-bottom:5px}
+.hint{font-size:12.5px;color:var(--mut);margin-top:4px}
+textarea,input[type=text],select{width:100%;font:inherit;padding:9px 11px;border:1px solid var(--line2);
+  border-radius:5px;background:var(--card);color:var(--ink)}
+textarea{min-height:84px;resize:vertical;line-height:1.5}
+.field{margin-bottom:17px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.checks{display:flex;flex-wrap:wrap;gap:8px}
+.check{display:flex;align-items:center;gap:7px;padding:6px 11px;border:1px solid var(--line2);
+  border-radius:5px;background:var(--card);font-size:13.5px;cursor:pointer}
+.check input{accent-color:var(--acc);width:15px;height:15px}
+.check.on{border-color:var(--acc);background:var(--accw)}
+
+.btn{padding:9px 17px;border:1px solid var(--line2);border-radius:5px;background:var(--card);
+  font-size:14px;font-weight:500}
+.btn:hover{background:#F1ECE3}
+.btn.primary{background:var(--acc);border-color:var(--acc);color:#F5F2EB;font-weight:600}
+.btn.primary:hover{background:#164a40}
+.actions{display:flex;gap:10px;align-items:center;margin-top:22px}
+
+.est{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:12px 14px;
+  font-size:13.5px;display:flex;align-items:center;gap:9px}
+.est b{font-family:var(--mono);font-weight:600}
+
+/* running */
+.status{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:15px 17px;margin-bottom:20px}
+.status .top{display:flex;align-items:center;gap:10px;margin-bottom:11px}
+.spin{width:11px;height:11px;border-radius:50%;border:2px solid var(--acc);border-right-color:transparent;
+  animation:sp .9s linear infinite;flex:0 0 11px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.meter{height:6px;border-radius:3px;background:#E7E0D4;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--acc)}
+.facts{display:flex;gap:20px;margin-top:9px;font-size:13px;color:var(--mut)}
+.facts b{color:var(--ink);font-family:var(--mono);font-weight:600}
+.log{background:var(--card);border:1px solid var(--line);border-radius:6px;
+  max-height:240px;overflow:auto;font-family:var(--mono);font-size:12px}
+.log div{padding:3px 13px;border-bottom:1px solid #EDE7DC;display:flex;gap:12px}
+.log div:last-child{border:0}
+.log .t{color:var(--mut);flex:0 0 58px}
+.log .e{flex:0 0 172px}
+.log .d{color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* result */
+.answer{background:var(--accw);border:1px solid #BDD6CD;border-radius:6px;padding:17px 19px;margin-bottom:8px}
+.tag{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:600;letter-spacing:.03em;
+  padding:2px 8px;border-radius:3px;background:var(--card);border:1px solid #BDD6CD;color:var(--acc);margin-bottom:9px}
+.answer h3{font-size:17px;font-weight:600;letter-spacing:-.01em}
+.answer .num{display:flex;gap:26px;margin-top:13px;font-size:13px;color:var(--mut)}
+.answer .num b{display:block;font-family:var(--mono);font-size:20px;font-weight:600;color:var(--ink);line-height:1.2}
+
+table{width:100%;border-collapse:collapse;font-size:13.5px;background:var(--card);
+  border:1px solid var(--line);border-radius:6px;overflow:hidden}
+th{text-align:left;font-size:11.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--mut);padding:8px 13px;border-bottom:1px solid var(--line)}
+td{padding:8px 13px;border-bottom:1px solid #EDE7DC;vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.n{font-family:var(--mono);text-align:right;white-space:nowrap}
+td.mono{white-space:nowrap}
+.win td{background:var(--accw)}
+.rowbar{height:5px;border-radius:3px;background:#E7E0D4;overflow:hidden;margin-top:5px}
+.rowbar i{display:block;height:100%;background:var(--acc)}
+
+details{background:var(--card);border:1px solid var(--line);border-radius:6px;margin-top:9px}
+summary{padding:10px 14px;font-size:13.5px;font-weight:500;cursor:pointer;list-style:none;display:flex;gap:8px;align-items:center}
+summary::-webkit-details-marker{display:none}
+summary::before{content:'▸';color:var(--mut);font-size:11px}
+details[open] summary::before{content:'▾'}
+.dbody{padding:2px 14px 13px;border-top:1px solid var(--line)}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px dotted var(--line);font-size:13px}
+.kv:last-child{border:0}
+.kv .v{font-family:var(--mono)}
+.neg{color:var(--neg)}
+
+.pill{display:inline-block;font-size:11.5px;font-family:var(--mono);padding:1px 7px;border-radius:3px;
+  border:1px solid var(--line2);background:var(--card);color:var(--mut)}
+.pill.a{border-color:#BCD6C9;background:#E6F0EA;color:var(--pos)}
+.pill.d{border-color:#E2C5B9;background:#F7E8E2;color:var(--neg)}
+.pill.u{border-color:#E0CDA6;background:#F6EEDC;color:var(--qual)}
+
+.note{font-size:12.5px;color:var(--mut);margin-top:10px}
+.switch{position:fixed;bottom:0;left:0;right:0;background:var(--card);border-top:1px solid var(--line2);
+  display:flex;justify-content:center;gap:6px;padding:8px}
+.switch button{padding:5px 13px;border:1px solid var(--line2);border-radius:4px;background:var(--bg);
+  font-size:12.5px;color:var(--mut)}
+.switch button[aria-current=true]{background:var(--acc);border-color:var(--acc);color:#F5F2EB;font-weight:600}
+.view{display:none}.view.on{display:block}
+</style>
+</head>
+<body>
+
+<header><div class="bar">
+  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.5v13M2.5 5.5h11M4.5 5.5 2 11h5L4.5 5.5ZM11.5 5.5 9 11h5l-2.5-5.5Z" stroke="#1C5A4E" stroke-width="1.3" stroke-linejoin="round"/></svg>
+  <b>arbiter</b>
+  <span class="mut" style="font-size:13.5px">·</span>
+  <a href="#" style="font-size:13.5px;text-decoration:none">New</a>
+  <a href="#" style="font-size:13.5px;text-decoration:none;color:var(--mut)">History</a>
+  <span class="url">127.0.0.1:7777</span>
+</div></header>
+
+<!-- ══════ 1 · NEW ══════ -->
+<main class="view on" id="v1">
+  <h1>New debate</h1>
+  <p class="sub">Runs locally. Nothing leaves this machine except the calls to the models you pick.</p>
+
+  <div class="field">
+    <label for="q">Question</label>
+    <textarea id="q">Should we split billing out of the monolith?</textarea>
+    <div class="hint">One decision. Add the constraints that matter — team size, deadlines, current pain.</div>
+  </div>
+
+  <div class="field">
+    <label>Panel</label>
+    <div class="checks">
+      <label class="check on"><input type="checkbox" checked>claude-opus-5</label>
+      <label class="check on"><input type="checkbox" checked>gpt-5</label>
+      <label class="check on"><input type="checkbox" checked>gemini-3</label>
+      <label class="check on"><input type="checkbox" checked>mistral-large</label>
+      <label class="check on"><input type="checkbox" checked>llama-4</label>
+    </div>
+    <div class="hint">5 models · 4 independence groups. <span class="mut">mistral and llama share a group.</span></div>
+  </div>
+
+  <div class="two">
+    <div class="field">
+      <label for="d">Depth</label>
+      <select id="d"><option>standard — 1 round</option><option>deep — up to 3 rounds</option></select>
+    </div>
+    <div class="field">
+      <label for="b">Budget cap</label>
+      <input type="text" id="b" value="$2.00">
+    </div>
+  </div>
+
+  <div class="est">
+    <span>Estimated</span><b>$0.48</b><span class="mut">· 28 calls · about 2 minutes</span>
+    <span class="mut" style="margin-left:auto">stops at the cap</span>
+  </div>
+
+  <div class="actions">
+    <button class="btn primary">Start debate</button>
+    <span class="mut" style="font-size:13px">or paste a file path</span>
+  </div>
+</main>
+
+<!-- ══════ 2 · RUNNING ══════ -->
+<main class="view" id="v2">
+  <h1>Should we split billing out of the monolith?</h1>
+  <p class="sub mono" style="font-size:12.5px">run_01J8QK · deep · 5 models</p>
+
+  <div class="status">
+    <div class="top"><span class="spin"></span><b style="font-size:14px">Cross-examination</b>
+      <span class="mut" style="font-size:13px">round 2 of 3 · step 10 of 15</span></div>
+    <div class="meter"><i style="width:62%"></i></div>
+    <div class="facts">
+      <span>spent <b>$0.41</b></span>
+      <span>of <b>$2.00</b></span>
+      <span>claims <b>38</b></span>
+      <span>elapsed <b>3:12</b></span>
+    </div>
+  </div>
+
+  <div class="log">
+    <div><span class="t">14:22:07</span><span class="e">CHALLENGE_ISSUED</span><span class="d">C-024 ← gpt · pair 4 of 6</span></div>
+    <div><span class="t">14:22:04</span><span class="e">CLAIM_EXTRACTED</span><span class="d">C-041 · Fact · direct quote</span></div>
+    <div><span class="t">14:22:04</span><span class="e">CALL_COMPLETED</span><span class="d">gemini · 3.1k tokens · $0.014</span></div>
+    <div><span class="t">14:21:58</span><span class="e">CALL_RETRYING</span><span class="d">mistral · rate limited · attempt 2</span></div>
+    <div><span class="t">14:21:55</span><span class="e">RELATIONSHIP_FOUND</span><span class="d">C-011 contradicts C-024</span></div>
+    <div><span class="t">14:21:44</span><span class="e">ROUND_STARTED</span><span class="d">round 2 · budget $0.53</span></div>
+  </div>
+
+  <div class="actions">
+    <button class="btn">Stop</button>
+    <span class="mut" style="font-size:13px">Closing this page does not stop the run.</span>
+  </div>
+</main>
+
+<!-- ══════ 3 · RESULT ══════ -->
+<main class="view" id="v3">
+  <h1>Should we split billing out of the monolith?</h1>
+  <p class="sub mono" style="font-size:12.5px">run_01J8QK · finished in 6:04 · $0.41 · argument-v1</p>
+
+  <div class="answer">
+    <span class="tag">MAJORITY WITH DISSENT</span>
+    <h3>Keep it in the monolith — enforce module boundaries in-process</h3>
+    <div class="num">
+      <span>confidence<b>0.84</b></span>
+      <span>margin<b>0.31</b></span>
+      <span>claims<b>38</b></span>
+    </div>
+  </div>
+  <p class="note">One live objection survived. It is listed below, and it is why this is not a consensus.</p>
+
+  <h2>Options</h2>
+  <table>
+    <tr><th>Option</th><th style="width:74px">Share</th><th style="width:112px">Claims</th></tr>
+    <tr class="win"><td><b>Modular monolith</b><div class="rowbar"><i style="width:58%"></i></div></td>
+      <td class="n">0.58</td><td class="n">7 for · 2 against</td></tr>
+    <tr><td>Extract billing only<div class="rowbar"><i style="width:27%;background:#C3B9A7"></i></div></td>
+      <td class="n">0.27</td><td class="n">4 for · 3 against</td></tr>
+    <tr><td>Full microservices<div class="rowbar"><i style="width:15%;background:#C3B9A7"></i></div></td>
+      <td class="n">0.15</td><td class="n">2 for · 6 against</td></tr>
+  </table>
+
+  <h2>Why 0.84</h2>
+  <details open>
+    <summary>Confidence breakdown</summary>
+    <div class="dbody">
+      <div class="kv"><span>Evidence quality <span class="mut">weight .35</span></span><span class="v">+0.3080</span></div>
+      <div class="kv"><span>Decision margin <span class="mut">weight .30</span></span><span class="v">+0.2430</span></div>
+      <div class="kv"><span>Judge score <span class="mut">weight .35</span></span><span class="v">+0.3185</span></div>
+      <div class="kv"><span>Unresolved claims <span class="mut">2 of 38</span></span><span class="v neg">−0.0200</span></div>
+      <div class="kv"><span>Assumption dependency</span><span class="v neg">−0.0105</span></div>
+      <div class="kv"><span><b>Total</b></span><span class="v"><b>0.8390</b></span></div>
+    </div>
+  </details>
+
+  <h2>Claims</h2>
+  <table>
+    <tr><th style="width:62px">ID</th><th>Claim</th><th style="width:88px">Standing</th></tr>
+    <tr><td class="mono">C-011</td><td>Billing p99 is dominated by the payment provider, not in-process calls.
+      <div style="margin-top:4px"><span class="pill a">agreed</span> <span class="pill">Fact</span></div></td><td class="n">0.84</td></tr>
+    <tr><td class="mono">C-002</td><td>Deploy frequency is bounded by a 47-minute test suite, not by coupling.
+      <div style="margin-top:4px"><span class="pill a">agreed</span> <span class="pill">Fact</span></div></td><td class="n">0.79</td></tr>
+    <tr><td class="mono">C-006</td><td>Two teams edit billing concurrently about four times a week.
+      <div style="margin-top:4px"><span class="pill d">the live objection</span></div></td><td class="n">0.71</td></tr>
+    <tr><td class="mono">C-031</td><td>No on-call rotation exists for three new services.
+      <div style="margin-top:4px"><span class="pill u">unresolved</span> <span class="pill">would flip the answer</span></div></td><td class="n">0.30</td></tr>
+    <tr><td colspan="3" class="mut" style="font-size:13px">34 more — <a href="#">show all</a></td></tr>
+  </table>
+
+  <div class="actions">
+    <button class="btn primary">Accept</button>
+    <button class="btn">Accept with an override</button>
+    <button class="btn">Export</button>
+  </div>
+  <p class="note">Accepting records who decided and when. Nothing else changes.</p>
+</main>
+
+<!-- ══════ 4 · HISTORY ══════ -->
+<main class="view" id="v4">
+  <h1>History</h1>
+  <p class="sub">12 debates. Confidence is only comparable within one policy version.</p>
+  <table>
+    <tr><th>Question</th><th style="width:112px">Outcome</th><th style="width:56px">Conf.</th><th style="width:56px">Cost</th></tr>
+    <tr><td><a href="#" style="text-decoration:none">Should we split billing out of the monolith?</a>
+      <div class="mut" style="font-size:12.5px;margin-top:2px">today · 6:04</div></td>
+      <td><span class="pill">majority</span></td><td class="n">0.84</td><td class="n">$0.41</td></tr>
+    <tr><td><a href="#" style="text-decoration:none">Postgres or DynamoDB for the ledger?</a>
+      <div class="mut" style="font-size:12.5px;margin-top:2px">yesterday · 5:31</div></td>
+      <td><span class="pill a">consensus</span></td><td class="n">0.91</td><td class="n">$0.46</td></tr>
+    <tr><td><a href="#" style="text-decoration:none">Build or buy the fraud scorer?</a>
+      <div class="mut" style="font-size:12.5px;margin-top:2px">3 days ago · 11:02</div></td>
+      <td><span class="pill u">split</span></td><td class="n">0.72</td><td class="n">$1.09</td></tr>
+    <tr><td><a href="#" style="text-decoration:none">Move the scheduler to a queue?</a>
+      <div class="mut" style="font-size:12.5px;margin-top:2px">last week · 4:18</div></td>
+      <td><span class="pill">majority</span></td><td class="n">0.88</td><td class="n">$0.44</td></tr>
+  </table>
+  <p class="note">Stored in <span class="mono">~/.arbiter</span>. The CLI reads exactly the same runs.</p>
+</main>
+
+<nav class="switch" aria-label="Screens">
+  <button aria-current="true" data-v="1">1 · New</button>
+  <button data-v="2">2 · Running</button>
+  <button data-v="3">3 · Result</button>
+  <button data-v="4">4 · History</button>
+</nav>
+
+<script>
+var bs=[].slice.call(document.querySelectorAll('.switch button'));
+function show(v){
+  bs.forEach(function(b){b.setAttribute('aria-current',b.dataset.v===v)});
+  [].forEach.call(document.querySelectorAll('.view'),function(s){s.classList.toggle('on',s.id==='v'+v)});
+  scrollTo(0,0);
+}
+bs.forEach(function(b){b.addEventListener('click',function(){show(b.dataset.v)})});
+document.addEventListener('keydown',function(e){if('1234'.indexOf(e.key)>-1)show(e.key)});
+[].forEach.call(document.querySelectorAll('.check input'),function(i){
+  i.addEventListener('change',function(){i.closest('.check').classList.toggle('on',i.checked)})});
+</script>
+</body>
+</html>

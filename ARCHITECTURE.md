@@ -1,6 +1,6 @@
 # AI Debate & Decision Engine — Architecture Specification
 
-**Version:** 2.7.2 (frozen for implementation)
+**Version:** 2.8 (frozen for implementation)
 **Status:** approved — implementation in progress
 **Supersedes:** v1.0 (Python · LangGraph · Postgres · FastAPI · WebSocket · React)
 **Companion:** `docs/INTERFACES.md` — concrete trait definitions and protocols
@@ -1281,6 +1281,8 @@ arbiter history               [--outcome · --since · --min-confidence]
 arbiter export <run_id>       --format json|markdown
 arbiter plugins list|info
 arbiter providers list|test
+arbiter serve                 local UI on 127.0.0.1 — a form, a live run, a result
+                              [--port 7777] [--open] [--no-token (refused off-loopback)]
 arbiter doctor                preflight: keys, reachability, schema, bounds
 arbiter reindex               rebuild history.db by reading each run.db
 ```
@@ -1431,6 +1433,9 @@ Storage      SQLite (rusqlite, `bundled` — no host SQLite dependency) in WAL m
              Crate versions are pinned in Cargo.toml, not here — a spec that names a
              patch release is wrong within the month
 CLI          clap · a small renderer; no TUI framework
+UI           `arbiter serve` only: one embedded HTML file, no build step, no npm, no
+             framework, no bundler. Loopback-bound, token-gated. Served by the same
+             binary; there is no separate frontend to deploy
 Plugins      JSON-RPC over stdio; wasmtime for sandboxed WASM
 Test         cargo test · scripted mock provider · golden fixtures · property tests
 ```
@@ -1452,8 +1457,43 @@ interface), multiple judges (`judge_count > 1` needs no redesign), model perform
 tracking (data collected, analytics later), smart panel recommendation (a plugin behind
 `panel.resolve`).
 
-**Deferred:** web UI / single-page app (decided later — it consumes the same NDJSON
-stream), HTTP API, IDE integration, public debate library.
+**Deferred:** public HTTP API (as distinct from the loopback UI below), IDE integration,
+public debate library, multi-user or hosted anything.
+
+### 17.1 `arbiter serve` — the minimal UI
+
+A CLI is a poor place to type a paragraph-long question, and a decision is worth reading
+in something other than a terminal. `arbiter serve` is the smallest thing that fixes both:
+**one embedded HTML page and five endpoints, bound to loopback**. Four screens — new run,
+running, result, history — matching `design/minimal-ui.html`.
+
+**It is a renderer, not a second engine.** Every number it shows comes from
+`explain --json` and the same event stream `--stream` emits. There is no logic in the page
+that is not already in the core, which is the property that stopped the UI from being
+built until the core was specified.
+
+**This changes a stated property, and the change is deliberate.** Until v2.8 the system
+had no listener at all — §8 called that out as the reason there was no attack surface in
+the usual sense. There is now a socket, and `POST /api/runs` **spends real money**. So the
+following are requirements, not defaults:
+
+| Requirement | Why |
+|---|---|
+| Bind `127.0.0.1` only; binding any other address is refused, not warned | the machine holds provider credentials and can spend |
+| Per-process random token, 128-bit, in the URL `--open` prints; every request checks it | a page on any website can reach `127.0.0.1` in your browser |
+| `Host` header must be `127.0.0.1[:port]` or `localhost[:port]` | defeats DNS rebinding, where a hostile name resolves to loopback |
+| Reject any request whose `Origin` is present and not this server, or whose `Sec-Fetch-Site` is not `same-origin` | drive-by form posts |
+| No CORS headers, ever | there is no legitimate cross-origin caller |
+| The token is never written to `~/.arbiter`, the log, or an event payload | it would outlive the process that owns it |
+
+Skipping any of these turns a local convenience into a way for a web page you visited to
+start a debate on your account. `serve` is single-user and single-tenant by construction:
+it has no sessions, no accounts, and no notion of who is asking beyond the token.
+
+**What it deliberately does not have:** the argument graph, the attachment matrix, replay
+scrubbing, plugin management, and configuration editing. Those stay in the CLI. The rule
+for adding a screen is that it must be readable from `explain --json` without new engine
+work; anything else is a redesign wearing a feature request.
 
 **Stated limitation — phase 1 is English-centric.** Grounding's fuzzy match and T1
 lexical blocking both assume whitespace-delimited tokens and Latin-script trigrams, and
@@ -1474,7 +1514,7 @@ measures the script.
 
 | Suite | When | LLM | Contents |
 |---|---|---|---|
-| **CI** | every commit | none — scripted mock | the 31 below |
+| **CI** | every commit | none — scripted mock | the 33 below |
 | **Integration** | nightly, opt-in, budgeted | real providers | `paraphrase_corpus`, `judge_identity_leakage` |
 | **Tuning** | `cargo test --features tuning` | none | the `tuning/` graph corpus, parameter sweeps |
 | **Red-team** | every commit, once written | none — scripted mock | ≥20 adversarial cases from the `argument-v1` gate session (§6.3) |
@@ -1483,7 +1523,7 @@ Red-team cases are CI fixtures in every mechanical sense — scripted mock, zero
 deterministic — but they are listed separately because they are written *against* the
 arithmetic rather than for a pipeline path, and the set only grows: every exploit found
 after release lands here as a fixture rather than as a patch note. `attack_saturation` is
-the first member, written before the session existed. The 31 below are the pipeline
+the first member, written before the session existed. The 33 below are the pipeline
 suite and that count is fixed; the red-team suite has a floor, not a target.
 
 `judge_identity_leakage` sits in Integration deliberately: against a scripted mock,
@@ -1510,6 +1550,8 @@ it produces the recall number `t3_merge_threshold` is tuned against.
 | `crash_before_send` | killed between `RESERVED` and `SENT` → `FAILED`, reservation released, not orphaned |
 | `budget_reconciliation` | `budget.reserved` matches the sum over non-terminal calls after a kill at each state |
 | `projection_rebuild` | replay rebuilds every projection table; result is identical to the pre-crash tables |
+| `serve_localhost_only` | binding a non-loopback address is refused, not warned |
+| `serve_rejects_foreign_origin` | a request with a wrong token, `Host`, or `Origin` is refused before any work |
 | `premise_cycle` | circular derivation → component degraded to Unsupported |
 | `fixpoint_nonconvergence` | oscillating graph hits the cap → deterministic record |
 | `confidence_arithmetic` | every term independently hand-computed; pins the formula |
@@ -1560,7 +1602,8 @@ stays in, as decided, and "optional and isolated" is exactly what makes it separ
 
 | Phase | Contents | Gate to the next |
 |---|---|---|
-| **1.0 — core** | 15-stage pipeline, decision core, SQLite store + blob store, CLI (`run` … `accept`), mock + 2 providers, in-process plugin traits, 31 CI fixtures | CI green with zero tokens; `paraphrase_corpus` and the tuning sweep run once against real providers to pin `argument-v1` and `t3_merge_threshold` |
+| **1.0 — core** | 15-stage pipeline, decision core, SQLite store + blob store, CLI (`run` … `accept`), mock + 2 providers, in-process plugin traits, 31 of the 33 CI fixtures (the two `serve_*` fixtures land with 1.1) | CI green with zero tokens; `paraphrase_corpus` and the tuning sweep run once against real providers to pin `argument-v1` and `t3_merge_threshold` |
+| **1.1 — minimal UI** | `arbiter serve`: embedded page, five loopback endpoints, SSE stream, the four screens | the loopback security requirements in §17.1 all hold, and `serve_localhost_only` and `serve_rejects_foreign_origin` pass |
 | **1.5 — build & extend** | `arbiter-build` and its own fixture suite, `arbiter build` CLI, WASM plugin host, JSON-RPC host, confinement | — |
 
 Everything in 1.5 sits behind an interface that 1.0 defines and exercises, so deferring
@@ -1649,6 +1692,20 @@ The implementation is successful when:
 **v2.0** — Rust kernel, pure decision core, NDJSON store, CLI-first. Superseded v1.0
 (Python · LangGraph · Postgres · FastAPI · WebSocket · React).
 
+
+**v2.8** — a minimal UI, and the stated property it costs.
+
+| # | Change | Worth it because |
+|---|---|---|
+| 1 | `arbiter serve` added: one embedded page, five loopback endpoints, four screens | typing a paragraph-long question into a terminal is the wrong shape, and a decision is worth reading outside one. It renders `explain --json` and the event stream — no logic the core does not already own |
+| 2 | Web UI moved from **Deferred** to in-scope as phase **1.1** | it is small because the core was specified first; that was the point of deferring it |
+| 3 | Loopback binding, a per-process token, `Host` and `Origin` checks, and no CORS — as requirements, not defaults | `POST /api/runs` spends real money, and any website you visit can reach `127.0.0.1` in your browser. DNS rebinding is the specific attack this closes |
+| 4 | Two fixtures: `serve_localhost_only`, `serve_rejects_foreign_origin` | a security property with no test is a comment |
+| 5 | §17.1 names what the UI deliberately omits, and the rule for adding to it | "just one more screen" is how a minimal UI stops being one. If it cannot be read from `explain --json`, it is a redesign |
+
+The honest cost: until v2.8 the system had **no listener**, and §8 leaned on that. It now
+has one, on loopback, behind a token. That is a real reduction in the security story and
+the spec says so rather than describing the socket as free.
 
 **v2.7.2** — second review of the SQLite design. Ten findings, all real; one was a
 regression introduced by v2.7.1 itself.
