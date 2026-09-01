@@ -1,0 +1,17 @@
+[package]
+name = "arbiter-plugin"
+description = "Plugin host and ABI: JSON-RPC subprocess (trusted) and WASM (sandboxed). Depends on kernel."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+arbiter-core = { workspace = true }
+arbiter-kernel = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints.rust]
+missing_debug_implementations = "warn"

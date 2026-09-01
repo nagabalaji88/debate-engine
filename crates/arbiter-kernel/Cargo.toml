@@ -1,0 +1,19 @@
+[package]
+name = "arbiter-kernel"
+description = "StageGraph orchestration, the budget ledger, the provider-call state machine, and the 15-stage pipeline. Depends on core only — it defines the Store and Provider trait seams; concrete implementations depend on this crate, never the reverse."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+arbiter-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[lints.rust]
+missing_debug_implementations = "warn"

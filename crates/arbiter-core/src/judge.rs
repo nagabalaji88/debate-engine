@@ -41,9 +41,15 @@ mod tests {
     fn flat(v: f64) -> Scorecard {
         Scorecard {
             model: ModelId::new("m"),
-            factual_correctness: v, logical_reasoning: v, evidence_quality: v,
-            problem_relevance: v, assumption_quality: v, counterargument_handling: v,
-            risk_awareness: v, practicality: v, clarity: v,
+            factual_correctness: v,
+            logical_reasoning: v,
+            evidence_quality: v,
+            problem_relevance: v,
+            assumption_quality: v,
+            counterargument_handling: v,
+            risk_awareness: v,
+            practicality: v,
+            clarity: v,
         }
     }
 

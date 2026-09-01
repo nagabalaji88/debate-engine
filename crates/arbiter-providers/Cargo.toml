@@ -1,0 +1,21 @@
+[package]
+name = "arbiter-providers"
+description = "Model adapters (anthropic, openai-compatible, mock) and credential resolution. Depends on kernel for the reservation protocol they call through."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+arbiter-core = { workspace = true }
+arbiter-kernel = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+eventsource-stream = { workspace = true }
+thiserror = { workspace = true }
+
+[lints.rust]
+missing_debug_implementations = "warn"

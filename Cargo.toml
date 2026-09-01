@@ -1,6 +1,15 @@
 [workspace]
 resolver = "3"
-members = ["crates/arbiter-core"]
+members = [
+    "crates/arbiter-core",
+    "crates/arbiter-store",
+    "crates/arbiter-kernel",
+    "crates/arbiter-providers",
+    "crates/arbiter-plugin",
+    "crates/arbiter-cli",
+    "crates/arbiter-fixtures",
+    "crates/arbiter-build",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,10 +18,43 @@ rust-version = "1.90"
 license = "MIT"
 
 [workspace.dependencies]
+# core, and everything that depends on it
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 blake3 = "1"
 
+# store: SQLite embedded, bundled so the binary has no host dependency (ARCHITECTURE §16)
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# kernel: async runtime + HTTPS + SSE parsing for provider streaming
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+eventsource-stream = "0.2"
+
+# cross-cutting
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# cli
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+
+# plugin host: wasmtime, added when the 1.5 WASM-host task starts (out of
+# this plan's scope, ARCHITECTURE.md §19 / IMPLEMENTATION_PLAN.md §9) —
+# an unused heavy dependency has no place in the workspace yet.
+
+# workspace-internal crates, so every crate names its siblings the same way
+arbiter-core = { path = "crates/arbiter-core" }
+arbiter-store = { path = "crates/arbiter-store" }
+arbiter-kernel = { path = "crates/arbiter-kernel" }
+arbiter-providers = { path = "crates/arbiter-providers" }
+arbiter-plugin = { path = "crates/arbiter-plugin" }
+
 [profile.release]
 lto = true
 codegen-units = 1
+
+[profile.dev.package.rusqlite]
+# bundled SQLite is unusably slow unopt in dev builds; this keeps `cargo test` fast
+opt-level = 3

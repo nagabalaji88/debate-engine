@@ -96,6 +96,9 @@ impl CanonicalClaim {
     }
 
     pub fn is_live(&self) -> bool {
-        !matches!(self.lifecycle, ClaimLifecycle::Withdrawn | ClaimLifecycle::Rejected)
+        !matches!(
+            self.lifecycle,
+            ClaimLifecycle::Withdrawn | ClaimLifecycle::Rejected
+        )
     }
 }

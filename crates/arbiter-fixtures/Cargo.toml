@@ -1,0 +1,21 @@
+[package]
+name = "arbiter-fixtures"
+description = "Golden runs. CI proves the engine end to end with zero LLM tokens (ARCHITECTURE.md §18). Depends on everything it exercises."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+arbiter-core = { workspace = true }
+arbiter-store = { workspace = true }
+arbiter-kernel = { workspace = true }
+arbiter-providers = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints.rust]
+missing_debug_implementations = "warn"

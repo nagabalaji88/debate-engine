@@ -1,0 +1,16 @@
+[package]
+name = "arbiter-build"
+description = "Build Studio: product, technical and prompt-pack generation, downstream of an accepted DecisionRecord. Ships in phase 1.5 (ARCHITECTURE.md §13, §19)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+arbiter-core = { workspace = true }
+arbiter-kernel = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints.rust]
+missing_debug_implementations = "warn"

@@ -174,22 +174,23 @@ Execute top to bottom. A task may start when every dependency is **done** per §
 | **C7** | Counterfactual change triggers | C6 | core |
 | **C8** | `DecisionRecord` + `explain --json` payload | C6, C7 | core |
 | **S1** | SQLite schema + migrations | X1 | store |
-| **S2** | `RunStore` traits + lease CAS | S1 | store |
+| **K0** | `Store`/`Provider` trait seams (no impl) | X1 | kernel |
+| **S2** | `RunStore` impl (SQLite) + lease CAS | S1, K0 | store |
 | **S3** | Event append, hash chain, `verify_chain` | S2 | store |
-| **S4** | Projections + rebuild-from-events | S3, C8 | store |
-| **S5** | Blob store above threshold | S3 | store |
+| **S4** | Projections + rebuild-from-events | S3, C8, K3 | store |
+| **S5** | Blob store above threshold | S3, K2 | store |
 | **S6** | `history.db` catalogue + `reindex` | S3 | store |
-| **K1** | Budget ledger + reservation protocol | S3 | kernel |
-| **K2** | Provider-call state machine + recovery | K1, S5 | kernel |
-| **K3** | StageGraph + checkpointing | S4, K2 | kernel |
+| **K1** | Budget ledger + reservation protocol | K0 | kernel |
+| **K2** | Provider-call state machine + recovery | K1 | kernel |
+| **K3** | StageGraph + checkpointing | K2 | kernel |
 | **K4** | Bounds, headroom, per-round budget sizing | K1 | kernel |
-| **K5** | Response cache | S5, K1 | kernel |
+| **K5** | Response cache | K1 | kernel |
 | **P1** | `Provider` trait + capabilities | X1 | providers |
 | **P2** | Mock provider (scriptable) | P1 | providers |
 | **P3** | Credential resolution + redaction | P1 | providers |
 | **P4** | Anthropic + OpenAI-compatible adapters | P3, K5 | providers |
 | **G1** | Prompt packs | S1 | kernel |
-| **G2** | Stages 1–5: init … claims.normalize | K3, P2, G1 | kernel |
+| **G2** | Stages 1–5: init … claims.normalize | K3, S4, P2, G1 | kernel |
 | **G3** | `options.cluster` + attachment | G2, C4 | kernel |
 | **G4** | `relations.analyze` + premise cycles | G3 | kernel |
 | **G5** | `disputes.rank` + `challenge.plan` | G4, K4 | kernel |
@@ -213,6 +214,12 @@ Execute top to bottom. A task may start when every dependency is **done** per §
 
 **Milestone 1.0** = X1–F2 green. **Milestone 1.1** = U1–U7 green.
 Build Studio and plugin hosts are **1.5** and are out of this plan.
+
+> **Dependency direction, corrected (see `PLAN_DEVIATIONS.md` D1).** `arbiter-kernel`
+> depends on `arbiter-core` only; it defines the `Store` and `Provider` trait seams
+> (task K0). `arbiter-store` and `arbiter-providers` depend on `arbiter-kernel` and
+> implement those traits. A `K*` task never adds `arbiter-store` as a crate
+> dependency — it either defines a trait (K0) or consumes one it already owns.
 
 ---
 
@@ -438,12 +445,15 @@ cargo test -p arbiter-store schema::tests::opening_a_newer_db_schema_is_refused
 
 ---
 
-### S2 · Traits and the lease
+### S2 · Implement the traits; the lease
 
-**Files:** `src/lib.rs`, `src/lease.rs` · **Spec:** INTERFACES §1
+**Files:** `src/lib.rs`, `src/lease.rs` · **Spec:** INTERFACES §1 · **Depends on:** K0
 
-Implement `RunStore` / `RunWriter` / `Tx` / `RunReader` **exactly as INTERFACES §1 writes
-them**. No signature may name a directory, a lock, a flush or a torn tail.
+Implement `arbiter_kernel::{RunStore, RunWriter, Tx, RunReader}` for a SQLite-backed
+type — the trait signatures come from K0 (`arbiter-kernel`), verbatim from INTERFACES §1.
+This crate does not redeclare them; it depends on K0's crate and writes the bodies.
+No signature may name a directory, a lock, a flush or a torn tail — if implementing one
+forces you to change the signature, the trait leaked and belongs back in K0's report.
 
 Lease acquisition is a **compare-and-swap on `lease_epoch`**, not a liveness check:
 
@@ -521,6 +531,26 @@ cargo test -p arbiter-store catalog::tests::reindex_rebuilds_from_run_dbs
 ---
 
 ## 5. Tasks — kernel and providers
+
+### K0 · Store and Provider trait seams
+
+**Files:** `arbiter-kernel/src/store_trait.rs`, `provider_trait.rs`
+**Spec:** ARCHITECTURE §4.1 ("kernel — … event store …"; "store — SQLite implementation
+of the Store traits"), INTERFACES §1, §5 · **Deviation:** `PLAN_DEVIATIONS.md` D1
+
+Define the trait signatures only — **no SQLite, no filesystem, no implementation** in
+this crate. Copy `RunStore` / `RunWriter` / `Tx` / `RunReader` from INTERFACES §1
+verbatim, and `ProviderCapabilities` / the provider-facing trait from INTERFACES §5.
+`arbiter-kernel`'s `Cargo.toml` must not gain a dependency on `arbiter-store` or
+`arbiter-providers` to do this — that is precisely the edge D1 exists to prevent.
+
+**Acceptance**
+```bash
+cargo build -p arbiter-kernel   # compiles with arbiter-core as its only internal dep
+grep -c 'arbiter-store\|arbiter-providers' crates/arbiter-kernel/Cargo.toml   # must be 0
+```
+
+---
 
 ### K1 · Budget ledger · K2 · Call states · K4 · Bounds
 
@@ -976,5 +1006,51 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 
 | Task | Done | Commit | Deviations |
 |---|---|---|---|
-| X1 | ☐ | | |
-| … | ☐ | | |
+| X1 | ✅ | (this commit) | none |
+| X2 | ☐ | | |
+| C1 | ☐ | | |
+| C2 | ☐ | | |
+| C3 | ☐ | | |
+| C4 | ☐ | | |
+| C5 | ☐ | | |
+| C6 | ☐ | | |
+| C7 | ☐ | | |
+| C8 | ☐ | | |
+| K0 | ☐ | | |
+| S1 | ☐ | | |
+| S2 | ☐ | | |
+| S3 | ☐ | | |
+| S4 | ☐ | | |
+| S5 | ☐ | | |
+| S6 | ☐ | | |
+| K1 | ☐ | | |
+| K2 | ☐ | | |
+| K3 | ☐ | | |
+| K4 | ☐ | | |
+| K5 | ☐ | | |
+| P1 | ☐ | | |
+| P2 | ☐ | | |
+| P3 | ☐ | | |
+| P4 | ☐ | | |
+| G1 | ☐ | | |
+| G2 | ☐ | | |
+| G3 | ☐ | | |
+| G4 | ☐ | | |
+| G5 | ☐ | | |
+| G6 | ☐ | | |
+| G7 | ☐ | | |
+| G8 | ☐ | | |
+| G9 | ☐ | | |
+| L1 | ☐ | | |
+| L2 | ☐ | | |
+| L3 | ☐ | | |
+| L4 | ☐ | | |
+| F1 | ☐ | | |
+| F2 | ☐ | | |
+| U1 | ☐ | | |
+| U2 | ☐ | | |
+| U3 | ☐ | | |
+| U4 | ☐ | | |
+| U5 | ☐ | | |
+| U6 | ☐ | | |
+| U7 | ☐ | | |

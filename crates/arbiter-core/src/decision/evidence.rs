@@ -53,7 +53,11 @@ pub fn corroboration(claim: &CanonicalClaim) -> f64 {
 
 /// Claims whose authors argued poorly on evidence are discounted — bounded below so
 /// a harsh judge cannot erase a claim outright.
-pub fn judge_factor(claim: &CanonicalClaim, scores: &BTreeMap<ModelId, Scorecard>, w: &Weights) -> f64 {
+pub fn judge_factor(
+    claim: &CanonicalClaim,
+    scores: &BTreeMap<ModelId, Scorecard>,
+    w: &Weights,
+) -> f64 {
     let mut acc = 0.0;
     let mut n = 0.0;
     for m in &claim.members {
@@ -72,8 +76,15 @@ pub fn judge_factor(claim: &CanonicalClaim, scores: &BTreeMap<ModelId, Scorecard
 /// An ungrounded claim is admitted at Unverified weight rather than dropped.
 pub fn effective_kind(claim: &CanonicalClaim) -> EvidenceKind {
     let ungrounded = !claim.members.is_empty()
-        && claim.members.iter().all(|m| matches!(m.grounding, Grounding::Unsupported));
-    if ungrounded { EvidenceKind::Unverified } else { claim.kind }
+        && claim
+            .members
+            .iter()
+            .all(|m| matches!(m.grounding, Grounding::Unsupported));
+    if ungrounded {
+        EvidenceKind::Unverified
+    } else {
+        claim.kind
+    }
 }
 
 pub fn evidence(claim: &CanonicalClaim, scores: &BTreeMap<ModelId, Scorecard>, w: &Weights) -> f64 {
@@ -93,7 +104,10 @@ pub fn evidence_map(
     scores: &BTreeMap<ModelId, Scorecard>,
     w: &Weights,
 ) -> BTreeMap<ClaimId, f64> {
-    claims.iter().map(|c| (c.id.clone(), evidence(c, scores, w))).collect()
+    claims
+        .iter()
+        .map(|c| (c.id.clone(), evidence(c, scores, w)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -115,17 +129,35 @@ mod tests {
 
     fn quoted() -> Grounding {
         Grounding::DirectQuote {
-            span: TextSpan { start: 0, end: 36, quote: "on-call load rises with service count".into() },
+            span: TextSpan {
+                start: 0,
+                end: 36,
+                quote: "on-call load rises with service count".into(),
+            },
         }
     }
 
-    fn claim(kind: EvidenceKind, lifecycle: ClaimLifecycle, members: Vec<ClaimMember>) -> CanonicalClaim {
-        CanonicalClaim { id: ClaimId::new("C-001"), text: "t".into(), kind, lifecycle, members }
+    fn claim(
+        kind: EvidenceKind,
+        lifecycle: ClaimLifecycle,
+        members: Vec<ClaimMember>,
+    ) -> CanonicalClaim {
+        CanonicalClaim {
+            id: ClaimId::new("C-001"),
+            text: "t".into(),
+            kind,
+            lifecycle,
+            members,
+        }
     }
 
     #[test]
     fn withdrawn_claims_carry_no_evidence() {
-        let c = claim(EvidenceKind::Fact, ClaimLifecycle::Withdrawn, vec![member("m1", "p1", quoted())]);
+        let c = claim(
+            EvidenceKind::Fact,
+            ClaimLifecycle::Withdrawn,
+            vec![member("m1", "p1", quoted())],
+        );
         assert_eq!(evidence(&c, &BTreeMap::new(), &Weights::default()), 0.0);
     }
 
@@ -135,15 +167,26 @@ mod tests {
         let correlated = claim(
             EvidenceKind::Fact,
             ClaimLifecycle::Defended,
-            vec![member("a1", "vendor", quoted()), member("a2", "vendor", quoted()), member("a3", "vendor", quoted())],
+            vec![
+                member("a1", "vendor", quoted()),
+                member("a2", "vendor", quoted()),
+                member("a3", "vendor", quoted()),
+            ],
         );
         let independent = claim(
             EvidenceKind::Fact,
             ClaimLifecycle::Defended,
-            vec![member("a1", "v1", quoted()), member("b1", "v2", quoted()), member("c1", "v3", quoted())],
+            vec![
+                member("a1", "v1", quoted()),
+                member("b1", "v2", quoted()),
+                member("c1", "v3", quoted()),
+            ],
         );
         assert!(independence(&correlated, &w) < independence(&independent, &w));
-        assert!(evidence(&correlated, &BTreeMap::new(), &w) < evidence(&independent, &BTreeMap::new(), &w));
+        assert!(
+            evidence(&correlated, &BTreeMap::new(), &w)
+                < evidence(&independent, &BTreeMap::new(), &w)
+        );
     }
 
     #[test]
@@ -155,21 +198,37 @@ mod tests {
         );
         assert_eq!(effective_kind(&c), EvidenceKind::Unverified);
         let e = evidence(&c, &BTreeMap::new(), &Weights::default());
-        assert!(e > 0.0, "unevidenced risk must survive to the decision, at low weight");
+        assert!(
+            e > 0.0,
+            "unevidenced risk must survive to the decision, at low weight"
+        );
         assert!(e < 0.2);
     }
 
     #[test]
     fn a_harsh_judge_discounts_but_cannot_erase() {
         let w = Weights::default();
-        let c = claim(EvidenceKind::Fact, ClaimLifecycle::Defended, vec![member("m1", "p1", quoted())]);
+        let c = claim(
+            EvidenceKind::Fact,
+            ClaimLifecycle::Defended,
+            vec![member("m1", "p1", quoted())],
+        );
         let mut scores = BTreeMap::new();
-        scores.insert(ModelId::new("m1"), crate::judge::Scorecard {
-            model: ModelId::new("m1"),
-            factual_correctness: 0.0, logical_reasoning: 0.0, evidence_quality: 0.0,
-            problem_relevance: 0.0, assumption_quality: 0.0, counterargument_handling: 0.0,
-            risk_awareness: 0.0, practicality: 0.0, clarity: 0.0,
-        });
+        scores.insert(
+            ModelId::new("m1"),
+            crate::judge::Scorecard {
+                model: ModelId::new("m1"),
+                factual_correctness: 0.0,
+                logical_reasoning: 0.0,
+                evidence_quality: 0.0,
+                problem_relevance: 0.0,
+                assumption_quality: 0.0,
+                counterargument_handling: 0.0,
+                risk_awareness: 0.0,
+                practicality: 0.0,
+                clarity: 0.0,
+            },
+        );
         assert_eq!(judge_factor(&c, &scores, &w), w.judge_floor);
         assert!(evidence(&c, &scores, &w) > 0.0);
     }
@@ -177,7 +236,13 @@ mod tests {
     #[test]
     fn survival_ranks_defended_above_modified_above_withdrawn() {
         let w = Weights::default();
-        assert!(survival_weight(ClaimLifecycle::Defended, &w) > survival_weight(ClaimLifecycle::Modified { version: 2 }, &w));
-        assert!(survival_weight(ClaimLifecycle::Modified { version: 2 }, &w) > survival_weight(ClaimLifecycle::Withdrawn, &w));
+        assert!(
+            survival_weight(ClaimLifecycle::Defended, &w)
+                > survival_weight(ClaimLifecycle::Modified { version: 2 }, &w)
+        );
+        assert!(
+            survival_weight(ClaimLifecycle::Modified { version: 2 }, &w)
+                > survival_weight(ClaimLifecycle::Withdrawn, &w)
+        );
     }
 }

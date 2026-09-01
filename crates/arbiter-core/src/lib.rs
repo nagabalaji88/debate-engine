@@ -14,7 +14,9 @@ pub mod judge;
 pub mod option;
 pub mod relation;
 
-pub use claim::{CanonicalClaim, ClaimLifecycle, ClaimMember, ClaimStanding, EvidenceKind, Grounding, TextSpan};
+pub use claim::{
+    CanonicalClaim, ClaimLifecycle, ClaimMember, ClaimStanding, EvidenceKind, Grounding, TextSpan,
+};
 pub use config::DecisionConfig;
 pub use ids::{ClaimId, ModelId, OptionId, PositionId, ProviderId, RunId};
 pub use judge::Scorecard;
