@@ -39,11 +39,25 @@ textarea,input[type=text],select{width:100%;font:inherit;padding:9px 11px;border
 textarea{min-height:84px;resize:vertical;line-height:1.5}
 .field{margin-bottom:17px}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.checks{display:flex;flex-wrap:wrap;gap:8px}
-.check{display:flex;align-items:center;gap:7px;padding:6px 11px;border:1px solid var(--line2);
-  border-radius:5px;background:var(--card);font-size:13.5px;cursor:pointer}
-.check input{accent-color:var(--acc);width:15px;height:15px}
-.check.on{border-color:var(--acc);background:var(--accw)}
+.models{border:1px solid var(--line2);border-radius:6px;background:var(--card);overflow:hidden}
+.m{display:flex;align-items:center;gap:11px;padding:9px 13px;border-bottom:1px solid #EDE7DC;cursor:pointer}
+.m:last-child{border-bottom:0}
+.m input{accent-color:var(--acc);width:15px;height:15px;flex:0 0 15px}
+.m .nm{font-weight:500;font-size:13.5px}
+.m .vend{font-size:12.5px;color:var(--mut)}
+.m .st{margin-left:auto;font-size:12.5px;display:flex;align-items:center;gap:6px;white-space:nowrap}
+.m.on{background:var(--accw)}
+.m.off{cursor:default;background:#F2EEE7;color:var(--mut)}
+.m.off .nm{color:var(--mut);font-weight:400}
+.dot{width:7px;height:7px;border-radius:50%;flex:0 0 7px}
+.dot.ok{background:var(--pos)} .dot.un{background:var(--qual)} .dot.no{background:#C3B9A7} .dot.bad{background:var(--neg)}
+.linkbtn{background:none;border:0;padding:0;color:var(--acc);font-size:12.5px;text-decoration:underline;
+  text-underline-offset:2px;font-weight:500}
+.warn{background:#F7EEDD;border:1px solid #E2CFA6;border-radius:6px;padding:11px 13px;font-size:13px;
+  color:#6E5320;margin-top:12px}
+.keyrow{display:flex;align-items:center;gap:11px;padding:11px 13px;border-bottom:1px solid #EDE7DC}
+.keyrow:last-child{border-bottom:0}
+.keyrow .src{font-family:var(--mono);font-size:12px;color:var(--mut)}
 
 .btn{padding:9px 17px;border:1px solid var(--line2);border-radius:5px;background:var(--card);
   font-size:14px;font-weight:500}
@@ -143,15 +157,29 @@ details[open] summary::before{content:'▾'}
   </div>
 
   <div class="field">
-    <label>Panel</label>
-    <div class="checks">
-      <label class="check on"><input type="checkbox" checked>claude-opus-5</label>
-      <label class="check on"><input type="checkbox" checked>gpt-5</label>
-      <label class="check on"><input type="checkbox" checked>gemini-3</label>
-      <label class="check on"><input type="checkbox" checked>mistral-large</label>
-      <label class="check on"><input type="checkbox" checked>llama-4</label>
+    <label style="display:flex;align-items:center">Panel
+      <button class="linkbtn" style="margin-left:auto;font-weight:400">Manage keys</button></label>
+    <div class="models">
+      <label class="m on"><input type="checkbox" checked>
+        <span><span class="nm">claude-opus-5</span> <span class="vend">Anthropic</span></span>
+        <span class="st"><span class="dot ok"></span>ready</span></label>
+      <label class="m on"><input type="checkbox" checked>
+        <span><span class="nm">gpt-5</span> <span class="vend">OpenAI</span></span>
+        <span class="st"><span class="dot ok"></span>ready</span></label>
+      <label class="m on"><input type="checkbox" checked>
+        <span><span class="nm">gemini-3</span> <span class="vend">Google</span></span>
+        <span class="st"><span class="dot un"></span>key set, not checked</span></label>
+      <label class="m off"><input type="checkbox" disabled>
+        <span><span class="nm">mistral-large</span> <span class="vend">Mistral</span></span>
+        <span class="st"><span class="dot no"></span>no key <button class="linkbtn">Add</button></span></label>
+      <label class="m off"><input type="checkbox" disabled>
+        <span><span class="nm">llama-4</span> <span class="vend">Together</span></span>
+        <span class="st"><span class="dot bad"></span>key rejected · 401 <button class="linkbtn">Fix</button></span></label>
     </div>
-    <div class="hint">5 models · 4 independence groups. <span class="mut">mistral and llama share a group.</span></div>
+    <div class="hint">3 of 5 usable · 3 independence groups. Models without a working key stay listed so you
+      can see what you are missing.</div>
+    <div class="warn">Only three models can run. A panel drawn from fewer independent groups produces a
+      weaker independence score, and the confidence reflects that.</div>
   </div>
 
   <div class="two">
@@ -166,7 +194,7 @@ details[open] summary::before{content:'▾'}
   </div>
 
   <div class="est">
-    <span>Estimated</span><b>$0.48</b><span class="mut">· 28 calls · about 2 minutes</span>
+    <span>Estimated</span><b>$0.31</b><span class="mut">· 18 calls · about 90 seconds · 3 models</span>
     <span class="mut" style="margin-left:auto">stops at the cap</span>
   </div>
 
@@ -292,11 +320,60 @@ details[open] summary::before{content:'▾'}
   <p class="note">Stored in <span class="mono">~/.arbiter</span>. The CLI reads exactly the same runs.</p>
 </main>
 
+<!-- ══════ 5 · KEYS ══════ -->
+<main class="view" id="v5">
+  <h1>Provider keys</h1>
+  <p class="sub">One key per provider. A key unlocks every model that provider serves.</p>
+
+  <div class="models">
+    <div class="keyrow"><span class="dot ok"></span>
+      <span><span class="nm">Anthropic</span><div class="src">ANTHROPIC_API_KEY · sk-ant-…4f2c</div></span>
+      <span class="st mut">checked 2h ago · <button class="linkbtn">Re-check</button></span></div>
+    <div class="keyrow"><span class="dot ok"></span>
+      <span><span class="nm">OpenAI</span><div class="src">keychain · sk-…9a71</div></span>
+      <span class="st mut">checked 2h ago · <button class="linkbtn">Re-check</button></span></div>
+    <div class="keyrow"><span class="dot un"></span>
+      <span><span class="nm">Google</span><div class="src">ARBITER_GOOGLE_API_KEY · …e803</div></span>
+      <span class="st mut">never checked · <button class="linkbtn">Check</button></span></div>
+    <div class="keyrow"><span class="dot no"></span>
+      <span><span class="nm">Mistral</span><div class="src">not set</div></span>
+      <span class="st"><button class="linkbtn">Add key</button></span></div>
+    <div class="keyrow"><span class="dot bad"></span>
+      <span><span class="nm">Together</span><div class="src">TOGETHER_API_KEY · …1d55</div></span>
+      <span class="st" style="color:var(--neg)">401 unauthorized <button class="linkbtn">Replace</button></span></div>
+  </div>
+
+  <h2>Add a key</h2>
+  <div class="two">
+    <div class="field"><label for="pv">Provider</label>
+      <select id="pv"><option>Mistral</option><option>Together</option><option>Anthropic</option></select></div>
+    <div class="field"><label for="kv">Key</label><input type="text" id="kv" value="••••••••••••••••••••"></div>
+  </div>
+  <div class="actions">
+    <button class="btn primary">Save to keychain</button>
+    <button class="btn">Check without saving</button>
+  </div>
+  <p class="note">Saved to your OS keychain, never to <span class="mono">~/.arbiter</span> and never to a config
+    file. Checking costs one minimal request to the provider.</p>
+
+  <h2>Where keys are read from</h2>
+  <table>
+    <tr><th style="width:34px">#</th><th>Source</th><th>Example</th></tr>
+    <tr><td class="n">1</td><td>Arbiter environment variable</td><td class="mono">ARBITER_ANTHROPIC_API_KEY</td></tr>
+    <tr><td class="n">2</td><td>The provider's own variable</td><td class="mono">ANTHROPIC_API_KEY</td></tr>
+    <tr><td class="n">3</td><td>OS keychain</td><td class="mono">arbiter keys set anthropic</td></tr>
+    <tr><td class="n">4</td><td colspan="2" class="mut">Config files are never read for keys — a key in
+      <span class="mono">config.toml</span> stops the run with an error instead of being used.</td></tr>
+  </table>
+  <p class="note">First match wins. <span class="mono">arbiter keys list</span> prints the same table.</p>
+</main>
+
 <nav class="switch" aria-label="Screens">
   <button aria-current="true" data-v="1">1 · New</button>
   <button data-v="2">2 · Running</button>
   <button data-v="3">3 · Result</button>
   <button data-v="4">4 · History</button>
+  <button data-v="5">5 · Keys</button>
 </nav>
 
 <script>
@@ -307,9 +384,9 @@ function show(v){
   scrollTo(0,0);
 }
 bs.forEach(function(b){b.addEventListener('click',function(){show(b.dataset.v)})});
-document.addEventListener('keydown',function(e){if('1234'.indexOf(e.key)>-1)show(e.key)});
-[].forEach.call(document.querySelectorAll('.check input'),function(i){
-  i.addEventListener('change',function(){i.closest('.check').classList.toggle('on',i.checked)})});
+document.addEventListener('keydown',function(e){if('12345'.indexOf(e.key)>-1)show(e.key)});
+[].forEach.call(document.querySelectorAll('.m input'),function(i){
+  i.addEventListener('change',function(){i.closest('.m').classList.toggle('on',i.checked)})});
 </script>
 </body>
 </html>

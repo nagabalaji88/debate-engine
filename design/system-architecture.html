@@ -141,7 +141,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
           <span style="display:flex;align-items:center;gap:7px"><i style="width:12px;height:12px;border-radius:3px;background:var(--judgew);border:1px solid var(--judge)"></i>human / actor</span>
           <span style="display:flex;align-items:center;gap:7px"><i style="width:12px;height:12px;border-radius:3px;background:var(--qualw);border:1px solid var(--qual)"></i>versioned data asset</span>
           <span style="display:flex;align-items:center;gap:7px"><i style="width:12px;height:12px;border-radius:3px;border:1px dashed var(--dash)"></i>outside the machine</span>
-          <span style="display:flex;align-items:center;gap:7px"><i style="width:12px;height:12px;border-radius:3px;background:var(--negw);border:1px solid var(--neg)"></i>unspecified — needs a decision</span>
+          <span style="display:flex;align-items:center;gap:7px"><i style="width:12px;height:12px;border-radius:3px;background:var(--negw);border:1px solid var(--neg)"></i>secret — resolved, never persisted</span>
         </div>
       </div>
     </div>
@@ -216,13 +216,15 @@ var V1={zones:[
    facts:['arbiter plugins list labels every plugin SANDBOXED or TRUSTED — the distinction is never implicit.',
           'A WASM plugin reaches only the hosts it declared. A subprocess can reach anything unless confined.',
           'Confinement is best-effort hardening, not parity with the WASM boundary.']}},
- {id:'keys',t:'API credentials',d:'the spec never says where these come from',x:262,y:400,w:420,h:70,k:'sec',
-  cs:['env?','keychain?','config?'],
-  det:{what:'doctor checks "keys, reachability" — but no section defines where a key is read from, whether it can live in config, or how it is kept out of the event log.',
-   kv:[['status','UNSPECIFIED'],['checked by','arbiter doctor'],['risk','a key in config.toml gets committed']],
-   facts:['Three things need deciding: the source of record (env var vs OS keychain vs config), whether config may hold a secret at all, and the redaction rule for the event log and cache.',
-          'The cache stores provider responses on disk in plaintext today. If requests are ever cached alongside them, a key in a header would land in ~/.arbiter.',
-          'This is the one gap on this diagram that is a decision, not a drawing.']}},
+ {id:'keys',t:'API credentials',d:'resolved at init · never persisted',x:262,y:400,w:420,h:70,k:'sec',
+  cs:['ARBITER_*_API_KEY','provider env','keychain'],
+  det:{what:'Resolved per provider, first match wins: an Arbiter-scoped environment variable, then the provider\'s own, then the OS keychain. Never a config file.',
+   kv:[['spec','ARCHITECTURE §11.1'],['types','INTERFACES §25'],['persisted','never'],['in the log','never']],
+   facts:['Config files are never read for a key. A key-shaped value in one fails the run and names the file — ignoring it silently makes the operator think their key is broken, and honouring it leaks.',
+          'There is no ConfigFile variant in KeySource. A missing enum variant is a stronger guarantee than a rule in prose.',
+          'Redaction is a write-path rule covering error strings: providers echo request material into error bodies, and an unredacted 401 is the likeliest way a key reaches ~/.arbiter.',
+          'Verification results cache for 24h keyed by blake3(key)[..16] — rotating a key invalidates its cache for free, and the cache is harmless if read.',
+          'This was the last unspecified input on this diagram; v2.9 closed it.']}},
 
  {id:'api',t:'model provider APIs',d:'anthropic · openai-compatible · local endpoint',x:728,y:44,w:252,h:96,k:'ext',
   cs:['HTTPS 443'],
@@ -397,9 +399,15 @@ var REST=[
   det:{what:'Four suites: CI, integration, tuning, red-team.',
    facts:['CI proves the engine end to end with zero LLM tokens.','The red-team suite has a floor, not a target — every exploit found lands here.']}},
  {g:'not on disk — and one of these is unspecified'},
- {n:'API credentials',w:'—',f:'—',i:'—',d:'—',l:'UNSPECIFIED',s:'—',bad:1,
-  det:{what:'doctor checks "keys, reachability", but nothing defines where a key is read from or how it is kept out of the log and cache.',
-   facts:['Needs a decision: env var, OS keychain, or config — and whether config may hold one at all.','Needs a redaction rule for the event log and the response cache.','Everything else on this page is specified. This is the exception.']}}];
+ {n:'API credentials',w:'operator',f:'env | keychain',i:'blake3 fingerprint',d:'never',l:'process lifetime',s:'—',bad:1,
+  det:{what:'Never written to disk by Arbiter. Held in a SecretString for the life of the process, registered with the redactor at init.',
+   facts:['ARBITER_<P>_API_KEY, then the provider\'s own variable, then the OS keychain. Config files are never read for a key.',
+          'The only thing persisted is blake3(key)[..16], as the key for the 24-hour verification cache.',
+          'Redaction covers the event log, response cache, manifest, exports and error strings — a store designed to be zipped and emailed must not carry a secret.']}},
+ {g:'and the one still open'},
+ {n:'round-loop re-entry',w:'—',f:'—',i:'—',d:'—',l:'UNDECIDED',s:'—',bad:1,
+  det:{what:'ARCHITECTURE §5 draws controller.decide looping but never names where it re-enters.',
+   facts:['The workflow map re-enters at options.cluster, following §11 — attachment re-runs each round, and the loop cost then reconciles with both cost targets.','A one-line change to §5 would close it; it is left open pending a decision.']}}];
 
 /* ══════════ view 4 — data in motion ══════════ */
 var MOTION=[
@@ -550,7 +558,7 @@ function bindRows(DATA,name){
 }
 var META=[['System context','C4 level 1 — actors and externals','ARCHITECTURE.md §4 · §10 · §15'],
           ['Runtime topology','C4 level 2 — processes and boundaries','ARCHITECTURE.md §7 · §8 · §10'],
-          ['Data at rest','14 artifacts · 1 unspecified','ARCHITECTURE.md §8 · §15'],
+          ['Data at rest','15 artifacts · credentials never persisted','ARCHITECTURE.md §8 · §15'],
           ['Data in motion','14 flows · 2 cross the machine','ARCHITECTURE.md §8 · §9 · §11']];
 function show(v){
   cur=v;hov=null;sel=null;

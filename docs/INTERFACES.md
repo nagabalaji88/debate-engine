@@ -1,6 +1,6 @@
 # Arbiter — Interface Definitions
 
-**Companion to** `ARCHITECTURE.md` v2.8. Where the spec says *what*, this says *how*.
+**Companion to** `ARCHITECTURE.md` v2.9. Where the spec says *what*, this says *how*.
 Every item here closes a numbered finding from the v2.0 review.
 
 ---
@@ -1301,6 +1301,8 @@ no bundler, and no second artifact to ship.
 | `GET` | `/api/runs/:id` | one run | `explain --json` (§22), verbatim |
 | `GET` | `/api/runs/:id/events` | live stream | `text/event-stream`, one event per message |
 | `POST` | `/api/runs/:id/accept` | record an acceptance | the acceptance record |
+| `GET` | `/api/providers` | which models are usable, and why not | the roster below |
+| `POST` | `/api/providers/:p/test` | verify one provider — **makes a minimal paid request** | the updated rows |
 
 `GET /api/runs/:id` returns the §22 payload **unchanged** — not a UI-shaped projection of
 it. The moment the server reshapes it, the page and the CLI are explaining decisions
@@ -1353,3 +1355,96 @@ The page holds no state the engine does not, keeps nothing in `localStorage` bey
 active run id, and never computes a number. `serve` has no session, no account, and no
 concept of a user — one token, one machine, one person. Anything that needs more than
 that is the deferred public API, not a bigger `serve`.
+
+---
+
+## 25. Credential resolution and the provider roster  *(v2.9)*
+
+The contract behind the panel picker. Policy is ARCHITECTURE §11.1; this is the shape.
+
+```rust
+pub enum KeyState {
+    Missing,                                   // nothing resolved
+    Present  { source: KeySource },            // resolved, never tried
+    Verified { source: KeySource, at: Timestamp },
+    Rejected { source: KeySource, status: u16, at: Timestamp },
+}
+
+pub enum KeySource {
+    ArbiterEnv(&'static str),   // ARBITER_ANTHROPIC_API_KEY
+    ProviderEnv(&'static str),  // ANTHROPIC_API_KEY
+    Keychain,                   // arbiter keys set <provider>
+}
+
+pub trait CredentialSource: Send + Sync {
+    /// First match wins. Returns the value AND where it came from — the operator
+    /// needs to know which of three places is winning when the wrong key is in use.
+    fn resolve(&self, provider: &ProviderId) -> Option<(SecretString, KeySource)>;
+}
+```
+
+`SecretString` does not implement `Display` or `Debug`, and its `Drop` zeroes the buffer.
+That is not decoration: the most common way a secret reaches a log is a struct derived
+with `#[derive(Debug)]` three layers up from anything that knows it holds one.
+
+**There is no `ConfigFile` variant, deliberately.** A missing enum variant is a stronger
+guarantee than a rule in prose — no code path can reach for a key in a config file because
+no type can represent having found one there.
+
+### `GET /api/providers`
+
+```jsonc
+{
+  "providers": [
+    { "id": "anthropic", "name": "Anthropic",
+      "key": { "state": "Verified", "source": "ProviderEnv:ANTHROPIC_API_KEY",
+               "fingerprint": "4f2c", "checked_at": "2026-09-01T12:10:00Z" },
+      "models": [ { "id": "claude-opus-5", "usable": true, "group": 1 } ] },
+
+    { "id": "together", "name": "Together",
+      "key": { "state": "Rejected", "source": "ProviderEnv:TOGETHER_API_KEY",
+               "fingerprint": "1d55", "status": 401, "checked_at": "2026-09-01T09:02:00Z" },
+      "models": [ { "id": "llama-4", "usable": false, "reason": "key rejected (401)",
+                    "group": 4 } ] },
+
+    { "id": "mistral", "name": "Mistral",
+      "key": { "state": "Missing" },
+      "models": [ { "id": "mistral-large", "usable": false, "reason": "no key",
+                    "group": 4 } ] }
+  ],
+  "usable_models": 3,
+  "independence_groups": 3,
+  "independence_if_selected": 0.71
+}
+```
+
+`fingerprint` is the **last four characters of `blake3(key)`**, never of the key itself —
+enough to tell two keys apart when the wrong one is in use, useless to anyone who obtains
+it. `source` names which of the three places won, because "I updated my key and nothing
+changed" is almost always a higher-precedence variable still set in the shell.
+
+`independence_if_selected` is returned so the picker can state the cost of a thin panel
+*before* the run rather than leaving it to surface as an unexplained lower confidence
+afterwards. It is computed by the same code path §6.2 uses — not a UI approximation.
+
+### `POST /api/providers/:p/test`
+
+Makes **one minimal request per model** for that provider and writes the result to the
+24-hour verification cache. This is the only endpoint in `serve` besides `POST /api/runs`
+that touches the network or costs anything, and the page labels it as such before the
+click. It is never called on page load.
+
+### Refusal
+
+A key-shaped value under an `api_key` key in any config file fails startup:
+
+```
+error: config.toml:14 sets `api_key`. Arbiter never reads credentials from
+       config files — they get committed and shared. Use one of:
+         export ANTHROPIC_API_KEY=…        (this shell)
+         arbiter keys set anthropic        (OS keychain)
+       Remove the line to continue.
+```
+
+Naming the file and line, and printing the two working alternatives, is the difference
+between a refusal that teaches and one that just blocks.

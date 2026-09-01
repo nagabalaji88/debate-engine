@@ -1,6 +1,6 @@
 # AI Debate & Decision Engine — Architecture Specification
 
-**Version:** 2.8 (frozen for implementation)
+**Version:** 2.9 (frozen for implementation)
 **Status:** approved — implementation in progress
 **Supersedes:** v1.0 (Python · LangGraph · Postgres · FastAPI · WebSocket · React)
 **Companion:** `docs/INTERFACES.md` — concrete trait definitions and protocols
@@ -16,6 +16,7 @@ to disagree with its own formula.
 | Trait signatures, wire protocols, event enum | `docs/INTERFACES.md` | ARCHITECTURE narrates, does not enumerate |
 | Confidence formula | `docs/INTERFACES.md` §14 (struct + invariants) | ARCHITECTURE §6.7 explains and worked-examples it |
 | Storage layout, durability, versions | `ARCHITECTURE.md` §8 | INTERFACES §1 owns the traits and the concurrency protocol |
+| Credentials: resolution, states, redaction | `ARCHITECTURE.md` §11.1 | INTERFACES §25 owns the types and the roster payload |
 
 Four things live **only** in the companion, because they are contracts rather than
 design: the exact confidence weights and the five penalty formulas (§14), the full
@@ -1260,6 +1261,72 @@ the deep target is $1.20 rather than a multiple of the standard one.
 
 ---
 
+### 11.1 Provider credentials
+
+Filed here rather than under configuration because a credential is precisely the thing
+that **authorises spend**, and spend is first-class in this engine. Through v2.8 the spec
+had `doctor` check "keys, reachability" without ever saying where a key comes from — the
+one unspecified input on the whole system diagram. This closes it.
+
+**Resolution order, first match wins, per provider:**
+
+| # | Source | Example |
+|---|---|---|
+| 1 | Arbiter-scoped environment variable | `ARBITER_ANTHROPIC_API_KEY` |
+| 2 | the provider's own conventional variable | `ANTHROPIC_API_KEY` |
+| 3 | OS keychain — Keychain, Secret Service, Credential Manager | `arbiter keys set anthropic` |
+
+Source 2 exists because most people already have it exported; refusing to read it would
+make the tool feel broken for no security gain. Source 1 wins over it so a project can
+scope a different key without disturbing the rest of the shell.
+
+**Config files are never read for a key.** Not `config.toml`, not `./.arbiter`, not a
+plugin's `plugin.toml`. A file that gets committed, shared and pasted into an issue is the
+wrong place for a secret, and "we support it but advise against it" loses that argument in
+practice. A key-shaped value under an `api_key` field **fails the run with an error naming
+the file** — refusing loudly, because ignoring it silently makes the operator think their
+key does not work, and honouring it leaks.
+
+**Three different things get called "valid", and the UI must not confuse them:**
+
+| State | Costs | Means |
+|---|---|---|
+| `Missing` | nothing | no key resolved from any source |
+| `Present` | nothing, offline | a key resolved; nothing has been tried |
+| `Verified` | one minimal request | the provider accepted it for this model |
+| `Rejected` | — | the last attempt returned 401/403; the reason is kept |
+
+A key is per **provider**; authorisation is per **model** — a working Anthropic key does
+not prove access to every Anthropic model. So presence is inherited by every model that
+provider serves, and `Verified`/`Rejected` are recorded per model.
+
+**Verification never happens implicitly.** Nothing probes providers when the CLI starts or
+a page loads: that would fire network calls the operator did not ask for, on every
+invocation, against rate limits. `arbiter keys test` and the UI's *Check* button are the
+only things that probe, and a run itself is the other way to find out.
+
+**Verification results are cached, keyed by a fingerprint, never by the key.** The cache
+row is `(provider, model, blake3(key)[..16], result, checked_at)` with a 24-hour TTL.
+Storing the fingerprint rather than the key means rotating a key invalidates its cached
+result automatically, and the cache is harmless if read.
+
+**Redaction is a write-path rule, not a formatting choice.** Every resolved key value is
+registered with the redactor at `init`, and every event payload, cached response, manifest,
+export and **error string** is scanned for those values before it is written. Errors matter
+most: providers echo request material into error bodies, and an unredacted 401 body is the
+likeliest way a key reaches `~/.arbiter`. A key must never appear in the event log, the
+response cache, the run manifest, an export, or a `serve` response — the store is designed
+to be zipped and emailed.
+
+**What the operator sees when a key is missing.** The model stays listed and is disabled,
+with the fix one action away. Hiding unusable models makes an empty panel look like a
+broken install, and it hides the reason the panel is weaker than it should be. Fewer usable
+providers means fewer independence groups, which lowers the `independence` term and
+therefore the confidence — so the picker says so at selection time rather than letting it
+surface as an unexplained lower number afterwards.
+
+---
+
 ## 12. CLI
 
 ```
@@ -1281,6 +1348,11 @@ arbiter history               [--outcome · --since · --min-confidence]
 arbiter export <run_id>       --format json|markdown
 arbiter plugins list|info
 arbiter providers list|test
+arbiter keys list             which providers have a key, from which source, and its state
+                              (fingerprints only — never the key)
+arbiter keys set <provider>   read from stdin, store in the OS keychain
+arbiter keys test [provider]  one minimal request per model; caches the result for 24h
+arbiter keys rm <provider>    remove the keychain entry
 arbiter serve                 local UI on 127.0.0.1 — a form, a live run, a result
                               [--port 7777] [--open] [--no-token (refused off-loopback)]
 arbiter doctor                preflight: keys, reachability, schema, bounds
@@ -1514,7 +1586,7 @@ measures the script.
 
 | Suite | When | LLM | Contents |
 |---|---|---|---|
-| **CI** | every commit | none — scripted mock | the 33 below |
+| **CI** | every commit | none — scripted mock | the 36 below |
 | **Integration** | nightly, opt-in, budgeted | real providers | `paraphrase_corpus`, `judge_identity_leakage` |
 | **Tuning** | `cargo test --features tuning` | none | the `tuning/` graph corpus, parameter sweeps |
 | **Red-team** | every commit, once written | none — scripted mock | ≥20 adversarial cases from the `argument-v1` gate session (§6.3) |
@@ -1523,7 +1595,7 @@ Red-team cases are CI fixtures in every mechanical sense — scripted mock, zero
 deterministic — but they are listed separately because they are written *against* the
 arithmetic rather than for a pipeline path, and the set only grows: every exploit found
 after release lands here as a fixture rather than as a patch note. `attack_saturation` is
-the first member, written before the session existed. The 33 below are the pipeline
+the first member, written before the session existed. The 36 below are the pipeline
 suite and that count is fixed; the red-team suite has a floor, not a target.
 
 `judge_identity_leakage` sits in Integration deliberately: against a scripted mock,
@@ -1552,6 +1624,9 @@ it produces the recall number `t3_merge_threshold` is tuned against.
 | `projection_rebuild` | replay rebuilds every projection table; result is identical to the pre-crash tables |
 | `serve_localhost_only` | binding a non-loopback address is refused, not warned |
 | `serve_rejects_foreign_origin` | a request with a wrong token, `Host`, or `Origin` is refused before any work |
+| `key_in_config_refused` | an `api_key` value in `config.toml` fails the run and names the file |
+| `key_redaction` | a key echoed in a provider error body never reaches the log, cache, manifest or export |
+| `panel_without_keys` | models with no key are listed, disabled, excluded from the estimate, and lower `independence` |
 | `premise_cycle` | circular derivation → component degraded to Unsupported |
 | `fixpoint_nonconvergence` | oscillating graph hits the cap → deterministic record |
 | `confidence_arithmetic` | every term independently hand-computed; pins the formula |
@@ -1602,7 +1677,7 @@ stays in, as decided, and "optional and isolated" is exactly what makes it separ
 
 | Phase | Contents | Gate to the next |
 |---|---|---|
-| **1.0 — core** | 15-stage pipeline, decision core, SQLite store + blob store, CLI (`run` … `accept`), mock + 2 providers, in-process plugin traits, 31 of the 33 CI fixtures (the two `serve_*` fixtures land with 1.1) | CI green with zero tokens; `paraphrase_corpus` and the tuning sweep run once against real providers to pin `argument-v1` and `t3_merge_threshold` |
+| **1.0 — core** | 15-stage pipeline, decision core, SQLite store + blob store, CLI (`run` … `accept`), mock + 2 providers, in-process plugin traits, 34 of the 36 CI fixtures (the two `serve_*` fixtures land with 1.1) | CI green with zero tokens; `paraphrase_corpus` and the tuning sweep run once against real providers to pin `argument-v1` and `t3_merge_threshold` |
 | **1.1 — minimal UI** | `arbiter serve`: embedded page, five loopback endpoints, SSE stream, the four screens | the loopback security requirements in §17.1 all hold, and `serve_localhost_only` and `serve_rejects_foreign_origin` pass |
 | **1.5 — build & extend** | `arbiter-build` and its own fixture suite, `arbiter build` CLI, WASM plugin host, JSON-RPC host, confinement | — |
 
@@ -1692,6 +1767,19 @@ The implementation is successful when:
 **v2.0** — Rust kernel, pure decision core, NDJSON store, CLI-first. Superseded v1.0
 (Python · LangGraph · Postgres · FastAPI · WebSocket · React).
 
+
+**v2.9** — credentials specified, and the panel picker that needed them.
+
+| # | Change | Worth it because |
+|---|---|---|
+| 1 | §11.1: key resolution order — `ARBITER_<P>_API_KEY` → the provider's own variable → OS keychain | the last unspecified input on the system diagram. `doctor` has checked "keys" since v2.0 without anything defining what it was checking |
+| 2 | Config files are **never** read for a key; a key-shaped value in one **fails the run and names the file** | ignoring it silently makes the operator think their key is broken; honouring it leaks a secret into a file that gets committed and pasted into issues |
+| 3 | Four states — `Missing`, `Present`, `Verified`, `Rejected` — with presence per provider and authorisation per model | "valid" was doing three jobs. A working Anthropic key does not prove access to every Anthropic model |
+| 4 | Verification never happens implicitly; results cached 24h keyed by `blake3(key)[..16]` | probing on startup fires unrequested network calls against rate limits on every invocation. Fingerprinting means rotating a key invalidates its cache for free and the cache is harmless if read |
+| 5 | Redaction is a write-path rule covering **error strings** | providers echo request material into error bodies, and an unredacted 401 is the likeliest path for a key into `~/.arbiter` — a store designed to be zipped and emailed |
+| 6 | Unusable models stay listed and disabled, and the picker states the independence cost | hiding them makes an empty panel look like a broken install and hides why confidence will be lower |
+| 7 | `arbiter keys list\|set\|test\|rm`; `GET /api/providers` for the UI | the UI cannot offer a choice it has no way to ask about |
+| 8 | Three fixtures: `key_in_config_refused`, `key_redaction`, `panel_without_keys` | each of the three is a rule that silently stops holding without a test |
 
 **v2.8** — a minimal UI, and the stated property it costs.
 

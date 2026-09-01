@@ -99,6 +99,13 @@ column, one accent, no dense rails. This is not concept 1–5 with the chrome re
 is a different brief. The five concepts are for someone who lives in the tool. This is
 for someone who wants to ask a question and read an answer.
 
+The panel picker is key-aware (screen 1) and there is a keys screen (screen 5): a model
+with no working key stays **listed and disabled** rather than hidden, because an empty
+panel looks like a broken install and hides why the confidence will be lower. Fewer usable
+providers means fewer independence groups, and the picker says so before the run instead
+of letting it surface as an unexplained number afterwards. Spec: ARCHITECTURE §11.1,
+INTERFACES §25.
+
 Three things it does that a form usually doesn't: it shows the **cost estimate before
 you commit**, it says **"closing this page does not stop the run"**, and the result leads
 with the one live objection rather than burying it under the winner. Spec: ARCHITECTURE
