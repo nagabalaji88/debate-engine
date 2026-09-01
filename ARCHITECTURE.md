@@ -1,6 +1,6 @@
 # AI Debate & Decision Engine — Architecture Specification
 
-**Version:** 2.7 (frozen for implementation)
+**Version:** 2.7.1 (frozen for implementation)
 **Status:** approved — implementation in progress
 **Supersedes:** v1.0 (Python · LangGraph · Postgres · FastAPI · WebSocket · React)
 **Companion:** `docs/INTERFACES.md` — concrete trait definitions and protocols
@@ -808,6 +808,12 @@ not a separate entity, and giving it a table would split one concept across two 
 inherent row order, and a `DecisionRecord` that must reproduce byte-for-byte cannot
 depend on one that happens to hold today.
 
+That ordering is free rather than a sort: `seq INTEGER PRIMARY KEY` is a rowid alias in
+SQLite, so rows are physically stored in `seq` order and replay is a sequential scan.
+`run_id` is a constant within a `run.db` and is carried for portability only — it is not
+part of any index, and a compound `(run_id, seq)` index would cost space to duplicate
+what the primary key already gives.
+
 ### 8.2 Payloads: in the database, with a threshold
 
 Provider responses go **in `run.db`**, not in files beside it. A typical response in the
@@ -827,6 +833,13 @@ write blob → fsync → THEN commit the row
 Never the reverse. A blob with no row is garbage collectable; a row with no blob is
 corruption. `arbiter doctor` reports both — missing blobs as an error, orphaned blobs as
 reclaimable space.
+
+**Collection is lazy and explicit.** Blobs are content-addressed, so an unreferenced hash
+is simply deletable — no reference counting. `arbiter doctor --gc` deletes blobs not named
+by any committed `cache_entries` or `artifacts` row and reports the bytes reclaimed;
+nothing deletes blobs during a run. The one rule that keeps this safe: **a run whose lease
+is live is skipped entirely**, because a blob written and fsynced before its row commits
+is indistinguishable from an orphan and is not one.
 
 ### 8.3 Durability
 
@@ -853,10 +866,39 @@ replay(run_id)     rebuild every projection from events, ORDER BY seq
 verify(run_id)     recompute the chain over events
 ```
 
-Events marked `durable` — anything authorising or recording spend — commit immediately.
-Everything else batches to the stage boundary. A transaction per event would cost an
-fsync per event for no added guarantee, which is the same reasoning the NDJSON design
-used and the same answer.
+The reservation side is the half that is easy to leave implicit and must not be:
+
+```sql
+-- reserve, before the request is dispatched
+BEGIN IMMEDIATE;
+  UPDATE budget SET reserved = reserved + ? WHERE run_id = ?;
+  INSERT INTO provider_calls (…, state='RESERVED', reserved_amount=?);
+  INSERT INTO events (…);   -- BUDGET_RESERVED
+COMMIT;
+
+-- release, on FAILED or on a reservation the run no longer needs
+UPDATE budget SET reserved = reserved - ? WHERE run_id = ?;
+```
+
+**The ledger invariant, checked on every `resume` and by `doctor`:**
+
+```
+budget.reserved  ==  SUM(reserved_amount) over provider_calls in RESERVED | SENT | ACKNOWLEDGED
+```
+
+A mismatch means a reservation leaked or was double-released, and it is the one accounting
+bug that silently shrinks the budget of every later round. `budget_reconciliation`
+asserts it across a kill at each state.
+
+**Durable events commit immediately, and that costs an fsync — deliberately.** Anything
+authorising or recording spend gets its own transaction, because money that survives a
+crash is exactly the guarantee being bought. What batches to the stage boundary is
+everything *else*: a separate transaction per `CLAIM_EXTRACTED` would pay the same fsync
+for a row that replay can regenerate. The bill is bounded and known — four commits per
+provider call (`RESERVED`, `SENT`, `ACKNOWLEDGED`, `COMPLETED`), so ≈112 for the 28-call
+standard profile — and it is dominated by the network round-trips it is interleaved with.
+The absolute latency depends on the disk and is measured on the first real runs rather
+than asserted here.
 
 **What SQLite does not give you.** It cannot make a provider call transactional. A
 request can be accepted and billed and the process die before any commit — the money is
@@ -869,12 +911,20 @@ spend"* is still not claimable in general.
 Recovery needs the classification to be explicit rather than inferred:
 
 ```
-CREATED ─► RESERVED ─► SENT ─► ACKNOWLEDGED ─► COMPLETED
-                        │
-                        ├─► RETRYABLE ──► (back to SENT)
-                        ├─► FAILED
-                        └─► ORPHANED ──► RECOVERED
+RESERVED ──► SENT ──► ACKNOWLEDGED ──► COMPLETED
+    │          │             │
+    │          └──────┬──────┘
+    │                 ├──► RETRYABLE ──► (back to SENT)
+    │                 ├──► FAILED          provably not billed (e.g. a 4xx)
+    │                 └──► ORPHANED ─────► RECOVERED
+    │
+    └──► FAILED                            never dispatched — release the reservation
 ```
+
+The row is created **at `RESERVED`**, in the same transaction as `BUDGET_RESERVED`, and
+never at `SENT`. There is no `CREATED`: a state before the reservation is a value in
+memory, not a row, and a persisted state machine should only name states that survive a
+crash.
 
 | State | Event | Means |
 |---|---|---|
@@ -891,6 +941,21 @@ CREATED ─► RESERVED ─► SENT ─► ACKNOWLEDGED ─► COMPLETED
 duplicate charge on resume, and it is the reason the state is named rather than left as an
 error variant. Orphaned spend is reported, not absorbed.
 
+**The reason the row exists at `RESERVED`** is that it is the only thing separating *"we
+never sent it"* from *"we sent it and cannot prove what happened"*. Without it, every
+incomplete call on resume is indistinguishable and must be assumed orphaned — which
+over-reports orphaned spend and permanently consumes budget that was never charged.
+
+| Last committed state | `resume` classifies it | Budget |
+|---|---|---|
+| `RESERVED` | the request never left the machine → `FAILED` | **release** the reservation |
+| `SENT` | it may have been billed, and there is no id to check | hold; report as orphaned |
+| `ACKNOWLEDGED` | it may have been billed, and there **is** an id | hold; reconcilable against a usage export |
+| `COMPLETED` | nothing to do | already committed |
+
+That table is the whole operational payoff of naming the states, and `crash_midcall`
+asserts the `SENT` row and `crash_before_send` asserts the `RESERVED` one.
+
 ### 8.5 Concurrency, restated
 
 The old claim — *"two concurrent runs never contend"* — is no longer true, and saying so
@@ -900,7 +965,16 @@ matters more than keeping a tidy sentence.
 |---|---|---|
 | `runs/<id>/run.db` | one, for the life of the run | SQLite's own write lease; `run.lock` is deleted |
 | `runs/<id>/blobs/*` | the same single owner | write-then-commit (§8.2) |
-| `history.db` | any process, twice per run | WAL + `busy_timeout`; two short transactions |
+| `history.db` | any process, twice per run | WAL + `busy_timeout` (5,000 ms); two short transactions |
+
+**Checkpointing is scheduled, not left to chance.** SQLite auto-checkpoints at 1,000
+pages, so the WAL does not grow without bound — but that checkpoint fires inside whichever
+commit happens to cross the threshold, which puts an unpredictable stall in the middle of
+a stage, and a long-lived reader can defer it indefinitely. So `run.db` issues
+`PRAGMA wal_checkpoint(PASSIVE)` at each stage boundary, where no transaction is open and
+a pause costs nothing; auto-checkpoint stays enabled as a backstop. `PASSIVE` because it
+must never block on a reader — a checkpoint that waits is worse than one that is skipped
+and retried at the next boundary.
 
 `run.lock` goes away: SQLite already excludes a second writer, and the lock file existed
 to hand-roll that. Owner metadata — pid, boot_id, hostname, started_at — moves into a
@@ -914,8 +988,17 @@ resume` needs, and `doctor` lists them.
 ### 8.6 Copying a run
 
 `cp` is wrong for a WAL database — it can capture a torn copy with the WAL unapplied.
-`arbiter export` uses `VACUUM INTO`, which writes a consistent single-file snapshot, and
-copies the blob directory alongside it.
+`arbiter export` is therefore **two steps, in this order**:
+
+```
+1. VACUUM INTO <dest>/run.db     consistent single-file snapshot; no -wal, no -shm
+2. copy blobs/                   plain recursive copy of immutable, content-addressed files
+```
+
+`VACUUM INTO` covers the database and nothing else. Blobs are immutable once written, so
+copying them second is safe: any blob referenced by the snapshot already existed when the
+snapshot was taken. Doing it in the other order can copy a blob directory that is missing
+one written after the copy began but referenced by the snapshot.
 
 ### 8.7 Schema evolution
 
@@ -925,8 +1008,10 @@ The store now has a schema, which is a new obligation rather than a free win:
 migrations/0001_initial.sql · 0002_… · applied in order, recorded in schema_metadata
 ```
 
-`schema_metadata` carries `schema_version`, `engine_version` and `created_at`. Opening a
-run whose `schema_version` is newer than the binary is refused rather than guessed at.
+`schema_metadata` carries `db_schema_version`, `engine_version` and `created_at` —
+**not** `schema_version`, which already means the event-envelope version in §9. Reusing
+the name across two axes is how a migration ends up gated on an event version. Opening a
+run whose `db_schema_version` is newer than the binary is refused rather than guessed at.
 
 There are now **five independent version axes**, and they must not be confused:
 
@@ -971,6 +1056,15 @@ fields are the same in both. The row is the record; the line is the interchange.
 }
 ```
 
+`LOG_REPAIRED` is **gone**, replaced by `CHAIN_BREAK_DETECTED`. It existed to record a
+torn NDJSON tail being truncated; under SQLite a transaction either committed or did not,
+so there is no tail to repair. What remains possible is a chain break — someone edited the
+database directly, or storage corrupted a row — and that is *not* repairable: truncating a
+relational table would destroy the projections derived from it. So the event records
+detection and the run is marked unverifiable; it is never silently patched. (Renaming a
+variant requires a `schema_version` bump per §9; `schema_version` 1 has not shipped, so
+this one is free.)
+
 `sequence` is the primary key and the only ordering that means anything;
 `previous_event_hash` chains to `sequence - 1`. SQLite guarantees the row is there or is
 not; the chain guarantees nobody altered it afterwards. The two answer different
@@ -994,7 +1088,7 @@ Debate      PANEL_RESOLVED · POSITION_STARTED · POSITION_COMPLETED
             ROUND_STARTED · ROUND_COMPLETED · CONTROLLER_DECIDED
 Decision    JUDGE_SCORED · DECISION_SYNTHESIZED
             DECISION_ACCEPTED · DECISION_OVERRIDDEN
-Integrity   PREMISE_CYCLE_DETECTED · FIXPOINT_NOT_CONVERGED · LOG_REPAIRED
+Integrity   PREMISE_CYCLE_DETECTED · FIXPOINT_NOT_CONVERGED · CHAIN_BREAK_DETECTED
 ```
 
 The authoritative enum lives in `docs/INTERFACES.md` §13. Consumers detect loss by
@@ -1290,7 +1384,7 @@ measures the script.
 
 | Suite | When | LLM | Contents |
 |---|---|---|---|
-| **CI** | every commit | none — scripted mock | the 29 below |
+| **CI** | every commit | none — scripted mock | the 31 below |
 | **Integration** | nightly, opt-in, budgeted | real providers | `paraphrase_corpus`, `judge_identity_leakage` |
 | **Tuning** | `cargo test --features tuning` | none | the `tuning/` graph corpus, parameter sweeps |
 | **Red-team** | every commit, once written | none — scripted mock | ≥20 adversarial cases from the `argument-v1` gate session (§6.3) |
@@ -1299,7 +1393,7 @@ Red-team cases are CI fixtures in every mechanical sense — scripted mock, zero
 deterministic — but they are listed separately because they are written *against* the
 arithmetic rather than for a pipeline path, and the set only grows: every exploit found
 after release lands here as a fixture rather than as a patch note. `attack_saturation` is
-the first member, written before the session existed. The 29 below are the pipeline
+the first member, written before the session existed. The 31 below are the pipeline
 suite and that count is fixed; the red-team suite has a floor, not a target.
 
 `judge_identity_leakage` sits in Integration deliberately: against a scripted mock,
@@ -1323,6 +1417,8 @@ it produces the recall number `t3_merge_threshold` is tuned against.
 | `adaptive_stop` | controller stops early on no-new-information |
 | `crash_midcall` | `CALL_STARTED` with no completion → reopened as `ORPHANED`, never `FAILED` |
 | `interrupted_commit` | process killed mid-transaction → the partial write is not there on reopen |
+| `crash_before_send` | killed between `RESERVED` and `SENT` → `FAILED`, reservation released, not orphaned |
+| `budget_reconciliation` | `budget.reserved` matches the sum over non-terminal calls after a kill at each state |
 | `projection_rebuild` | replay rebuilds every projection table; result is identical to the pre-crash tables |
 | `premise_cycle` | circular derivation → component degraded to Unsupported |
 | `fixpoint_nonconvergence` | oscillating graph hits the cap → deterministic record |
@@ -1463,6 +1559,27 @@ The implementation is successful when:
 **v2.0** — Rust kernel, pure decision core, NDJSON store, CLI-first. Superseded v1.0
 (Python · LangGraph · Postgres · FastAPI · WebSocket · React).
 
+
+**v2.7.1** — review of the SQLite design; twelve findings, all of them real. Three were
+blockers.
+
+| # | Change | Worth it because |
+|---|---|---|
+| 1 | The `provider_calls` row is created at `RESERVED`, not `SENT`; `CREATED` is deleted | §8.4 named `RESERVED` but INTERFACES §5 created the row at `SENT`, making it dead. Without it, resume cannot tell "never dispatched" from "sent, outcome unknown", and marks every incomplete call orphaned — over-reporting spend and permanently eating budget |
+| 2 | `schema_metadata` carries `db_schema_version`, not `schema_version` | `schema_version` already means the event envelope in §9; one name across two axes gates migrations on the wrong number |
+| 3 | Lease acquisition is a compare-and-swap on `lease_epoch`, and `create` ≠ `reopen` | "steal if the pid is dead" races: two processes both see it dead and both write. SQLite serialises the writes but not the decision |
+| 4 | The durable-event fsync is justified rather than waved away | the old text argued a transaction per event buys nothing, immediately after requiring one for spend. It buys precisely the guarantee spend needs; ≈112 commits on the standard profile |
+| 5 | Reservation SQL and the ledger invariant added | only the commit path was shown. A crash between reserve and commit leaks the reservation unless `budget.reserved` is reconciled against non-terminal calls |
+| 6 | `seq INTEGER PRIMARY KEY` stated, and `(run_id, seq)` explicitly *not* indexed | ordering is free on a rowid alias; `run_id` is constant inside a `run.db`, so a compound index would duplicate the primary key |
+| 7 | Blob GC defined: lazy, `doctor --gc`, live runs skipped | orphans accumulate after every crash. Skipping live runs matters — a blob fsynced before its row commits looks exactly like an orphan |
+| 8 | `wal_checkpoint(PASSIVE)` at stage boundaries | auto-checkpoint bounds WAL size but fires mid-stage and can be deferred by a reader; `PASSIVE` because a checkpoint that blocks is worse than one retried later |
+| 9 | Cache recovery keyed on the full `(provider, model, params, prompt_hash)` tuple | INTERFACES §5 said "cache hit on `prompt_hash`" — the same prompt to two models would collide |
+| 10 | `LOG_REPAIRED` → `CHAIN_BREAK_DETECTED` | it recorded a torn-tail truncation, which cannot occur under transactions. A chain break is real but *not* repairable — truncating would destroy the projections — so the event records detection and the run is marked unverifiable |
+| 11 | `busy_timeout` = 5,000 ms | stated rather than left to the caller |
+| 12 | Export documented as two ordered steps | `VACUUM INTO` covers the database only; blobs must be copied second, since a blob referenced by the snapshot already existed when it was taken |
+
+Three fixtures added: `crash_before_send`, `budget_reconciliation`, and the earlier
+`interrupted_commit` gains a sibling. CI is 31.
 
 **v2.7** — storage backend changed from NDJSON to SQLite, before implementation.
 

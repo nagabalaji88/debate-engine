@@ -1,6 +1,6 @@
 # Arbiter — Interface Definitions
 
-**Companion to** `ARCHITECTURE.md` v2.7. Where the spec says *what*, this says *how*.
+**Companion to** `ARCHITECTURE.md` v2.7.1. Where the spec says *what*, this says *how*.
 Every item here closes a numbered finding from the v2.0 review.
 
 ---
@@ -62,9 +62,34 @@ without lying, it is still leaking.
 **Two writers to one run.** `create` and `reopen` fail with `AlreadyOpen` rather than
 blocking, so a second `arbiter run` on the same id reports it instead of hanging behind
 `busy_timeout`. Owner metadata — pid, boot_id, hostname, started_at, engine_version —
-lives in the `run` table and is updated on open, so `doctor` can still name the holder.
-A stale lease is one whose recorded pid is dead; there is no mtime heuristic any more
-because there is no lock file to age.
+lives in the `run` table, so `doctor` can still name the holder.
+
+**Liveness is not a lease.** "Steal it if the recorded pid is dead" is a race: two
+processes can both read the row, both conclude the owner is dead, and both write. SQLite
+serialises the *writes*, not the *decision* — the second silently overwrites the first and
+two engines then believe they own the run. The liveness check therefore only decides
+whether a steal is *permitted*; a monotonic `lease_epoch` decides who *wins*:
+
+```sql
+-- create: the run must not exist. The primary key does the work; a second
+-- create loses with a constraint violation, mapped to AlreadyOpen.
+INSERT INTO run (run_id, owner_pid, boot_id, hostname, started_at,
+                 engine_version, lease_epoch)
+VALUES (?, ?, ?, ?, ?, ?, 1);
+
+-- reopen: read (owner_pid, boot_id, lease_epoch), decide the owner is gone,
+-- then compare-and-swap against the epoch that was read.
+UPDATE run
+   SET owner_pid = ?, boot_id = ?, hostname = ?, started_at = ?, lease_epoch = lease_epoch + 1
+ WHERE run_id = ? AND lease_epoch = ?;      -- the epoch observed a moment ago
+-- changes() == 1 → the lease is ours. changes() == 0 → someone else took it: AlreadyOpen.
+```
+
+An owner is gone when its `boot_id` differs from the current boot — the recorded pid
+refers to a previous boot and means nothing — or when the `boot_id` matches and the pid is
+not alive. Both are the *precondition*; the epoch CAS is the *decision*, and it is what
+makes concurrent `resume` safe. There is no mtime heuristic any more, because there is no
+lock file to age.
 
 **Readers.** A reader opens read-only in WAL mode: it never blocks the writer, never
 blocks on the writer, and by construction never sees a partially committed stage. The
@@ -338,16 +363,27 @@ same debate, model names swapped, scores compared.
 **Write order around every provider call:**
 
 ```
-1. TX: CALL_STARTED{call_id, prompt_hash, reservation_id, estimate}   commit  → SENT
-       + provider_calls row, state SENT
+0. TX: BUDGET_RESERVED{reservation_id, estimate}
+       + INSERT provider_calls (state RESERVED, reserved_amount)
+       + budget.reserved += estimate                                  commit  → RESERVED
+1. TX: CALL_STARTED{call_id, prompt_hash, reservation_id, estimate}
+       + UPDATE provider_calls SET state = SENT                       commit  → SENT
 2. …provider call; response headers arrive…
-3. TX: CALL_REQUEST_ID{call_id, request_id}                           commit  → ACKNOWLEDGED
+3. TX: CALL_REQUEST_ID{call_id, request_id}
+       + UPDATE provider_calls SET state = ACKNOWLEDGED               commit  → ACKNOWLEDGED
 4. …body received into memory (or the blob store above blob_threshold, fsynced)…
 5. TX: CALL_COMPLETED{call_id, response_hash, actual_cost}
        + cache_entries row
-       + budget: reserved → committed
-       + provider_calls state COMPLETED                               commit  → COMPLETED
+       + budget: reserved -= estimate, committed += actual
+       + UPDATE provider_calls SET state = COMPLETED                  commit  → COMPLETED
 ```
+
+**Step 0 is not bookkeeping.** It is the only record that distinguishes a call that never
+left the machine from one that did. A crash between 0 and 1 resumes as `FAILED` with the
+reservation released; a crash after 1 resumes as `ORPHANED` with the reservation held.
+Create the row at step 1 instead and the two collapse: every incomplete call must then be
+assumed billed, which over-reports orphaned spend and permanently consumes budget the
+provider never charged for. `crash_before_send` asserts the first case.
 
 Steps 1 and 3 are **separate committed transactions**, not an optimisation to collapse.
 A crash between them is the whole reason `CALL_ORPHANED` exists: the request left the
@@ -365,7 +401,9 @@ step 3 leaves a call that may have been billed with no id to reconcile it by, wh
 **On `resume`, for every `CALL_STARTED` with no `CALL_COMPLETED`:**
 
 ```
-cache hit on prompt_hash  → emit CALL_RECOVERED, use the response, commit actual cost
+cache hit on the full key → emit CALL_RECOVERED, use the response, commit actual cost
+  (provider, model, params, prompt_hash) — never prompt_hash alone: the same
+  prompt sent to two models has one prompt_hash and two different answers
 cache miss                → release the reservation, emit CALL_ORPHANED, retry
                             (bounded by max_retries)
 ```
@@ -722,7 +760,7 @@ pub enum EventType {
     JudgeScored, DecisionSynthesized, DecisionAccepted, DecisionOverridden,
 
     // Integrity
-    PremiseCycleDetected, FixpointNotConverged, LogRepaired,
+    PremiseCycleDetected, FixpointNotConverged, ChainBreakDetected,
 }
 ```
 
