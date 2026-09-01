@@ -16,6 +16,7 @@ to disagree with its own formula.
 | Trait signatures, wire protocols, event enum | `docs/INTERFACES.md` | ARCHITECTURE narrates, does not enumerate |
 | Confidence formula | `docs/INTERFACES.md` §14 (struct + invariants) | ARCHITECTURE §6.7 explains and worked-examples it |
 | Storage layout, durability, versions | `ARCHITECTURE.md` §8 | INTERFACES §1 owns the traits and the concurrency protocol |
+| Build sequence, task order, acceptance | `IMPLEMENTATION_PLAN.md` | neither spec file sequences work; the plan never overrides either |
 | Credentials: resolution, states, redaction | `ARCHITECTURE.md` §11.1 | INTERFACES §25 owns the types and the roster payload |
 
 Four things live **only** in the companion, because they are contracts rather than

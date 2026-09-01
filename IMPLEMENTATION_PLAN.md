@@ -1,0 +1,980 @@
+# Arbiter — Implementation Plan
+
+**Target spec:** `ARCHITECTURE.md` v2.9 · `docs/INTERFACES.md` v2.9
+**Audience:** an autonomous coding agent (any capable LLM) executing tasks in order.
+**Status of this document:** executable. Every task has a command that decides whether it is done.
+
+---
+
+## 0. How to execute this plan
+
+### 0.1 Authority order
+
+When two sources disagree, the higher one wins. Do not resolve a conflict by picking
+the more convenient statement.
+
+| Rank | Source | Notes |
+|---|---|---|
+| 1 | `ARCHITECTURE.md` | pipeline, decision math, scope, criteria, fixture list |
+| 2 | `docs/INTERFACES.md` | trait signatures, wire protocols, event enum, schemas |
+| 3 | This plan | sequencing, file layout, acceptance criteria |
+| 4 | Existing code | it is at the v2.0 baseline and is *behind* the spec — see §1.2 |
+
+If this plan and the spec disagree, **the spec wins and this plan has a bug**. Record it
+in `PLAN_DEVIATIONS.md` (create it), then proceed per the spec.
+
+### 0.2 Rules that hold for every task
+
+1. **Do not invent policy.** Every threshold, weight, cap and rate is named in the spec.
+   If you cannot find one, it is a spec gap: write it to `PLAN_DEVIATIONS.md`, pick the
+   most conservative reading, mark the constant `provisional = true`, and continue.
+2. **Do not widen scope.** A task lists the files it may touch. Touching others needs a
+   line in the commit body saying why.
+3. **No `unwrap()` or `expect()` outside tests.** Errors are typed and propagated.
+4. **No `panic!` on external input.** Malformed provider output, corrupt rows and bad
+   config are handled, not asserted away.
+5. **Determinism is a hard requirement in `arbiter-core`.** No clock, no RNG, no IO, no
+   async, no float-order dependence. Iterate `BTreeMap`/`BTreeSet`, never `HashMap`.
+6. **Floats are compared with a tolerance**, never `==`. Use `1e-9` unless the spec names
+   another. `assert!((a - b).abs() < 1e-9)`.
+7. **Every public item gets a doc comment** saying *why*, not *what*. The signature says what.
+8. **Commit per task**, message `<task-id>: <what changed>`, body explaining the *why* and
+   any deviation. Never squash two tasks into one commit.
+
+### 0.3 Definition of done, per task
+
+A task is done when **all** of these hold:
+
+```bash
+cargo fmt --all -- --check      # formatted
+cargo clippy --all-targets --all-features -- -D warnings   # no warnings
+cargo test --workspace          # all tests pass
+```
+
+plus the task's own **Acceptance** command. If any fail, the task is not done. Do not
+proceed to a dependent task with a red suite.
+
+### 0.4 How to handle a blocked task
+
+Do not guess, and do not skip silently. Write the blocker to `PLAN_DEVIATIONS.md` with:
+the task id, what you needed, where you looked, and the two or three readings you can see.
+Then take the **most conservative** one — the reading that spends less money, keeps more
+evidence, or refuses rather than proceeds — and mark the code `// PROVISIONAL: <task-id>`.
+
+### 0.5 The one open decision
+
+**`ARCHITECTURE.md` §5 draws the round loop but never names its re-entry point.**
+
+Until a human decides, implement the loop as re-entering at **`options.cluster`**, because
+§11 states attachment re-runs each round and the loop cost then reconciles with both the
+standard ($0.480) and deep (~$0.90) cost targets. Mark it:
+
+```rust
+// PROVISIONAL: loop re-entry point. ARCHITECTURE.md §5 does not name it.
+// Following §11 (attachment re-runs each round). See PLAN_DEVIATIONS.md.
+```
+
+Everything else in the spec is decided. Do not treat other gaps as open without checking.
+
+### 0.6 What "the spec says" means for numbers
+
+These are load-bearing and must appear in code as named constants, not literals:
+
+| Constant | Value | Spec |
+|---|---|---|
+| fixpoint damping λ | 0.50 | §6.3 |
+| support weight α | 0.25 | §6.3 |
+| attack weight β | 0.60 | §6.3 |
+| qualify weight γ | 0.15 | §6.3 |
+| attack saturation cap | 1.5 | §6.3 |
+| support saturation cap | 2.0 | §6.3 |
+| confidence weights | 0.35 mass · 0.30 margin · 0.35 judge | §6.7 |
+| penalties | 0.25 unresolved · 0.15 assumption · 0.10 truncation · 0.05 convergence · 0.20 dispersion | §6.7 |
+| dispersion threshold | 0.15, inactive when `judge_count == 1` | §6.7 |
+| `option_floor` | 0.20 | §6.6 |
+| τ_gap | 0.15 | §6.6 |
+| `converged_margin_factor` | 1.5 | §5.5 |
+| `min_new_claims` | 2 | §5.5 |
+| `min_standing_delta` | 0.05 | §5.5 |
+| `budget_headroom` | 0.05 | §5 bounds |
+| `repair_budget_fraction` | 0.15, **per round** | §5.1 |
+| `blob_threshold` | 128 KB | §8.2 |
+| `busy_timeout` | 5000 ms | §8.5 |
+| verification cache TTL | 24 h | §11.1 |
+
+All ship `provisional = true` until the tuning sweep **and** the red-team session pass (§6.3).
+
+---
+
+## 1. Starting state — verified, not assumed
+
+### 1.1 What exists
+
+Re-verify before starting; do not trust this table if the commands disagree.
+
+```bash
+git ls-files | grep -c '^crates/'        # 10
+find crates -name '*.rs' | xargs wc -l | tail -1   # 582 total
+cargo test --workspace 2>&1 | grep 'test result'   # 6 passed
+```
+
+| File | Holds | Complete? |
+|---|---|---|
+| `crates/arbiter-core/src/ids.rs` | `RunId`, `ClaimId`, `ModelId`, … | partial |
+| `crates/arbiter-core/src/claim.rs` | `EvidenceKind`, `Grounding`, `ClaimLifecycle`, `ClaimStanding`, `ClaimMember`, `CanonicalClaim` | yes for v2.0 |
+| `crates/arbiter-core/src/relation.rs` | `RelationKind`, `Relation` | yes |
+| `crates/arbiter-core/src/judge.rs` | `Scorecard` + rubric weights | yes |
+| `crates/arbiter-core/src/option.rs` | `DecisionOption`, `OptionScore` | v2.0 shape — **needs rework**, see C4 |
+| `crates/arbiter-core/src/config.rs` | `DecisionConfig`, `Weights`, `GraphParams`, `Thresholds`, `ConfidenceWeights` | partial |
+| `crates/arbiter-core/src/decision/evidence.rs` | `E(c)` and its 5 factors | yes, 5 tests |
+| `crates/arbiter-core/src/decision/mod.rs` | module wiring only | stub |
+
+### 1.2 What the existing code does **not** have
+
+Verified by `grep`; all of these are v2.1–v2.9 additions the code predates:
+
+```
+fixpoint            standing classification   option scoring    outcome classification
+confidence          change triggers           correlation_group attack_cap / support_cap
+dispersion          policy_version            OptionVersion     supersedes
+AttachmentMatrix    provenance gates          prompt packs      everything in arbiter-*
+```
+
+**Do not assume any file is current.** Each core task below states whether it extends an
+existing file or creates one, and what to change in the existing one.
+
+### 1.3 Crates to create
+
+`arbiter-core` exists. These do not:
+
+```
+arbiter-store       arbiter-kernel      arbiter-providers
+arbiter-plugin      arbiter-cli         arbiter-fixtures     arbiter-build
+```
+
+Dependency rule, enforced by CI in task X2: `core` depends on nothing internal ·
+`kernel` depends on `core` · everything else depends on `kernel` · nothing depends on `cli`.
+
+---
+
+## 2. Task graph
+
+Execute top to bottom. A task may start when every dependency is **done** per §0.3.
+
+| ID | Task | Depends on | Crate |
+|---|---|---|---|
+| **X1** | Workspace skeleton, 7 new crates, CI | — | workspace |
+| **X2** | Dependency-rule test | X1 | workspace |
+| **C1** | Bring `arbiter-core` types to v2.9 | X1 | core |
+| **C2** | Argumentation fixpoint | C1 | core |
+| **C3** | Standing classification | C2 | core |
+| **C4** | Options: identity, versions, attachment matrix, scoring | C1 | core |
+| **C5** | Outcome classification | C3, C4 | core |
+| **C6** | Confidence: 3 dimensions − 5 penalties | C5 | core |
+| **C7** | Counterfactual change triggers | C6 | core |
+| **C8** | `DecisionRecord` + `explain --json` payload | C6, C7 | core |
+| **S1** | SQLite schema + migrations | X1 | store |
+| **S2** | `RunStore` traits + lease CAS | S1 | store |
+| **S3** | Event append, hash chain, `verify_chain` | S2 | store |
+| **S4** | Projections + rebuild-from-events | S3, C8 | store |
+| **S5** | Blob store above threshold | S3 | store |
+| **S6** | `history.db` catalogue + `reindex` | S3 | store |
+| **K1** | Budget ledger + reservation protocol | S3 | kernel |
+| **K2** | Provider-call state machine + recovery | K1, S5 | kernel |
+| **K3** | StageGraph + checkpointing | S4, K2 | kernel |
+| **K4** | Bounds, headroom, per-round budget sizing | K1 | kernel |
+| **K5** | Response cache | S5, K1 | kernel |
+| **P1** | `Provider` trait + capabilities | X1 | providers |
+| **P2** | Mock provider (scriptable) | P1 | providers |
+| **P3** | Credential resolution + redaction | P1 | providers |
+| **P4** | Anthropic + OpenAI-compatible adapters | P3, K5 | providers |
+| **G1** | Prompt packs | S1 | kernel |
+| **G2** | Stages 1–5: init … claims.normalize | K3, P2, G1 | kernel |
+| **G3** | `options.cluster` + attachment | G2, C4 | kernel |
+| **G4** | `relations.analyze` + premise cycles | G3 | kernel |
+| **G5** | `disputes.rank` + `challenge.plan` | G4, K4 | kernel |
+| **G6** | `challenge.run` + `rebuttal.run` | G5 | kernel |
+| **G7** | `controller.decide` + the round loop | G6 | kernel |
+| **G8** | `judge.evaluate` | G7 | kernel |
+| **G9** | `decision.synthesize` | G8, C8 | kernel |
+| **L1** | CLI skeleton + `run` + `--stream` | G9 | cli |
+| **L2** | `show`, `explain`, `claims`, `history` | L1, S6 | cli |
+| **L3** | `resume`, `replay` | L1, K2 | cli |
+| **L4** | `accept`, `keys`, `providers`, `doctor`, `reindex` | L2, P3 | cli |
+| **F1** | Fixture harness | P2, L1 | fixtures |
+| **F2** | The 36 CI fixtures | F1, all G, all C | fixtures |
+| **U1** | `arbiter serve`: server, admission, embedding | L4, F2 | cli |
+| **U2** | UI screen 1 — New run | U1 | cli |
+| **U3** | UI screen 2 — Running | U2 | cli |
+| **U4** | UI screen 3 — Result | U2 | cli |
+| **U5** | UI screen 4 — History | U2 | cli |
+| **U6** | UI screen 5 — Keys | U2, P3 | cli |
+| **U7** | UI cross-cutting: states, a11y, fixtures | U2–U6 | cli |
+
+**Milestone 1.0** = X1–F2 green. **Milestone 1.1** = U1–U7 green.
+Build Studio and plugin hosts are **1.5** and are out of this plan.
+
+---
+
+## 3. Tasks — foundation
+
+### X1 · Workspace skeleton
+
+**Files:** `Cargo.toml`, `crates/arbiter-{store,kernel,providers,plugin,cli,fixtures,build}/`
+**Spec:** §4.1
+
+Create seven crates with `lib.rs` containing only `#![forbid(unsafe_code)]` and a doc
+comment naming the crate's one job. Wire `workspace.dependencies`: add `rusqlite`
+(feature `bundled`), `tokio`, `reqwest`, `clap`, `thiserror`, `tracing`.
+`arbiter-cli` is the only `[[bin]]`, named `arbiter`.
+
+Add `.github/workflows/ci.yml` running fmt, clippy `-D warnings`, and `cargo test --workspace`.
+
+**Acceptance**
+```bash
+cargo build --workspace && cargo test --workspace
+test "$(cargo metadata --no-deps --format-version 1 | grep -o '"name":"arbiter-[a-z]*"' | wc -l)" = 8
+```
+
+**Do not** add a dependency not named in §16. No `anyhow` in library crates — errors are
+typed with `thiserror`; `anyhow` is allowed in `arbiter-cli` only.
+
+---
+
+### X2 · Dependency-rule test
+
+**Files:** `tests/dependency_rule.rs`
+**Spec:** §4.1
+
+A test that parses `cargo metadata` and asserts the four rules in §1.3. It must fail if
+someone adds `arbiter-store` to `arbiter-core`'s dependencies.
+
+**Acceptance**
+```bash
+cargo test --test dependency_rule
+# then prove it bites:
+# temporarily add arbiter-store to arbiter-core deps -> test must FAIL -> revert
+```
+
+---
+
+### C1 · Core types to v2.9
+
+**Files:** extend `claim.rs`, `ids.rs`, `config.rs`; create `policy.rs`, `provenance.rs`
+**Spec:** §6.1, §6.2, §6.4, §11.1, INTERFACES §13
+
+Existing files are at the v2.0 baseline. Add, without breaking the 6 passing tests:
+
+- `ids.rs`: `OptionId` (**cluster identity, NOT a hash of text**), `OptionVersion`
+  (`blake3` of canonical text), `ReservationId`, `CallId`, `Sequence`, `PolicyVersion`.
+- `claim.rs`: `correlation_group: GroupId` on `ClaimMember`; `supersedes: Option<ClaimId>`.
+- `policy.rs`: `PolicyVersion("argument-v1")`, every constant from §0.6 as a named field,
+  each carrying `provisional: bool`.
+- `provenance.rs`: `ProvenanceChain` and the five gates — `Unattributed`,
+  `OrphanInference`, `ChainTooDeep`, `CitesDefeatedClaim`, `TooMuchInvention`.
+- `config.rs`: add `option_floor`, `tau_gap`, `tau_dissent`, `converged_margin_factor`,
+  `min_new_claims`, `min_standing_delta`, `budget_headroom`, `repair_budget_fraction`,
+  `blob_threshold`.
+
+**Acceptance**
+```bash
+cargo test -p arbiter-core
+cargo test -p arbiter-core policy::tests::every_constant_is_provisional_before_gate
+```
+A test must assert `0.35 + 0.30 + 0.35` sums to 1.0 **within 1e-9** — not `== 1.0`, which
+is false in f64.
+
+**Do not** make `OptionId` a hash of option text. That was the v2.5 bug: rewording a
+recommendation minted a new id and orphaned every attachment cell.
+
+---
+
+### C2 · Argumentation fixpoint
+
+**Files:** `crates/arbiter-core/src/decision/fixpoint.rs`
+**Spec:** §6.3
+
+Damped Jacobi iteration to a fixpoint over the claim graph.
+
+```rust
+pub struct FixpointResult {
+    pub standing: BTreeMap<ClaimId, f64>,
+    pub iterations: u32,
+    pub converged: bool,           // false -> FIXPOINT_NOT_CONVERGED + 0.05 penalty
+    pub saturated: BTreeSet<ClaimId>,
+}
+pub fn solve(graph: &ClaimGraph, evidence: &BTreeMap<ClaimId, f64>,
+             p: &Policy) -> FixpointResult;
+```
+
+Per iteration, for each claim: `support = min(Σ α·standing(s), support_cap)`,
+`attack = min(Σ β·standing(a), attack_cap)`, `qualify = Σ γ·standing(q)`, then
+`next = clamp01(evidence + support − attack − qualify)` damped by λ against the previous
+value. Stop when max delta < `epsilon` or at `max_iterations`; record which.
+
+**Acceptance** — these behaviours, each its own test:
+```
+one strong attacker leaves a fact contested, not dead
+two strong attackers kill it
+ten weak attackers cannot outweigh one strong refutation   (attack_cap)
+an oscillating graph terminates and is deterministic
+iteration order does not change the result (BTreeMap, not HashMap)
+```
+
+---
+
+### C3 · Standing classification
+
+**Files:** `decision/standing.rs` · **Spec:** §6.4
+
+`Defeated` (< 0.15 or Withdrawn/Rejected) · `Disputed` (≥1 live attacker ≥ 0.30) ·
+`Unresolved` (Unverified/Unsupported, never resolved) · `Agreed` (≥ 0.50, no live attacker).
+
+`Defeated` is **terminal per version**; there is no `Revived`. A later version of the same
+claim is a new version, and the gate resolves final standing (INTERFACES §14).
+
+**Acceptance** `cargo test -p arbiter-core standing::` — one test per class plus a test
+that the four are evaluated in the spec's order.
+
+---
+
+### C4 · Options, versions, attachment, scoring
+
+**Files:** rework `option.rs`; create `decision/attachment.rs`
+**Spec:** §5.3, §6.5, INTERFACES §20
+
+`OptionId` is the **cluster's identity**, stable across rewording. `option_version` is the
+text hash. `supersedes` carries lineage. The attachment matrix is
+`(OptionId, ClaimId) -> Attachment { Supports(f64) | Opposes(f64) | None }`.
+
+`raw = Σ standing(supporting) − 0.5 · Σ standing(opposing)`, normalised to `share ∈ [0,1]`.
+
+**Model vote share is not an input at any point.** A test must assert this: a graph where
+4 models back A and 1 backs B, but B's claims carry the evidence, must score B higher.
+
+**Acceptance**
+```
+rewording a recommendation keeps OptionId and mints a new option_version
+attachment cells survive a reword (the v2.5 regression test)
+model votes do not affect score
+shares sum to 1.0 within 1e-9
+```
+
+---
+
+### C5 · Outcome classification
+
+**Files:** `decision/outcome.rs` · **Spec:** §6.6
+
+Evaluated **in order**: `INSUFFICIENT_EVIDENCE` → `SPLIT_DECISION` → `CONSENSUS` →
+`MAJORITY_WITH_DISSENT`. `option_floor` (0.20) is required in rules 1–3.
+
+**Acceptance** — the latent bug from §6.6 must be covered:
+```
+score(A)=0.11, score(B)=0.08  ->  INSUFFICIENT_EVIDENCE, never SPLIT_DECISION
+```
+
+---
+
+### C6 · Confidence
+
+**Files:** `decision/confidence.rs` · **Spec:** §6.7, INTERFACES §14
+
+Three dimensions minus **five** penalties. `dispersion` is inactive when `judge_count == 1`.
+
+**Acceptance** — pin the spec's worked example exactly:
+```
+base      = 0.35*0.88 + 0.30*0.81 + 0.35*0.91 = 0.8695
+penalties = 0.25*0.08 = 0.0200 ; 0.15*0.07 = 0.0105
+total     = 0.8390        (assert within 1e-9)
+Σ contributions == total within 1e-9
+```
+and the dispersion table from INTERFACES §14: judges 0.85/0.75 → penalty **0**;
+0.90/0.50 → 0.010; 1.00/0.00 → 0.070 (the two-judge maximum).
+
+---
+
+### C7 · Change triggers · C8 · DecisionRecord
+
+**Files:** `decision/triggers.rs`, `decision/record.rs` · **Spec:** §6.8, §6.9, INTERFACES §22
+
+C7: for each unresolved claim, flip it, re-run the fixpoint, report `margin_before`,
+`margin_after` and whether the winner changes.
+
+C8: `DecisionRecord` carrying `policy_version`, and the `explain --json` payload of
+INTERFACES §22 — **including `dispersion`**, whose absence was a v2.9 finding.
+
+**Acceptance**
+```bash
+cargo test -p arbiter-core record::tests::explain_json_matches_schema_v1
+cargo test -p arbiter-core record::tests::contributions_sum_to_total
+cargo test -p arbiter-core record::tests::penalties_array_has_five_entries
+```
+
+---
+
+## 4. Tasks — store
+
+### S1 · Schema and migrations
+
+**Files:** `arbiter-store/migrations/0001_initial.sql`, `src/schema.rs`
+**Spec:** §8.1, §8.5, §8.7
+
+`run.db`: `events` (**`seq INTEGER PRIMARY KEY`** — rowid alias, so `ORDER BY seq` is a
+scan not a sort), plus the projection tables of §8.1, plus `schema_metadata`.
+`history.db`: `run_catalog` exactly as §8.5 writes it, with both indexes.
+
+`schema_metadata` carries **`db_schema_version`**, never `schema_version` — that name
+already means the event envelope (§9).
+
+**Do not** create a compound `(run_id, seq)` index: `run_id` is constant inside a `run.db`
+and it would duplicate the primary key.
+
+**Acceptance**
+```bash
+cargo test -p arbiter-store schema::tests::seq_is_rowid_alias
+cargo test -p arbiter-store schema::tests::opening_a_newer_db_schema_is_refused
+```
+
+---
+
+### S2 · Traits and the lease
+
+**Files:** `src/lib.rs`, `src/lease.rs` · **Spec:** INTERFACES §1
+
+Implement `RunStore` / `RunWriter` / `Tx` / `RunReader` **exactly as INTERFACES §1 writes
+them**. No signature may name a directory, a lock, a flush or a torn tail.
+
+Lease acquisition is a **compare-and-swap on `lease_epoch`**, not a liveness check:
+
+```sql
+-- create: PK does the work; a second create loses -> AlreadyOpen
+INSERT INTO run (run_id, owner_pid, boot_id, hostname, started_at, engine_version, lease_epoch)
+VALUES (?,?,?,?,?,?,1);
+-- reopen: read the epoch, decide the owner is gone, then CAS on it
+UPDATE run SET owner_pid=?, boot_id=?, hostname=?, started_at=?, lease_epoch=lease_epoch+1
+ WHERE run_id=? AND lease_epoch=?;
+-- changes()==1 -> ours. changes()==0 -> AlreadyOpen.
+```
+
+An owner is gone when `boot_id` differs from the current boot, **or** `boot_id` matches and
+the pid is not alive. That is the *precondition*; the CAS is the *decision*.
+
+**Acceptance**
+```bash
+cargo test -p arbiter-store lease::tests::two_racing_reopens_only_one_wins
+cargo test -p arbiter-store lease::tests::second_create_is_already_open
+cargo test -p arbiter-store lease::tests::stale_boot_id_is_stealable
+```
+The race test must spawn two threads that read the same epoch and both attempt the steal.
+
+---
+
+### S3 · Events and the hash chain
+
+**Files:** `src/events.rs` · **Spec:** §8.1, §8.3, §9, INTERFACES §13
+
+Append inside a transaction. `content_hash = blake3(canonical payload)`,
+`previous_event_hash` chains to `seq - 1`. `verify_chain` recomputes and reports.
+
+A break is **detected, never repaired** — truncating a table would destroy the projections
+derived from it. Emit `CHAIN_BREAK_DETECTED` (**not** `LOG_REPAIRED`, removed in v2.7.1)
+and mark the run unverifiable.
+
+Every read is `ORDER BY seq`.
+
+**Acceptance**
+```bash
+cargo test -p arbiter-store events::tests::chain_verifies_over_10k_events
+cargo test -p arbiter-store events::tests::an_edited_row_is_detected_not_repaired
+cargo test -p arbiter-store events::tests::unknown_event_type_is_skipped_but_still_chained
+```
+
+---
+
+### S4 · Projections · S5 · Blobs · S6 · Catalogue
+
+**S4** (`src/project.rs`, §8.1): rebuild every projection from `events`. The
+`projection_rebuild` fixture asserts the rebuilt tables equal the pre-crash ones. Where a
+projection and the log disagree, **the log wins**.
+
+**S5** (`src/blob.rs`, §8.2): payloads live in the DB below `blob_threshold` (128 KB).
+Above it: **write blob → fsync → THEN commit the row.** Never the reverse. A blob with no
+row is collectable; a row with no blob is corruption. GC is lazy (`doctor --gc`),
+content-addressed so no refcounting, and **skips runs whose lease is live** — a blob
+fsynced before its row commits is indistinguishable from an orphan and is not one.
+
+**S6** (`src/catalog.rs`, §8.5, INTERFACES §1): one insert at run start (`running`), one
+update at completion. WAL + `busy_timeout` 5000 ms. `reindex` is now a scan and an upsert —
+no watermark, no delta pass, no lock choreography. `VACUUM INTO` for export, blobs copied
+**second**.
+
+**Acceptance**
+```bash
+cargo test -p arbiter-store project::tests::rebuild_equals_original
+cargo test -p arbiter-store blob::tests::row_never_references_a_missing_blob
+cargo test -p arbiter-store blob::tests::gc_skips_a_run_with_a_live_lease
+cargo test -p arbiter-store catalog::tests::concurrent_writers_do_not_block_readers
+cargo test -p arbiter-store catalog::tests::reindex_rebuilds_from_run_dbs
+```
+
+---
+
+## 5. Tasks — kernel and providers
+
+### K1 · Budget ledger · K2 · Call states · K4 · Bounds
+
+**Spec:** §7, §8.3, §8.4, §11 · **Files:** `arbiter-kernel/src/budget.rs`, `calls.rs`, `bounds.rs`
+
+K1 — reservation protocol. `reserve()` returns a guard whose drop releases the remainder.
+The reserve and commit SQL is written out in §8.3; use it. `BUDGET_RELEASED` fires **only
+when `reserved` falls without `committed` rising** — the under-estimate remainder returns
+inside `CALL_COMPLETED`, carried by `BUDGET_COMMITTED` as `released_remainder`.
+
+The ledger invariant, checked on every `resume` and by `doctor`:
+```
+budget.reserved == SUM(reserved_amount) over calls in RESERVED|SENT|ACKNOWLEDGED|ORPHANED
+```
+
+K2 — the state machine of §8.4. **The row is created at `RESERVED`**, in the same
+transaction as `BUDGET_RESERVED`, never at `SENT`. There is no `CREATED`.
+
+Resume classification, from §8.4 — this table *is* the implementation:
+
+| Last committed state | Classify as | Budget |
+|---|---|---|
+| `RESERVED` | `FAILED` — never dispatched | **release** |
+| `SENT` | may have been billed, no id | hold, report orphaned |
+| `ACKNOWLEDGED` | may have been billed, id exists | hold, reconcilable |
+| `COMPLETED` | nothing to do | already committed |
+
+Retry is **capability-gated**: only where the adapter declares `idempotency: Some(_)`, and
+the reservation stays **held** across it. Where `None` — the Anthropic default — the call
+becomes `ORPHANED`, nothing retries, and the stage degrades via `SkipItem`.
+**`ORPHANED` must never become `FAILED`.**
+
+K4 — `budget_headroom` (5%) is reserved from every planner and released **in the final
+round only**. Challenge budget is `remaining_budget ÷ remaining_rounds`, judge share
+reserved first. `repair_budget_fraction` is **per round**, not per run.
+
+**Acceptance**
+```bash
+cargo test -p arbiter-kernel budget::tests::ledger_invariant_holds_after_kill_at_each_state
+cargo test -p arbiter-kernel budget::tests::released_remainder_emits_no_second_event
+cargo test -p arbiter-kernel calls::tests::orphaned_never_becomes_failed
+cargo test -p arbiter-kernel calls::tests::no_retry_without_idempotency
+cargo test -p arbiter-kernel calls::tests::reservation_held_across_an_idempotent_retry
+cargo test -p arbiter-kernel bounds::tests::headroom_is_untouchable_until_the_final_round
+cargo test -p arbiter-kernel bounds::tests::seven_models_deep_stays_under_the_cap
+```
+The last one is `large_panel_deep`: 7 models × deep priced at $2.03 under the old
+panel×rounds sizing, which is why sizing is money-derived.
+
+---
+
+### K3 · StageGraph · K5 · Cache
+
+K3 (`stage.rs`, §7): typed artifacts in/out; idempotency key `(run_id, stage, input_hash)`
+— and **not** `policy_version`/`pack_hash`/`table_version`/`config_hash`, which are frozen
+at init and constant within a run. Checkpoint per stage = one COMMIT. Bounded concurrency,
+per-provider rate limits, circuit breakers.
+
+K5 (`cache.rs`, §7): key is the **full tuple** `(provider, model, params, prompt_hash)` —
+never `prompt_hash` alone, or the same prompt to two models collides. Committed in the same
+transaction as the call and its budget charge. Replay is cache-only with the network disabled.
+
+**Acceptance**
+```bash
+cargo test -p arbiter-kernel stage::tests::same_input_hash_is_not_recomputed
+cargo test -p arbiter-kernel cache::tests::same_prompt_two_models_do_not_collide
+cargo test -p arbiter-kernel cache::tests::replay_opens_no_socket
+```
+
+---
+
+### P1–P4 · Providers and credentials
+
+**Spec:** §11.1, INTERFACES §5, §25
+
+P1 — `Provider` trait + `ProviderCapabilities { structured_output, streaming, idempotency }`.
+Capabilities are **declared per adapter from that provider's documentation**, never assumed.
+
+P2 — the mock is not a stub: it scripts the whole CI fixture suite and **opens no socket**.
+
+P3 — credentials, §11.1:
+- resolution order `ARBITER_<P>_API_KEY` → the provider's own var → OS keychain
+- **`KeySource` has no `ConfigFile` variant.** A missing enum variant is a stronger
+  guarantee than a rule in prose.
+- a key-shaped value under `api_key` in any config file **fails startup naming file and
+  line**, and prints the two working alternatives
+- `SecretString`: no `Display`, no `Debug`, zeroes on drop
+- redaction is a **write-path rule covering error strings** — providers echo request
+  material into error bodies, and an unredacted 401 is the likeliest path into `~/.arbiter`
+- verification never implicit; results cached 24 h keyed by `blake3(key)[..16]`
+
+P4 — Anthropic ships `idempotency: None`; several OpenAI-compatible gateways accept a key.
+
+**Acceptance**
+```bash
+cargo test -p arbiter-providers keys::tests::config_file_key_fails_and_names_the_file
+cargo test -p arbiter-providers keys::tests::secret_string_has_no_debug_impl   # compile-fail test
+cargo test -p arbiter-providers keys::tests::key_echoed_in_an_error_body_is_redacted
+cargo test -p arbiter-providers keys::tests::rotating_a_key_invalidates_its_cached_result
+cargo test -p arbiter-providers mock::tests::mock_opens_no_socket
+```
+
+---
+
+### G1–G9 · Prompt packs and the 15 stages
+
+**Spec:** §5, §5.1–§5.6, §15
+
+G1 — packs are content-addressed; `prompt_hash = blake3(rendered template ‖ variable
+schema)`, recorded on every `CALL_STARTED`; `pack_hash` snapshotted by `init`. Replay
+**refuses** a pack mismatch; `--repack` mints a new run id.
+
+G2–G9 — one task per stage group, each emitting the events INTERFACES §13 names. Points
+that are easy to get wrong and are tested individually:
+
+| Stage | The thing to get right |
+|---|---|
+| `positions.generate` | independent, **no cross-talk** in round 1 |
+| `claims.extract` | repair runs on the **cheap** model, capped by the per-round fraction |
+| `claims.normalize` | biased toward **splitting** — a merge error corrupts independence, a split only dilutes; partition + stitch **recurses** past 180 claims |
+| `options.cluster` | attachment matrix; re-runs each round at deep depth |
+| `relations.analyze` | premise cycles: Kahn sort, minimum edge cut, a member with a verified quote **keeps its Fact weight** |
+| `disputes.rank` | the deterministic formula, leverage via the counterfactual pass |
+| `challenge.plan` | money-derived sizing, judge share first |
+| `controller.decide` | both predicates computed from artifacts, **no extra call**; at standard depth it exits on `RoundLimit` by construction |
+| `judge.evaluate` | anonymised A–E, **shuffled**; 2 cross-vendor judges at deep |
+| `decision.synthesize` | **calls no model** |
+
+**Acceptance** — each stage has a fixture in F2. Additionally:
+```bash
+cargo test -p arbiter-kernel stages::tests::synthesize_makes_no_provider_call
+cargo test -p arbiter-kernel stages::tests::round_one_positions_never_see_each_other
+cargo test -p arbiter-kernel stages::tests::judge_sees_no_model_identity
+```
+
+---
+
+## 6. Tasks — CLI
+
+**Spec:** §12 · **Files:** `arbiter-cli/src/`
+
+The CLI is a renderer. **No decision logic lives here** — every number it prints comes out
+of `arbiter-core`. `--json` on every read command emits the structure the human renderer
+itself consumes, so the two can never drift.
+
+| Task | Commands |
+|---|---|
+| **L1** | `run <question\|file> --panel --depth --budget --json --stream` |
+| **L2** | `show`, `explain [claim] [--json]`, `claims --state`, `history` |
+| **L3** | `resume`, `replay [--repolicy] [--repack]` |
+| **L4** | `accept [--override path=value --reason]`, `keys list\|set\|test\|rm`, `providers list\|test`, `doctor [--gc]`, `reindex`, `export --format` |
+
+**Acceptance**
+```bash
+arbiter run tests/q.md --panel mock --depth standard --json | tail -1 | jq -e .outcome
+arbiter explain "$RID" --json | jq -e '[.confidence.penalties[].contribution] | length == 5'
+arbiter explain "$RID" --json | jq -e '
+  ([.confidence.dimensions[].contribution] + [.confidence.penalties[].contribution] | add)
+  as $s | ($s - .confidence.total | fabs) < 1e-9'
+arbiter replay "$RID" --json | diff - <(arbiter show "$RID" --json)   # byte-identical
+arbiter keys list   # prints sources and fingerprints, never a key
+```
+
+`doctor` must report, per §11.1 and §8.5: key state per provider, correlation-table
+staleness, models missing from the table, provisional constants, runs stuck in `running`,
+the ledger invariant, orphaned spend, and orphaned blobs.
+
+---
+
+## 7. Tasks — the UI
+
+The UI is **minimal, not partial**. Minimal means few screens; it does not mean a screen
+may omit a state. Every item below is required.
+
+### U1 · `arbiter serve` — server and admission
+
+**Spec:** §17.1, INTERFACES §24 · **Files:** `arbiter-cli/src/serve/`
+
+One embedded HTML page (`include_str!`) and seven endpoints. No build step, no npm, no
+bundler, no framework, no CDN.
+
+| Method | Path | Returns |
+|---|---|---|
+| `GET` | `/` | the page |
+| `POST` | `/api/runs` | `{run_id}`, `202` — **spends money** |
+| `GET` | `/api/runs` | `run_catalog` rows |
+| `GET` | `/api/runs/:id` | the `explain --json` payload **verbatim** |
+| `GET` | `/api/runs/:id/events` | `text/event-stream` |
+| `POST` | `/api/runs/:id/accept` | the acceptance record |
+| `GET` | `/api/providers` | the roster of INTERFACES §25 |
+| `POST` | `/api/providers/:p/test` | updated rows — **makes a paid request** |
+
+**Admission — every request, in this order, `403` and no body at the first failure.**
+Rejection happens *before* any run state is read, so a probe cannot learn whether a run id
+exists.
+
+```
+1. socket bound to 127.0.0.1     (enforced at startup; any other address is REFUSED)
+2. Host: 127.0.0.1[:p] | localhost[:p]        <- this is what closes DNS rebinding
+3. Origin absent, or exactly this server's origin
+4. Sec-Fetch-Site absent, or same-origin
+5. token matches, compared in constant time
+```
+
+No CORS headers, ever. The token is 128-bit, per process, printed once in the URL `--open`
+opens, and **never written to `~/.arbiter`, a log, or an event payload** — it would outlive
+the process that owns it and end up in an exported run.
+
+`GET /api/runs/:id` returns the §22 payload **unchanged**. The moment the server reshapes
+it, the page and the CLI explain decisions through two code paths.
+
+SSE: each `data:` line is one event envelope, byte-identical to `--stream`. A reconnect
+sends `Last-Event-ID` and the server resumes from `sequence + 1` — events are already
+sequenced and durable, so this needs no buffering.
+
+**Acceptance**
+```bash
+cargo test -p arbiter-cli serve::tests::binding_non_loopback_is_refused
+cargo test -p arbiter-cli serve::tests::wrong_host_header_is_403        # DNS rebinding
+cargo test -p arbiter-cli serve::tests::foreign_origin_is_403
+cargo test -p arbiter-cli serve::tests::missing_token_is_403
+cargo test -p arbiter-cli serve::tests::rejection_precedes_run_lookup   # no id oracle
+cargo test -p arbiter-cli serve::tests::no_cors_headers_are_ever_sent
+cargo test -p arbiter-cli serve::tests::token_absent_from_store_and_log
+cargo test -p arbiter-cli serve::tests::explain_endpoint_matches_cli_byte_for_byte
+cargo test -p arbiter-cli serve::tests::sse_resumes_from_last_event_id
+```
+
+---
+
+### U2 · Screen 1 — New run
+
+**Source:** `GET /api/providers` · **Reference:** `design/minimal-ui.html` screen 1
+
+| Element | Required behaviour |
+|---|---|
+| Question | textarea, multi-line, autofocus; accepts a pasted paragraph; a file path is accepted too |
+| Panel list | **every** model listed, usable or not — see the states table below |
+| Depth | `standard — 1 round` / `deep — up to 3 rounds` |
+| Budget cap | pre-filled from config; editable; validated as currency |
+| Estimate | **shown before the button**, recomputed when the panel or depth changes |
+| Independence warning | shown when usable groups < 3, naming the consequence |
+| Manage keys | link to screen 5 |
+| Start | primary; disabled while 0 models are usable |
+
+**Panel row states — all five must render:**
+
+| Key state | Row | Action |
+|---|---|---|
+| `Verified` | enabled, checked by default, `● ready` | — |
+| `Present` | enabled, `● key set, not checked` | — |
+| `Rejected` | **disabled, still listed**, `● key rejected · <status>` | *Fix* → screen 5 |
+| `Missing` | **disabled, still listed**, `○ no key` | *Add* → screen 5 |
+| provider unreachable | disabled, `○ provider unreachable` | *Re-check* |
+
+**Unusable models are never hidden.** Hiding them makes an empty panel look like a broken
+install and conceals why confidence will be lower.
+
+The estimate must state **cost, call count, wall-clock and model count**, and must fall
+when models are unusable — it is sized from the *usable* panel, not the full one.
+
+**Screen states:** loading (skeleton, Start disabled) · no providers configured at all
+(route to screen 5 with an explanation, do not show an empty form) · `/api/providers`
+returns 5xx (message + Retry, Start disabled) · submitting (Start disabled with a spinner,
+double-submit impossible) · `POST /api/runs` rejected (show the reason inline, keep the
+typed question).
+
+---
+
+### U3 · Screen 2 — Running
+
+**Source:** `GET /api/runs/:id/events` (SSE)
+
+| Element | Required behaviour |
+|---|---|
+| Question + run id | run id in the **URL**, so the page is linkable and survives a refresh |
+| Current stage | name, `round r of R`, `step n of 15` |
+| Progress | fraction of stages complete — never a fake time estimate |
+| Spend | `$x.xxx of $y.yy`, updating live |
+| Claims count | live |
+| Elapsed | live |
+| Event log | newest first, `ts · EVENT_TYPE · detail`, scrollable, **auto-scroll pauses on hover** |
+| Stop | always reachable, never behind a menu |
+| Detach note | **“Closing this page does not stop the run.”** — required, not optional copy |
+
+**Screen states:** connecting · streaming · **SSE dropped** (banner “reconnecting…”, then
+resume via `Last-Event-ID`; never silently show a frozen page) · run completed while
+watching (auto-navigate to screen 3) · run failed (`RUN_FAILED` reason + what was kept) ·
+budget exhausted mid-run (say the decision was synthesised from evidence so far and is
+marked truncated) · a call went `ORPHANED` (surface it here, do not wait for the result
+screen) · opening the URL of an already-finished run (redirect to screen 3) · opening the
+URL of an unknown run (404 page, not a blank stream).
+
+---
+
+### U4 · Screen 3 — Result
+
+**Source:** `GET /api/runs/:id` — the `explain --json` payload
+
+| Element | Required behaviour |
+|---|---|
+| Outcome tag | all four: `CONSENSUS`, `MAJORITY_WITH_DISSENT`, `SPLIT_DECISION`, `INSUFFICIENT_EVIDENCE` |
+| Winning option | the label, not the id |
+| Metrics | confidence, margin, claim count |
+| **Live objection** | when the outcome is not `CONSENSUS`, the surviving objection is shown **immediately under the answer**, not buried |
+| Options table | every option, share, support/oppose counts, `below floor` flag |
+| Confidence breakdown | 3 dimensions + base + **5 penalties** + total; inactive penalties shown at 0, not hidden |
+| Claims | id, text, standing, state pill, kind; filter for disputed/unresolved; “show all” |
+| Change triggers | each unresolved claim that would flip the winner, with `margin_before → margin_after` |
+| Run integrity | chain verified · fixpoint converged/not · completeness · `policy_version` · orphaned spend if any |
+| Accept | records who and when |
+| Accept with override | **requires a non-empty reason**; recorded as `UserOverride` provenance |
+| Export | `--format json\|markdown` |
+
+Reading rules that must survive implementation:
+- `MAJORITY_WITH_DISSENT` means something survived. **A layout that hides it lies.**
+- `INSUFFICIENT_EVIDENCE` must not render as a weak winner — show why the floor was not met.
+- Confidence is never a bare number: the breakdown is one click away and sums to it.
+- `policy_version` is always on screen, because decisions compare only within one.
+
+**Screen states:** loading · run still running (redirect to screen 2) · run failed
+(show what exists, no fake decision) · truncated by budget (banner) ·
+fixpoint not converged (banner + the 0.05 penalty visible in the breakdown) ·
+chain break detected (**prominent** — the run is unverifiable) · already accepted
+(show who and when, Accept becomes “Accepted”).
+
+---
+
+### U5 · Screen 4 — History · U6 · Screen 5 — Keys
+
+**U5 source:** `GET /api/runs`
+
+Table of question, outcome, confidence, cost, date; row links to screen 3. Filters for
+outcome, min confidence and **`policy_version`** — the last is not optional, and the page
+says why. Show `orphaned_cost` when non-zero. States: loading · **empty (first run — offer
+screen 1, do not show an empty table)** · error.
+
+**U6 source:** `GET /api/providers`, `POST /api/providers/:p/test`
+
+| Element | Required behaviour |
+|---|---|
+| Per-provider row | state dot, provider, **source** (`ANTHROPIC_API_KEY` / keychain / `ARBITER_*`), fingerprint (last 4 of `blake3(key)`), last checked |
+| Re-check | labelled as costing **one request** *before* the click |
+| Add key | provider select + masked input; **Save to keychain**; “Check without saving” |
+| Resolution order | the three sources, in precedence order |
+| Config refusal | states plainly that config files are never read for a key |
+
+**Never render a key.** Fingerprints only. `source` must be shown because *“I updated my
+key and nothing changed”* is almost always a higher-precedence variable still set.
+
+States: no keys at all (first-run copy, not an empty table) · checking (row spinner,
+button disabled) · check failed (status code + what to do) · keychain unavailable on this
+OS (say so, fall back to env-var guidance).
+
+---
+
+### U7 · Cross-cutting UI requirements
+
+**Every screen:**
+- server unreachable → one message, not a spinner forever
+- `403` from admission → “this page is stale, reopen from the terminal” (the token rotates per process)
+- keyboard reachable end to end; visible focus rings; no pointer-only affordance
+- contrast ≥ 4.5:1; state never carried by colour alone — every dot has a text label
+- `prefers-reduced-motion` respected (the only motion is the run spinner)
+- no `localStorage` beyond the active run id
+- **the page computes no number** — it formats what the API returned
+
+**Out of scope, and must be refused if requested during 1.1:** argument graph, attachment
+matrix, replay scrubbing, plugin management, config editing, multi-user, auth beyond the
+token, and any screen that cannot be read from `explain --json` without new engine work.
+
+**Acceptance for U2–U7** (Playwright, headless, against the mock provider):
+```bash
+cargo test -p arbiter-cli --test ui
+```
+covering, one test each: all 5 panel key states render · the estimate falls when a model is
+unusable · Start is disabled with 0 usable models · the detach note is present ·
+SSE reconnect resumes without duplicate events · a non-`CONSENSUS` result shows the live
+objection above the fold · the breakdown lists 5 penalties · override requires a reason ·
+history is empty-stated · keys screen never renders a key · every screen is keyboard-navigable.
+
+---
+
+## 8. Fixture ledger
+
+All 36 CI fixtures from §18, each owned by exactly one task. **A fixture without an owner
+is a plan bug.** All run against the scripted mock with **zero LLM tokens**.
+
+| Fixture | Owner | Fixture | Owner |
+|---|---|---|---|
+| `simple_consensus` | F2 | `premise_cycle` | G4 |
+| `split_decision` | C5 | `fixpoint_nonconvergence` | C2 |
+| `strong_dissent` | C3 | `confidence_arithmetic` | C6 |
+| `insufficient_evidence` | C5 | `option_floor` | C5 |
+| `malformed_claim` | G2 | `decision_override` | L4 |
+| `ungrounded_claim` | G2 | `premise_cycle_grounded_fact` | G4 |
+| `provider_timeout` | K2 | `attack_saturation` | C2 |
+| `budget_exceeded` | K4 | `t3_batch_partition` | G2 |
+| `judge_failure` | G8 | `option_clustering` | G3 |
+| `adaptive_stop` | G7 | `option_emerges_midround` | G3 |
+| `crash_midcall` | K2 | `focus_selection` | G5 |
+| `interrupted_commit` | S3 | `option_supersede` | C4 |
+| `crash_before_send` | K2 | `judge_dispersion` | C6 |
+| `budget_reconciliation` | K1 | `cites_defeated_claim` | C1 |
+| `projection_rebuild` | S4 | `prompt_pack_mismatch` | G1 |
+| `serve_localhost_only` | U1 | `large_panel_deep` | K4 |
+| `serve_rejects_foreign_origin` | U1 | `key_in_config_refused` | P3 |
+| `key_redaction` | P3 | `panel_without_keys` | U2 |
+
+Integration (nightly, real providers, budgeted — **not** in the commit path):
+`paraphrase_corpus`, `recommendation_corpus`, `judge_identity_leakage`.
+
+---
+
+## 9. Milestones and gates
+
+### Gate 1.0 — core, all of X/C/S/K/P/G/L/F
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --workspace                       # includes 34 of the 36 CI fixtures
+cargo test --workspace -- --ignored          # nothing may be ignored at the gate
+```
+plus, from §20:
+- the decision core passes every golden fixture **without one LLM token**
+- exact replay reproduces a `DecisionRecord` **byte-for-byte**
+- a killed process resumes and never intentionally repeats a completed call
+- standard ≤ $0.50 and deep ≤ $1.20 against list prices, both under the $2.00 cap
+- the engine never exceeds its bounds under any controller decision
+
+**Before `argument-v1` drops `provisional` (§6.3), both must run:** the tuning sweep over
+the graph corpus, **and** a recorded red-team session of ≥20 adversarial cases. A corpus
+sweep alone is not the gate.
+
+### Gate 1.1 — the UI, U1–U7
+
+All of gate 1.0, plus `serve_localhost_only` and `serve_rejects_foreign_origin`
+(CI reaches 36), plus the `--test ui` suite, plus a manual pass: start a run from the
+browser, watch it stream, accept it, and find it in history.
+
+### Explicitly out of this plan
+
+Build Studio (`arbiter-build`, `arbiter build`), the WASM host, the JSON-RPC host and
+confinement are **1.5**. Their interfaces are defined by 1.0 and must not be redesigned to
+accommodate them — if a 1.0 interface needs changing for 1.5, that is a finding, not a task.
+
+---
+
+## 10. Progress ledger
+
+Append one row per completed task. Do not mark a row done before §0.3 passes.
+
+| Task | Done | Commit | Deviations |
+|---|---|---|---|
+| X1 | ☐ | | |
+| … | ☐ | | |
