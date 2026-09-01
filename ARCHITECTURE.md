@@ -1,6 +1,6 @@
 # AI Debate & Decision Engine — Architecture Specification
 
-**Version:** 2.6 (frozen for implementation)
+**Version:** 2.7 (frozen for implementation)
 **Status:** approved — implementation in progress
 **Supersedes:** v1.0 (Python · LangGraph · Postgres · FastAPI · WebSocket · React)
 **Companion:** `docs/INTERFACES.md` — concrete trait definitions and protocols
@@ -15,13 +15,14 @@ to disagree with its own formula.
 | Golden fixture list | `ARCHITECTURE.md` §18 | INTERFACES describes mock mechanics only |
 | Trait signatures, wire protocols, event enum | `docs/INTERFACES.md` | ARCHITECTURE narrates, does not enumerate |
 | Confidence formula | `docs/INTERFACES.md` §14 (struct + invariants) | ARCHITECTURE §6.7 explains and worked-examples it |
+| Storage layout, durability, versions | `ARCHITECTURE.md` §8 | INTERFACES §1 owns the traits and the concurrency protocol |
 
 Four things live **only** in the companion, because they are contracts rather than
-design: the exact confidence weights and the four penalty formulas (§14), the full
+design: the exact confidence weights and the five penalty formulas (§14), the full
 `EventType` enum (§13), `ProviderCapabilities` and idempotency styles (§5), and the
 option-clustering and focus-selection algorithms (§20–21). Reading `ARCHITECTURE.md`
 alone gives you the design; implementing from it alone does not.
-**Last updated:** 2026-08-31
+**Last updated:** 2026-09-01
 
 ---
 
@@ -52,7 +53,7 @@ point in code, not just a statement of intent.
 | v1.0 | v2.0 | Reason |
 |---|---|---|
 | Python + LangGraph state machine | **Rust + own `StageGraph`** | The decision core is a finite state machine over closed states. Exhaustive `match` turns "someone added `CONDITIONAL_CONSENSUS`" into a compile error rather than a silent fallthrough. A framework's node model would also become the plugin ceiling. |
-| Postgres + SQLAlchemy | **Filesystem + hash-chained NDJSON** | ~400 KB/run, no query workload beyond "list and filter my runs". A CLI must run with zero infrastructure. `Store` traits keep SQLite/Postgres available as plugins. |
+| Postgres + SQLAlchemy | **Embedded SQLite, hash-chained events** | A CLI must run with zero infrastructure — no server, no daemon, no migration step the operator performs. SQLite is embedded, so that holds; and unlike the NDJSON store it replaced in v2.7, it supplies transactions, crash recovery and query rather than making the engine hand-roll all three. |
 | FastAPI + WebSocket + React | **CLI first; NDJSON event stream on stdout** | The same stream a UI or API would consume. Building the frontend later makes it a consumer of a proven engine. |
 | 5 "pillars" as services | **Pure kernel + 7 extension planes in two tiers** | Pillars were layers, not seams. Seams must be typed contracts with a versioned ABI. |
 | Confidence = judge output | **Confidence = 3 evidence dimensions − 5 penalties** | The judge scores one input among several. Arithmetic never happens inside a model. |
@@ -66,8 +67,9 @@ point in code, not just a statement of intent.
 
 Architectural constraints, not preferences. Each has a test.
 
-1. **Every persisted event and artifact carries `schema_version`.** NDJSON is
-   migration-light, not schema-free; the replay engine dispatches on version.
+1. **Every persisted event and artifact carries `schema_version`.** The store now has a
+   schema of its own as well — the two are separate axes and §8.7 tabulates all five.
+   The replay engine dispatches on the event version, never on the table layout.
 2. **Exact event replay is distinct from provider re-run.** *Exact replay* reads
    recorded responses, calls no provider, and is byte-identical. *Re-run* calls
    providers again and produces a new run with a new id. "Deterministic" applies only
@@ -109,7 +111,7 @@ arbiter-core       pure domain + decision engine. No IO, no async, no LLM.
 arbiter-kernel     StageGraph, budget ledger, cache, event store, bounds
 arbiter-providers  anthropic · openai-compatible · mock
 arbiter-plugin     host + ABI (JSON-RPC subprocess, WASM)
-arbiter-store      filesystem/NDJSON implementation of the Store traits
+arbiter-store      SQLite implementation of the Store traits (+ filesystem blobs)
 arbiter-build      Build Studio stages (optional, downstream of DecisionRecord)
 arbiter-cli        the only frontend in this phase
 arbiter-fixtures   golden runs; CI proves the engine with zero LLM tokens
@@ -744,7 +746,9 @@ available $2.00
 ```
 
 **Cache** — `(provider, model, params, prompt_hash) → response`, content-addressed,
-streamed to `.part` and renamed on completion. Exact replay is cache-only with the
+stored in `cache_entries` and committed in the same transaction as the call and its
+budget charge (§8.3). A response over `blob_threshold` is written to the blob store and
+fsynced *before* the row referencing it commits. Exact replay is cache-only with the
 network disabled.
 
 **Idempotency** — adapters declare `ProviderCapabilities::idempotency`; where a provider
@@ -758,29 +762,198 @@ response-start so orphaned calls can be reconciled against a usage export.
 
 ## 8. Persistence
 
+**SQLite, not NDJSON.** The v2.0–v2.6 design hand-rolled eight mechanisms — a lock file
+with staleness rules, a hash-chained append log with torn-tail repair, a buffered
+write/fsync policy, `tmp`+`rename` for artifacts, `.part`+rename for the cache, `flock`
+around index appends, a watermark-based reindex, and readers that tolerate a torn tail.
+Seven of the eight are a database's job. The eighth — the hash chain — is not, and stays.
+
 ```
 ~/.arbiter/
+  history.db               the catalogue: one indexed row per run
   runs/<run_id>/
-    manifest.json          config snapshot, status, engine + prompt-pack hashes
-    events.ndjson          append-only, seq-numbered, hash-chained ← source of truth
-    artifacts/<name>.json  typed, schema-versioned
-    cache/<blake3>.json    provider responses
-    decision.json          the DecisionRecord
-  index.ndjson             derived; rebuildable with `arbiter reindex`
+    run.db                 the run: events, projections, cache, artifact metadata
+    blobs/b3/<hash>        only payloads ≥ blob_threshold (default 128 KB)
+    exports/               anything the operator asked for
+  plugins/
+  config.toml
 ```
 
-≈400 KB per run with raw payloads, ≈90 KB without. 1,000 debates ≈ 400 MB / 90 MB.
+`run.db` is the book; `history.db` is the library catalogue. A run directory is still
+self-contained — zip it and it replays elsewhere.
 
-**Concurrency model: one writer per run, many readers, one lock for the shared index.**
-Concurrent `arbiter run` invocations never contend — they own different directories.
-`runs/<id>/run.lock` carries `{pid, boot_id, hostname, started_at}` and is broken only
-when the pid is dead *and* the lock is stale. `index.ndjson` appends take `flock` for
-microseconds; `reindex` does its full scan **outside** the lock and takes it only for the
-final tail-merge and rename, so the held window is proportional to rows added since the
-watermark rather than to the number of runs. Readers take no lock and stop at the last
-valid hash link. Full protocol: `docs/INTERFACES.md` §1.
+### 8.1 What is truth, and what is a projection
 
-### 8.1 Event envelope
+This is the rule that keeps a relational store from acquiring a second source of truth.
+
+| Table group | Status | Rebuilt by |
+|---|---|---|
+| `events` | **the source of truth** — append-only, hash-chained | never rebuilt |
+| `run`, `stages`, `provider_calls`, `budget` | projection | replay |
+| `positions`, `claims`, `claim_relations`, `disputes`, `challenges`, `rebuttals` | projection | replay |
+| `judge_evaluations`, `decision`, `decision_triggers`, `provenance` | projection | replay |
+| `cache_entries`, `artifacts` | projection over content-addressed payloads | replay |
+| `schema_metadata` | store metadata | migrations |
+
+Claims, options and relations become **queryable tables rather than one JSON blob** —
+that is most of the point of the change — but they are a *materialized projection of the
+event log*, never a parallel truth. Replay rebuilds them from `events` and the result
+must be identical; the `projection_rebuild` fixture asserts exactly that. Where a
+projection and the log disagree, the log wins and the projection is wrong.
+
+There is no `assumptions` table. An assumption is `EvidenceKind::Assumption` on a claim,
+not a separate entity, and giving it a table would split one concept across two places.
+
+**Reads are ordered explicitly.** Every read of `events` is `ORDER BY seq`. SQL has no
+inherent row order, and a `DecisionRecord` that must reproduce byte-for-byte cannot
+depend on one that happens to hold today.
+
+### 8.2 Payloads: in the database, with a threshold
+
+Provider responses go **in `run.db`**, not in files beside it. A typical response in the
+standard profile is ≈10 KB (74.5k tokens across 28 calls), and SQLite's own guidance puts
+the in-database/on-disk crossover around 100 KB — below it, rows are smaller and faster
+than separate files. Keeping them as files would preserve the `tmp`+`rename` and
+`.part`+rename machinery this change exists to delete, and would reintroduce a row that
+can point at a file that is not there.
+
+Above `blob_threshold` (default 128 KB) a payload moves to `blobs/b3/<hash>` and the row
+keeps its hash and size. That path has one ordering rule, and it is not negotiable:
+
+```
+write blob → fsync → THEN commit the row
+```
+
+Never the reverse. A blob with no row is garbage collectable; a row with no blob is
+corruption. `arbiter doctor` reports both — missing blobs as an error, orphaned blobs as
+reclaimable space.
+
+### 8.3 Durability
+
+One transaction replaces the write-order choreography. The sequence that mattered most —
+the one where money is involved — becomes atomic:
+
+```sql
+BEGIN IMMEDIATE;
+  INSERT INTO provider_calls (…, status='COMPLETED');
+  INSERT INTO cache_entries  (…);
+  UPDATE  budget SET committed = committed + ?, reserved = reserved - ?;
+  INSERT INTO events (…);   -- CALL_COMPLETED, BUDGET_COMMITTED
+COMMIT;
+```
+
+All of it, or none of it. `BEGIN IMMEDIATE` because this is a writer and a deferred
+transaction that upgrades mid-way can deadlock against another writer.
+
+```
+append(event)      buffered into the open transaction
+checkpoint(stage)  COMMIT — durable, replaces flush + fsync + STAGE_CHECKPOINT
+durable events     committed immediately in their own transaction
+replay(run_id)     rebuild every projection from events, ORDER BY seq
+verify(run_id)     recompute the chain over events
+```
+
+Events marked `durable` — anything authorising or recording spend — commit immediately.
+Everything else batches to the stage boundary. A transaction per event would cost an
+fsync per event for no added guarantee, which is the same reasoning the NDJSON design
+used and the same answer.
+
+**What SQLite does not give you.** It cannot make a provider call transactional. A
+request can be accepted and billed and the process die before any commit — the money is
+spent and the database correctly shows nothing. This is why `request_id`, capability-gated
+idempotency keys and orphan reconciliation all remain necessary, and why *"no duplicate
+spend"* is still not claimable in general.
+
+### 8.4 Provider-call states
+
+Recovery needs the classification to be explicit rather than inferred:
+
+```
+CREATED ─► RESERVED ─► SENT ─► ACKNOWLEDGED ─► COMPLETED
+                        │
+                        ├─► RETRYABLE ──► (back to SENT)
+                        ├─► FAILED
+                        └─► ORPHANED ──► RECOVERED
+```
+
+| State | Event | Means |
+|---|---|---|
+| `RESERVED` | `BUDGET_RESERVED` | money is held, nothing sent |
+| `SENT` | `CALL_STARTED` | the request left the machine |
+| `ACKNOWLEDGED` | `CALL_REQUEST_ID` | the provider named the request; it is now reconcilable |
+| `COMPLETED` | `CALL_COMPLETED` | response stored, budget committed |
+| `RETRYABLE` | `CALL_RETRYING` | provably not billed, or idempotency-keyed |
+| `FAILED` | — | provably not billed |
+| `ORPHANED` | `CALL_ORPHANED` | **we cannot prove whether it was billed** |
+| `RECOVERED` | `CALL_RECOVERED` | reconciled against a usage export |
+
+**`ORPHANED` must never silently become `FAILED`.** Collapsing the two is what produces a
+duplicate charge on resume, and it is the reason the state is named rather than left as an
+error variant. Orphaned spend is reported, not absorbed.
+
+### 8.5 Concurrency, restated
+
+The old claim — *"two concurrent runs never contend"* — is no longer true, and saying so
+matters more than keeping a tidy sentence.
+
+| Path | Writers | Protocol |
+|---|---|---|
+| `runs/<id>/run.db` | one, for the life of the run | SQLite's own write lease; `run.lock` is deleted |
+| `runs/<id>/blobs/*` | the same single owner | write-then-commit (§8.2) |
+| `history.db` | any process, twice per run | WAL + `busy_timeout`; two short transactions |
+
+`run.lock` goes away: SQLite already excludes a second writer, and the lock file existed
+to hand-roll that. Owner metadata — pid, boot_id, hostname, started_at — moves into a
+`run` table row updated on open, so `doctor` can still say who holds a run.
+
+Concurrent runs now contend on `history.db`, briefly and by design. A run inserts one row
+at start (status `running`) and updates it at completion. WAL keeps readers unblocked
+throughout. A row left in `running` by a killed process is exactly the signal `arbiter
+resume` needs, and `doctor` lists them.
+
+### 8.6 Copying a run
+
+`cp` is wrong for a WAL database — it can capture a torn copy with the WAL unapplied.
+`arbiter export` uses `VACUUM INTO`, which writes a consistent single-file snapshot, and
+copies the blob directory alongside it.
+
+### 8.7 Schema evolution
+
+The store now has a schema, which is a new obligation rather than a free win:
+
+```
+migrations/0001_initial.sql · 0002_… · applied in order, recorded in schema_metadata
+```
+
+`schema_metadata` carries `schema_version`, `engine_version` and `created_at`. Opening a
+run whose `schema_version` is newer than the binary is refused rather than guessed at.
+
+There are now **five independent version axes**, and they must not be confused:
+
+| Axis | Governs | Changing it |
+|---|---|---|
+| `schema_version` (event) | the event envelope | additive; unknown types are skipped but chained |
+| `db_schema_version` | table layout in `run.db` / `history.db` | a migration |
+| `policy_version` | fixpoint constants and thresholds | mints `argument-vN`; decisions compare only within one |
+| `pack_hash` | prompt templates | replay refuses a mismatch; `--repack` mints a new run |
+| `table_version` | the correlation table | pinned in the run row; `doctor` warns when stale |
+
+### 8.8 What NDJSON is now
+
+NDJSON stops being the persistence format and remains the **interchange** format —
+`--stream` on stdout, `arbiter export --format ndjson`, and whatever a future UI or API
+consumes. §9 already specified it that way; only the storage changed. Making one format
+serve both jobs is what forced the hand-rolled durability in the first place.
+
+Size is now **to be re-measured**, not restated: page overhead and indexes push a run
+above the old ≈400 KB / ≈90 KB figures by an amount the first fixtures will tell us.
+
+---
+
+## 9. Event contract
+
+**One shape, two carriers.** An event is a row in `events` and a line on stdout, and the
+fields are the same in both. The row is the record; the line is the interchange.
 
 ```json
 {
@@ -798,27 +971,10 @@ valid hash link. Full protocol: `docs/INTERFACES.md` §1.
 }
 ```
 
-`previous_event_hash` chains the log, so corruption, truncation and tampering are all
-detectable — a useful property for a decision engine whose output must be auditable.
-
-### 8.2 Durability protocol
-
-```
-append(event)      buffered write
-flush()            
-checkpoint(stage)  flush + fsync + STAGE_CHECKPOINT event
-replay(run_id)     rebuild state from the verified prefix
-verify(run_id)     recompute chain; torn tail → truncate to last valid line,
-                   append LOG_REPAIRED
-```
-
-Events marked `durable` (anything authorising or recording spend) fsync immediately;
-everything else syncs at the stage checkpoint. Uniform per-event fsync would cost
-~1 s per run in syscalls for no added guarantee.
-
----
-
-## 9. Event contract
+`sequence` is the primary key and the only ordering that means anything;
+`previous_event_hash` chains to `sequence - 1`. SQLite guarantees the row is there or is
+not; the chain guarantees nobody altered it afterwards. The two answer different
+questions and neither replaces the other.
 
 Emitted as NDJSON on stdout in machine mode and consumed identically by the CLI today
 and any UI or API later. The event set is a **taxonomy of seven families**, not a flat
@@ -891,7 +1047,8 @@ plugin gets a scrubbed environment. Name collisions with builtins require
 First-class, not an afterthought.
 
 - Pre-flight estimate per planned operation before the run starts
-- Reservation before every call; commit actual; release remainder
+- Reservation before every call; commit actual; release remainder — the commit, the
+  cached response and the events are one transaction (§8.3)
 - Per-model, per-stage, per-round breakdown in the ledger
 - Hard cap aborts the run rather than exceeding it; the decision is synthesised from
   evidence gathered so far and the record says it was cut short
@@ -942,7 +1099,7 @@ arbiter export <run_id>       --format json|markdown
 arbiter plugins list|info
 arbiter providers list|test
 arbiter doctor                preflight: keys, reachability, schema, bounds
-arbiter reindex
+arbiter reindex               rebuild history.db by reading each run.db
 ```
 
 ---
@@ -1085,7 +1242,11 @@ Kernel       tokio (async runtime) · reqwest (HTTPS) · eventsource-stream (SSE
 Similarity   lexical (trigram SimHash + IDF cosine) + polarity sweep + one batched
              LLM grouping call. No embedding model or vector store; ONNX embedding
              available as a plugin.
-Storage      filesystem + NDJSON · fs4 (advisory file locks); no database
+Storage      SQLite (rusqlite, `bundled` — no host SQLite dependency) in WAL mode.
+             `run.db` per run · `history.db` catalogue · filesystem blob store above
+             128 KB. NDJSON is the interchange format, not the persistence format.
+             Crate versions are pinned in Cargo.toml, not here — a spec that names a
+             patch release is wrong within the month
 CLI          clap · a small renderer; no TUI framework
 Plugins      JSON-RPC over stdio; wasmtime for sandboxed WASM
 Test         cargo test · scripted mock provider · golden fixtures · property tests
@@ -1129,7 +1290,7 @@ measures the script.
 
 | Suite | When | LLM | Contents |
 |---|---|---|---|
-| **CI** | every commit | none — scripted mock | the 28 below |
+| **CI** | every commit | none — scripted mock | the 29 below |
 | **Integration** | nightly, opt-in, budgeted | real providers | `paraphrase_corpus`, `judge_identity_leakage` |
 | **Tuning** | `cargo test --features tuning` | none | the `tuning/` graph corpus, parameter sweeps |
 | **Red-team** | every commit, once written | none — scripted mock | ≥20 adversarial cases from the `argument-v1` gate session (§6.3) |
@@ -1138,7 +1299,7 @@ Red-team cases are CI fixtures in every mechanical sense — scripted mock, zero
 deterministic — but they are listed separately because they are written *against* the
 arithmetic rather than for a pipeline path, and the set only grows: every exploit found
 after release lands here as a fixture rather than as a patch note. `attack_saturation` is
-the first member, written before the session existed. The 28 below are the pipeline
+the first member, written before the session existed. The 29 below are the pipeline
 suite and that count is fixed; the red-team suite has a floor, not a target.
 
 `judge_identity_leakage` sits in Integration deliberately: against a scripted mock,
@@ -1160,8 +1321,9 @@ it produces the recall number `t3_merge_threshold` is tuned against.
 | `budget_exceeded` | cap hit mid-round → truncated decision, penalty applied |
 | `judge_failure` | invalid judge JSON → retry → judge term degrades |
 | `adaptive_stop` | controller stops early on no-new-information |
-| `crash_midcall` | `CALL_STARTED` with no completion → cache recovery on resume |
-| `torn_log_tail` | truncated final line → verify → `LOG_REPAIRED` → resume |
+| `crash_midcall` | `CALL_STARTED` with no completion → reopened as `ORPHANED`, never `FAILED` |
+| `interrupted_commit` | process killed mid-transaction → the partial write is not there on reopen |
+| `projection_rebuild` | replay rebuilds every projection table; result is identical to the pre-crash tables |
 | `premise_cycle` | circular derivation → component degraded to Unsupported |
 | `fixpoint_nonconvergence` | oscillating graph hits the cap → deterministic record |
 | `confidence_arithmetic` | every term independently hand-computed; pins the formula |
@@ -1225,7 +1387,8 @@ it costs no rework. A debate that stops at `decision.synthesize` is complete by 
 2. `arbiter-fixtures` — golden runs for the four outcome classes
 3. `arbiter-kernel` — StageGraph, event store, budget ledger, bounds
 4. `arbiter-providers` — mock first, then anthropic + openai-compatible
-5. `arbiter-store` — filesystem/NDJSON
+5. `arbiter-store` — SQLite (`run.db`, `history.db`) + blob store; second implementation
+   of a plane declared stable, which is what proves the trait abstracts anything
 6. `arbiter-plugin` — JSON-RPC host, then WASM
 7. `arbiter-cli`
 8. `arbiter-build` — Build Studio
@@ -1300,6 +1463,30 @@ The implementation is successful when:
 **v2.0** — Rust kernel, pure decision core, NDJSON store, CLI-first. Superseded v1.0
 (Python · LangGraph · Postgres · FastAPI · WebSocket · React).
 
+
+**v2.7** — storage backend changed from NDJSON to SQLite, before implementation.
+
+| # | Change | Worth it because |
+|---|---|---|
+| 1 | SQLite (`rusqlite`, `bundled`, WAL) replaces the NDJSON store; `run.db` per run, `history.db` catalogue | seven of the eight hand-rolled persistence mechanisms were a database's job — lock file, fsync policy, two rename dances, flock, watermark reindex, torn-tail readers |
+| 2 | The call-completion sequence is one transaction | `CALL_COMPLETED` + `BUDGET_COMMITTED` + cache write were three writes with a recovery story per interleaving, on the path where money is lost |
+| 3 | Claims, relations, options and disputes become tables, explicitly as **projections of the event log** | queryable structure is the point; a second source of truth is not. Replay rebuilds them and `projection_rebuild` asserts equality |
+| 4 | Provider-call state machine named, with `ORPHANED → RECOVERED` | collapsing `ORPHANED` into `FAILED` is what produces a duplicate charge on resume |
+| 5 | Payloads live in the database below 128 KB; above it, write-blob-then-commit-row | keeping every response as a file would preserve the `.part`/rename machinery this change deletes, and lets a row point at a missing file |
+| 6 | `run.lock` deleted; `history.db` contention acknowledged | SQLite already excludes a second writer. "Concurrent runs never contend" is now false and saying so beats keeping a tidy sentence |
+| 7 | `VACUUM INTO` for export; `ORDER BY seq` for every event read | `cp` on a WAL database can capture a torn copy, and byte-for-byte replay cannot rest on incidental row order |
+| 8 | Five version axes tabulated; DB migrations added | the store now has a schema — a new obligation, not a free win |
+| — | `arbiter reindex` kept, its algorithm deleted | `history.db` can still be lost; rebuilding it is now a scan and an upsert, with no watermark or lock protocol |
+
+Two review items were rejected. **BLAKE3 is already the only hash** — the `sha256` cache
+filename was an inconsistency fixed in v2.4, and §16 has said "one algorithm, no
+exceptions" since; there is nothing to unify. And **there is no `assumptions` table**: an
+assumption is `EvidenceKind::Assumption` on a claim, and giving it a table would split one
+concept across two places.
+
+The claim that an embedded database gives the eight mechanisms "for free" was too broad
+and is corrected in §8: SQLite supplies the database equivalents, and a filesystem blob
+store still needs its own write-then-commit discipline above the threshold.
 
 **v2.6** — two reviews; six changes worth making, two claims that did not survive checking.
 

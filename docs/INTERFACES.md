@@ -1,51 +1,93 @@
 # Arbiter — Interface Definitions
 
-**Companion to** `ARCHITECTURE.md` v2.6. Where the spec says *what*, this says *how*.
+**Companion to** `ARCHITECTURE.md` v2.7. Where the spec says *what*, this says *how*.
 Every item here closes a numbered finding from the v2.0 review.
 
 ---
 
-## 1. Filesystem concurrency model  *(review #1)*
+## 1. Storage concurrency model  *(v2.7 — was "filesystem concurrency model")*
 
-**The model: one writer per run, many readers, one lock for the shared index.**
+**The model: SQLite owns exclusion; the traits never mention a file.**
+
+The v2.0 trait leaked its implementation — it spoke of creating directories, acquiring
+lock files and tolerating torn tails. A second backend would have had to emulate
+filesystem semantics it does not have, which is how a "stable, public" plane turns out
+to describe one implementation rather than abstract over any. Reshaping it is a
+prerequisite for the SQLite store, not a follow-up.
 
 | Path | Writers | Protocol |
 |---|---|---|
-| `runs/<id>/events.ndjson` | exactly one process, for the life of the run | held by `runs/<id>/run.lock` |
-| `runs/<id>/artifacts/*`, `cache/*` | same single owner | `tmp` + `rename(2)` (atomic on POSIX) |
-| `index.ndjson` | any process, briefly | `flock(LOCK_EX)` around each append |
-| `index.ndjson` rebuild | `arbiter reindex` | scan → watermark → delta re-scan → `rename` under lock |
-
-Two concurrent `arbiter run` invocations never contend: they own different run
-directories. Contention exists only on the shared index, and is held for the duration
-of a single line append (microseconds).
+| `runs/<id>/run.db` | one, for the life of the run | SQLite write lease; no lock file |
+| `runs/<id>/blobs/*` | the same single owner | write blob → fsync → commit row |
+| `history.db` | any process, twice per run | WAL + `busy_timeout`; two short transactions |
 
 ```rust
 pub trait RunStore: Send + Sync {
-    /// Creates the run directory and acquires its exclusive lock.
-    /// Fails with `AlreadyLocked` if a live process owns it.
-    fn create(&self, run_id: &RunId, manifest: &Manifest) -> Result<RunHandle, StoreError>;
-    /// Re-acquires the lock for `resume`. Breaks a stale lock only when the
-    /// recorded pid is dead AND the lock mtime is older than `stale_after`.
-    fn reopen(&self, run_id: &RunId) -> Result<RunHandle, StoreError>;
-    /// Readers never take the lock and must tolerate a torn tail.
-    fn read_only(&self, run_id: &RunId) -> Result<RunReader, StoreError>;
+    /// Opens a new run for writing. `AlreadyOpen` if another process holds the lease.
+    fn create(&self, run_id: &RunId, manifest: &Manifest) -> Result<Box<dyn RunWriter>, StoreError>;
+    /// Re-opens an existing run for writing, for `resume`.
+    fn reopen(&self, run_id: &RunId) -> Result<Box<dyn RunWriter>, StoreError>;
+    /// Concurrent reader. Never blocks the writer; never observes a partial commit.
+    fn reader(&self, run_id: &RunId) -> Result<Box<dyn RunReader>, StoreError>;
+}
+
+pub trait RunWriter: Send {
+    /// Everything inside the closure commits, or none of it does.
+    fn transact<T>(
+        &mut self,
+        f: &mut dyn FnMut(&mut dyn Tx) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError>;
+}
+
+pub trait Tx {
+    fn append_event(&mut self, e: &Event) -> Result<Sequence, StoreError>;
+    fn put_artifact(&mut self, a: &Artifact) -> Result<ArtifactId, StoreError>;
+    fn put_cache(&mut self, k: &CacheKey, r: &CachedResponse) -> Result<(), StoreError>;
+    fn commit_budget(&mut self, r: &ReservationId, actual: Cost) -> Result<(), StoreError>;
+    fn set_call_state(&mut self, c: &CallId, s: CallState) -> Result<(), StoreError>;
+}
+
+pub trait RunReader: Send {
+    /// Always ordered by sequence. SQL has no inherent row order and a
+    /// byte-for-byte DecisionRecord cannot depend on one that happens to hold.
+    fn events(&self) -> Result<Box<dyn Iterator<Item = Event>>, StoreError>;
+    fn verify_chain(&self) -> Result<ChainStatus, StoreError>;
 }
 ```
 
-**Lock file contents:** `{pid, boot_id, hostname, started_at, engine_version}`.
-Staleness requires *both* a dead pid and `mtime > stale_after` (default 15 min), so a
-paused-but-live process is never robbed of its run.
+Nothing in those signatures names a directory, a lock, a flush or a torn tail. That is
+the test: if a signature could not be implemented over Postgres or an object store
+without lying, it is still leaking.
 
-**`reindex` vs. a live run.** Reindex scans run directories — the source of truth —
-outside the lock, records the highest `mtime` it saw, then takes the lock only to merge
-rows added since that watermark and `rename`. The held window is therefore proportional
-to *rows added during the scan*, not to the number of runs: at ten thousand runs the scan
-may take seconds while the lock is held for a handful of appends. A run that completes mid-reindex is picked up by
-the delta pass; a run that completes after the rename appends normally. Neither is lost.
+**Two writers to one run.** `create` and `reopen` fail with `AlreadyOpen` rather than
+blocking, so a second `arbiter run` on the same id reports it instead of hanging behind
+`busy_timeout`. Owner metadata — pid, boot_id, hostname, started_at, engine_version —
+lives in the `run` table and is updated on open, so `doctor` can still name the holder.
+A stale lease is one whose recorded pid is dead; there is no mtime heuristic any more
+because there is no lock file to age.
 
-**Readers and torn tails.** `RunReader::events()` stops at the last line whose
-`previous_event_hash` matches; it never repairs. Repair is the writer's job, on `reopen`.
+**Readers.** A reader opens read-only in WAL mode: it never blocks the writer, never
+blocks on the writer, and by construction never sees a partially committed stage. The
+"tolerate a torn tail" clause is gone — the condition it defended against cannot occur.
+`verify_chain` remains, because a committed row can still have been altered afterwards
+by something that is not the engine, and that is what the chain detects.
+
+**`history.db`.** One insert at run start (status `running`), one update at completion.
+Both are single-statement transactions; WAL keeps readers unblocked. Contention exists
+and is measured in microseconds, but it exists — unlike the v2.0 design, concurrent runs
+are no longer fully independent, and §8.5 says so. A row left in `running` is the signal
+`arbiter resume` and `arbiter doctor` both read.
+
+**Rebuilding `history.db`.** `arbiter reindex` scans run directories, opens each `run.db`
+read-only, and upserts one row. No watermark, no delta pass, no lock choreography —
+those existed because an append-only text index could not be updated in place. It is now
+a scan and an upsert, and losing `history.db` costs a rebuild, never a run.
+
+**Migrations.** `migrations/NNNN_*.sql` applied in order and recorded in
+`schema_metadata`. Opening a store whose `db_schema_version` exceeds the binary's is
+refused, not guessed at. A migration that cannot be expressed as a projection rebuild
+from `events` is a design smell: the log is the truth and the tables are derived, so
+almost every schema change should be *drop the projection and replay*.
 
 ---
 
@@ -296,18 +338,29 @@ same debate, model names swapped, scores compared.
 **Write order around every provider call:**
 
 ```
-1. append CALL_STARTED{call_id, prompt_hash, reservation_id, estimate}   durable, fsync
+1. TX: CALL_STARTED{call_id, prompt_hash, reservation_id, estimate}   commit  → SENT
+       + provider_calls row, state SENT
 2. …provider call; response headers arrive…
-3. append CALL_REQUEST_ID{call_id, request_id}                           durable, fsync
-4. …body streams to cache/<prompt_hash>.part…
-5. rename .part → cache/<prompt_hash>.json                               atomic
-6. append CALL_COMPLETED{call_id, response_hash, actual_cost}            durable, fsync
+3. TX: CALL_REQUEST_ID{call_id, request_id}                           commit  → ACKNOWLEDGED
+4. …body received into memory (or the blob store above blob_threshold, fsynced)…
+5. TX: CALL_COMPLETED{call_id, response_hash, actual_cost}
+       + cache_entries row
+       + budget: reserved → committed
+       + provider_calls state COMPLETED                               commit  → COMPLETED
 ```
 
-Step 3 is **its own event**. An append-only log cannot amend `CALL_STARTED`, so the
-provider request id — which is what makes an orphaned charge reconcilable against a
-usage export — must be appended when the headers arrive, not folded into an earlier
-record.
+Steps 1 and 3 are **separate committed transactions**, not an optimisation to collapse.
+A crash between them is the whole reason `CALL_ORPHANED` exists: the request left the
+machine and may have been billed, and only a committed `request_id` makes that charge
+reconcilable against a usage export. Folding step 3 into step 1 would mean recording an
+id the provider has not issued yet; folding it into step 5 would mean losing it in
+exactly the crash it was written for.
+
+Step 5 is where SQLite earns the migration. The response, the money and the events land
+in **one transaction** — the interleavings the v2.0 design had to reason about no longer
+exist. What it cannot do is reach outside the machine: a crash after step 2 and before
+step 3 leaves a call that may have been billed with no id to reconcile it by, which is
+`ORPHANED` and must never be reopened as `FAILED`.
 
 **On `resume`, for every `CALL_STARTED` with no `CALL_COMPLETED`:**
 
@@ -317,15 +370,19 @@ cache miss                → release the reservation, emit CALL_ORPHANED, retry
                             (bounded by max_retries)
 ```
 
-Cache is written *before* the completion event precisely so this recovery is possible.
+Under v2.7 the cached response and the completion event commit **together**, so the
+v2.0 rule that the cache must be written first no longer applies — there is no window
+between them to recover across.
 
 **Narrowing the exposure window.** Three mechanisms, in order of how much they actually
 buy:
 
-1. **Stream to the cache file.** Responses are written to `cache/<prompt_hash>.part` as
-   tokens arrive and renamed on completion. A crash mid-response leaves a partial
-   artifact that resume can report; a crash after the last token but before the rename
-   is recoverable because the bytes are already on disk.
+1. **Commit the response with the event.** A crash before the commit leaves no trace
+   of the call beyond its `SENT`/`ACKNOWLEDGED` rows, which is the honest state: the
+   money may be spent and the response is gone. A crash after it leaves a complete,
+   usable cache entry. There is no third outcome any more — which is the single largest
+   simplification the SQLite store buys, since the `.part`-rename window it replaces had
+   four distinct recoverable states and one that was merely reportable.
 2. **Record the provider request id as its own event.** Response headers carry a
    request identifier (`request_id` on Anthropic); `CALL_REQUEST_ID` is appended the
    moment they arrive, before the body finishes, so an orphaned call is reconcilable
