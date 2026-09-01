@@ -1,0 +1,16 @@
+# Streamlit's stock primary is a red that reads as "error" on filter chips and
+# sliders, and clashes with the validated chart palette. These match it.
+[theme]
+primaryColor            = "#0F8060"
+backgroundColor         = "#F4F1EB"
+secondaryBackgroundColor= "#FBF9F5"
+textColor               = "#231F1A"
+font                    = "sans serif"
+
+[server]
+# This app is read-only, but there is no reason for it to listen off-machine.
+address = "127.0.0.1"
+headless = true
+
+[browser]
+gatherUsageStats = false
