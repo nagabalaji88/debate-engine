@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arbiter — system architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F2EEE7;--panel:#FAF7F2;--sunk:#EAE4DA;--sunk2:#E2DACE;--line:#DCD4C8;--line2:#C6BCAC;--dash:#B5AA97;
+  --ink:#221F1A;--ink2:#463F36;--mut:#6E665A;--fade:#A2977F;
+  --acc:#1C5A4E;--accw:#DFEBE6;--pos:#2A7259;--neg:#AB412B;--qual:#9A6A1C;--judge:#3F6486;
+  --posw:#E0EEE7;--negw:#F6E4DE;--qualw:#F5EBD8;--judgew:#E3EAF1;
+  --mono:'JetBrains Mono',ui-monospace,monospace;--r:5px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font:13px/1.45 'IBM Plex Sans',system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.mut{color:var(--mut)}
+.lbl{font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--mut)}
+.app{display:grid;grid-template-columns:236px 1fr 330px;grid-template-rows:46px 1fr;height:100vh}
+.top{grid-column:1/-1;display:flex;align-items:center;gap:9px;padding:0 14px;background:var(--panel);
+  border-bottom:1px solid var(--line2)}
+.top h1{font-size:13.5px;font-weight:600;letter-spacing:-.01em}
+.pane{min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--line)}
+.pane:last-child{border-right:0;border-left:1px solid var(--line)}
+.ph{height:31px;flex:0 0 31px;display:flex;align-items:center;gap:8px;padding:0 11px;background:var(--panel);
+  border-bottom:1px solid var(--line)}
+.pb{flex:1;overflow:auto;min-height:0}
+.pf{flex:0 0 29px;display:flex;align-items:center;gap:10px;padding:0 11px;border-top:1px solid var(--line);
+  background:var(--panel);font-size:11px;color:var(--mut)}
+.sp{margin-left:auto}
+.chip{display:inline-flex;align-items:center;gap:5px;height:19px;padding:0 7px;border-radius:3px;background:var(--sunk);
+  border:1px solid var(--line);font-size:11px;color:var(--ink2);white-space:nowrap}
+.chip.acc{background:var(--accw);border-color:#BFD6CE;color:var(--acc)}
+.chip.pos{background:var(--posw);border-color:#BCD9CC;color:var(--pos)}
+.chip.neg{background:var(--negw);border-color:#E4C3B8;color:var(--neg)}
+.chip.qual{background:var(--qualw);border-color:#E2CFA6;color:var(--qual)}
+.chip.jd{background:var(--judgew);border-color:#C3D2E0;color:var(--judge)}
+.vt{display:flex;align-items:flex-start;gap:9px;padding:8px 11px;border-bottom:1px solid var(--line);
+  cursor:pointer;text-align:left;width:100%}
+.vt:hover{background:var(--panel)}
+.vt.on{background:var(--accw)}
+.vt .k{width:19px;height:19px;border-radius:4px;background:var(--sunk2);color:var(--ink2);display:grid;
+  place-items:center;font-family:var(--mono);font-size:10.5px;font-weight:700;flex:0 0 19px;margin-top:1px}
+.vt.on .k{background:var(--acc);color:#F4F1EA}
+.vt b{font-size:12.5px;font-weight:600;display:block}
+.vt s{text-decoration:none;font-size:10.5px;color:var(--mut);line-height:1.35;display:block;margin-top:1px}
+
+.cv{position:relative;margin:14px auto;width:1000px;height:626px}
+.cv svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+.nd{position:absolute;border:1px solid var(--line2);border-radius:6px;background:var(--panel);padding:6px 9px;
+  cursor:pointer;box-shadow:0 1px 0 rgba(120,105,80,.08);overflow:hidden;
+  transition:box-shadow .15s,border-color .15s,transform .12s,opacity .16s}
+.nd:hover{box-shadow:0 3px 9px rgba(120,105,80,.17);transform:translateY(-1px)}
+.nd .t{font-family:var(--mono);font-size:11px;font-weight:600;display:flex;align-items:center;gap:6px}
+.nd .d{font-size:10.5px;color:var(--mut);line-height:1.35;margin-top:3px}
+.nd .cs{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
+.nd .cs span{font-family:var(--mono);font-size:9.5px;background:var(--bg);border:1px solid var(--line);
+  border-radius:2px;padding:1px 4px;color:var(--ink2)}
+.nd.sel{border-color:var(--acc);border-width:2px;padding:5px 8px;box-shadow:0 0 0 3px var(--accw)}
+.nd.dim{opacity:.24}
+.nd.hu{border-color:var(--judge);background:var(--judgew)}
+.nd.ext{border-style:dashed;background:transparent}
+.nd.sec{border-color:var(--neg);background:var(--negw)}
+.nd.dat{border-color:var(--qual);background:var(--qualw)}
+.nd.eng{border-color:var(--acc);background:var(--accw)}
+.zone{position:absolute;border:1.5px dashed var(--dash);border-radius:9px;pointer-events:none}
+.zone.m{border-color:var(--acc);background:rgba(28,90,78,.032)}
+.zone.n{border-color:var(--neg)}
+.zone b{position:absolute;top:-8px;left:14px;background:var(--bg);padding:0 7px;font-family:var(--mono);
+  font-size:9.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--mut)}
+.zone.m b{color:var(--acc)}.zone.n b{color:var(--neg)}
+.elbl{font-family:var(--mono);font-size:9.5px;fill:var(--fade)}
+
+/* data tables (views 3 & 4) */
+.dt{width:calc(100% - 28px);margin:14px;border-collapse:collapse;font-size:11.5px;background:var(--panel);
+  border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.dt th{text-align:left;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);
+  font-weight:600;padding:7px 10px;background:var(--sunk);border-bottom:1px solid var(--line2);white-space:nowrap}
+.dt td{padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.dt tr:last-child td{border-bottom:0}
+.dt tbody tr{cursor:pointer}
+.dt tbody tr:hover td{background:var(--bg)}
+.dt tbody tr.on td{background:var(--accw)}
+.dt .g td{background:var(--sunk2);font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--mut);cursor:default}
+.dt .g:hover td{background:var(--sunk2)}
+.num{width:24px;font-family:var(--mono);color:var(--fade);text-align:right}
+.cross td{box-shadow:inset 3px 0 0 var(--neg)}
+
+.sec2{padding:10px 12px;border-bottom:1px solid var(--line)}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:3.5px 0;border-bottom:1px dotted var(--line);font-size:11.5px}
+.kv:last-child{border:0}
+.kv .v{font-family:var(--mono);font-size:11px;text-align:right}
+.li{display:flex;gap:7px;font-size:11.5px;line-height:1.45;padding:3px 0}
+.li::before{content:'';width:4px;height:4px;border-radius:50%;background:var(--line2);flex:0 0 4px;margin-top:7px}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:var(--line2);border-radius:5px;border:2px solid var(--bg)}
+::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.5v13M2.5 5.5h11M4.5 5.5 2 11h5L4.5 5.5ZM11.5 5.5 9 11h5l-2.5-5.5Z" stroke="#1C5A4E" stroke-width="1.3" stroke-linejoin="round"/></svg>
+    <h1>System architecture</h1>
+    <span class="chip mono">one binary · one machine · one egress</span>
+    <span class="sp chip acc" id="scope">no server · no database · no account</span>
+    <span class="chip mono">1–4 switches views</span>
+  </div>
+
+  <div class="pane">
+    <div class="ph"><span class="lbl">Views</span></div>
+    <div class="pb">
+      <button class="vt on" data-v="0"><span class="k">1</span><span><b>System context</b>
+        <s>who touches it, what it talks to, what ships inside it</s></span></button>
+      <button class="vt" data-v="1"><span class="k">2</span><span><b>Runtime topology</b>
+        <s>processes, threads, sandboxes, egress, config precedence</s></span></button>
+      <button class="vt" data-v="2"><span class="k">3</span><span><b>Data at rest</b>
+        <s>every file: writer, format, integrity, lifecycle, size</s></span></button>
+      <button class="vt" data-v="3"><span class="k">4</span><span><b>Data in motion</b>
+        <s>every flow: protocol, payload, trust, what persists</s></span></button>
+      <div class="sec2">
+        <div class="lbl" style="margin-bottom:7px">The shape of it</div>
+        <div class="li"><span>There is no server. The whole system is one binary the operator runs.</span></div>
+        <div class="li"><span>Exactly one flow leaves the machine: HTTPS to model providers.</span></div>
+        <div class="li"><span>Three inputs are neither code nor user data — prompts, policy constants, the correlation table. All three are versioned, recorded and pinned.</span></div>
+        <div class="li"><span>CI runs the whole engine with the mock provider and zero egress.</span></div>
+      </div>
+      <div class="sec2" style="border:0">
+        <div class="lbl" style="margin-bottom:7px">Legend</div>
+        <div style="display:flex;flex-direction:column;gap:5px;font-size:11px">
+          <span style="display:flex;align-items:center;gap:7px"><i style="width:12px;height:12px;border-radius:3px;background:var(--accw);border:1px solid var(--acc)"></i>engine</span>
+          <span style="display:flex;align-items:center;gap:7px"><i style="width:12px;height:12px;border-radius:3px;background:var(--judgew);border:1px solid var(--judge)"></i>human / actor</span>
+          <span style="display:flex;align-items:center;gap:7px"><i style="width:12px;height:12px;border-radius:3px;background:var(--qualw);border:1px solid var(--qual)"></i>versioned data asset</span>
+          <span style="display:flex;align-items:center;gap:7px"><i style="width:12px;height:12px;border-radius:3px;border:1px dashed var(--dash)"></i>outside the machine</span>
+          <span style="display:flex;align-items:center;gap:7px"><i style="width:12px;height:12px;border-radius:3px;background:var(--negw);border:1px solid var(--neg)"></i>unspecified — needs a decision</span>
+        </div>
+      </div>
+    </div>
+    <div class="pf"><span class="mono" id="vfoot">C4 level 1</span></div>
+  </div>
+
+  <div class="pane">
+    <div class="ph"><span class="lbl" id="vname">System context</span>
+      <span class="sp chip mono" id="hint">click anything for detail</span></div>
+    <div class="pb" id="stage"><div class="cv" id="cv"><svg id="edges"></svg></div></div>
+    <div class="pf"><span id="vnote">ARCHITECTURE.md §4 · §8 · §10 · §15</span></div>
+  </div>
+
+  <div class="pane">
+    <div class="ph"><span class="lbl">Detail</span><span class="chip mono sp" id="selid">—</span></div>
+    <div class="pb" id="insp"></div>
+    <div class="pf"><span>every claim here is traceable to the spec</span></div>
+  </div>
+</div>
+
+<script>
+/* ══════════ view 1 — system context ══════════ */
+var V1={zones:[
+  {x:236,y:14,w:472,h:472,t:'the operator’s machine',c:'m'},
+  {x:20,y:512,w:960,h:100,t:'ships inside the binary — versioned, recorded, pinned'}],
+ nodes:[
+ {id:'op',t:'operator',d:'engineer, architect, PM — the person deciding',x:20,y:36,w:196,h:80,k:'hu',
+  cs:['run','explain','accept'],
+  det:{what:'Runs a debate, reads why it landed where it did, accepts or overrides. The only actor in the normal path.',
+   kv:[['interface','terminal'],['auth','none — local'],['identity','not modelled']],
+   facts:['There is no account, no login and no tenancy. A run belongs to whoever owns the directory.',
+          'Override is recorded with a reason and carried as UserOverride provenance.']}},
+ {id:'ci',t:'CI runner',d:'every commit — mock provider, zero tokens',x:20,y:132,w:196,h:80,k:'hu',
+  cs:['28 CI','red-team'],
+  det:{what:'Runs the full engine against a scripted mock. No network, no spend, no keys.',
+   kv:[['egress','none'],['cost','$0.00'],['suites','CI + red-team']],
+   facts:['This is only possible because arbiter-core depends on nothing internal and calls no model.',
+          'Integration and tuning suites are opt-in and budgeted; they are not part of the commit path.',
+          'ARBITER_PLUGIN_CONFINEMENT=required is the recommended CI default.']}},
+ {id:'pa',t:'plugin author',d:'drops a plugin into a discovery directory',x:20,y:228,w:196,h:80,k:'hu',
+  cs:['plugin.toml'],
+  det:{what:'Ships a directory with a plugin.toml declaring kind, ABI, entrypoint, config schema and required permissions.',
+   kv:[['install','copy a directory'],['registry','none'],['ABI','jsonrpc-1 | wasm-1']],
+   facts:['No package manager, no central registry — installation is a file copy.',
+          'Name collisions with builtins require --allow-override.',
+          'Plugin hosts ship in 1.5; the ABI is frozen in 1.0.']}},
+ {id:'mt',t:'maintainer',d:'ships patch releases of the data assets',x:20,y:324,w:196,h:80,k:'hu',
+  cs:['correlation','packs'],
+  det:{what:'Updates the correlation table as shared-lineage models are identified, and mints new prompt-pack and policy versions.',
+   kv:[['cadence','patch releases'],['channel','the binary'],['runtime fetch','never']],
+   facts:['The correlation table is data with its own release rhythm, not a constant compiled into the engine.',
+          'A new policy version mints argument-vN. Decisions compare only within a version.']}},
+
+ {id:'bin',t:'arbiter',d:'one binary · offline-first · no daemon, no server, no database',x:262,y:44,w:420,h:96,k:'eng',
+  cs:['CLI','kernel','pure core','plugin host','store'],
+  det:{what:'The entire system. It starts, runs a debate, writes files and exits. Nothing stays resident.',
+   kv:[['processes','1 (+ plugin subprocesses)'],['ports','none'],['daemon','none'],['state','the filesystem']],
+   facts:['No service to deploy, no schema to migrate, no cluster to size.',
+          'Distributed stage execution is designed for — StageExecutor is an interface — but not built.',
+          'A future web app consumes the same NDJSON stream rather than adding a backend.']}},
+ {id:'fs',t:'~/.arbiter',d:'runs, cache, index, config — the only state that survives the process',x:262,y:172,w:420,h:86,k:'dat',
+  cs:['events.ndjson','artifacts','cache','decision.json','index'],
+  det:{what:'Every run is a directory. The event log is the source of truth; everything else is derived from it or cached beside it.',
+   kv:[['format','NDJSON + JSON'],['integrity','blake3 hash chain'],['per run','≈400 KB / ≈90 KB'],['1,000 runs','≈400 MB / 90 MB']],
+   facts:['One writer per run, many readers, one flock for the shared index.',
+          'Concurrent runs never contend — they own different directories.',
+          'index.ndjson is derived and rebuildable with arbiter reindex.']}},
+ {id:'plug',t:'plugins',d:'discovered from three directories, then builtin',x:262,y:290,w:420,h:80,k:'eng',
+  cs:['./.arbiter','~/.arbiter','$ARBITER_PLUGIN_PATH','builtin'],
+  det:{what:'Third-party code the engine loads and confines. Two mechanisms with different guarantees.',
+   kv:[['WASM','SANDBOXED'],['JSON-RPC','TRUSTED'],['confinement','none | bwrap | sandbox-exec | container']],
+   facts:['arbiter plugins list labels every plugin SANDBOXED or TRUSTED — the distinction is never implicit.',
+          'A WASM plugin reaches only the hosts it declared. A subprocess can reach anything unless confined.',
+          'Confinement is best-effort hardening, not parity with the WASM boundary.']}},
+ {id:'keys',t:'API credentials',d:'the spec never says where these come from',x:262,y:400,w:420,h:70,k:'sec',
+  cs:['env?','keychain?','config?'],
+  det:{what:'doctor checks "keys, reachability" — but no section defines where a key is read from, whether it can live in config, or how it is kept out of the event log.',
+   kv:[['status','UNSPECIFIED'],['checked by','arbiter doctor'],['risk','a key in config.toml gets committed']],
+   facts:['Three things need deciding: the source of record (env var vs OS keychain vs config), whether config may hold a secret at all, and the redaction rule for the event log and cache.',
+          'The cache stores provider responses on disk in plaintext today. If requests are ever cached alongside them, a key in a header would land in ~/.arbiter.',
+          'This is the one gap on this diagram that is a decision, not a drawing.']}},
+
+ {id:'api',t:'model provider APIs',d:'anthropic · openai-compatible · local endpoint',x:728,y:44,w:252,h:96,k:'ext',
+  cs:['HTTPS 443'],
+  det:{what:'The only thing the engine talks to over the network, and only while a run is in flight.',
+   kv:[['protocol','HTTPS'],['direction','outbound only'],['when','during a run'],['CI','never']],
+   facts:['Adapters declare capabilities rather than assuming them — the Anthropic adapter ships idempotency None because the API documents no such header.',
+          'The provider request_id is recorded at response-start so an orphaned call can be reconciled against a usage export.',
+          'A response that is billed but never reaches disk is surfaced as orphaned spend, not silently absorbed.']}},
+ {id:'ctab',t:'correlation table source',d:'explicit operator command only — never at run time',x:728,y:172,w:252,h:86,k:'ext',
+  cs:['arbiter correlation update'],
+  det:{what:'An optional URL the operator can pull a newer correlation table from, by hand.',
+   kv:[['trigger','operator command'],['at run time','never'],['records','table_version']],
+   facts:['An offline-first CLI that silently fetched a scoring input would break determinism and add a supply-chain path into the decision arithmetic.',
+          'The manifest pins table_version, so a run can always be explained against the table that was actually in force.',
+          'doctor warns when the table is stale or a configured model has no row in it.']}},
+ {id:'user',t:'the question',d:'a string or a file — the only user data in the system',x:728,y:290,w:252,h:80,k:'ext',
+  cs:['argv','file'],
+  det:{what:'A decision question. It is snapshotted into the manifest and sent to providers as part of every position prompt.',
+   kv:[['sensitivity','operator’s call'],['leaves the machine','yes — to providers'],['stored','manifest + events']],
+   facts:['This is worth saying out loud: the question and every model’s response are written to disk in plaintext and sent to third-party APIs.',
+          'For a sensitive decision the mitigation is a local endpoint, which the openai-compatible adapter already supports.']}},
+
+ {id:'packs',t:'prompt packs',d:'content-addressed · pack_hash',x:36,y:534,w:222,h:62,k:'dat',
+  cs:['13 templates','manifest.toml'],
+  det:{what:'Every prompt the engine sends, versioned as an asset rather than inlined in stage code.',
+   kv:[['hash','blake3(rendered ‖ schema)'],['recorded on','CALL_STARTED'],['pinned by','init → manifest']],
+   facts:['Replay refuses a pack mismatch — a run recorded under v3 cannot be replayed under v4.',
+          '--repack makes the substitution explicit and mints a new run id.']}},
+ {id:'pol',t:'policy constants',d:'argument-v1',x:274,y:534,w:222,h:62,k:'dat',
+  cs:['λ α β γ','caps','thresholds'],
+  det:{what:'The fixpoint constants and every threshold the decision core reads.',
+   kv:[['version','argument-v1'],['status','provisional until gated'],['recorded in','every DecisionRecord']],
+   facts:['Pinned by the tuning corpus and a red-team session before the first release, while there is no history to fragment.',
+          'Decisions are only comparable within a policy version, and arbiter history groups by it.']}},
+ {id:'corr',t:'correlation.toml',d:'seed table · table_version',x:512,y:534,w:222,h:62,k:'dat',
+  cs:['groups','lineage'],
+  det:{what:'Which models share weights or training lineage, and therefore do not count as independent judges.',
+   kv:[['path','crates/arbiter-core/data'],['override','correlation_table_path'],['env','ARBITER_CORRELATION_TABLE']],
+   facts:['Defaulting a correlation group to the provider systematically overstates independence — distinct vendors increasingly serve the same base weights.',
+          'A CorrelationSource plugin can compute groups instead of reading the file.']}},
+ {id:'fix',t:'golden fixtures',d:'4 suites',x:750,y:534,w:230,h:62,k:'dat',
+  cs:['CI 28','integration','tuning','red-team'],
+  det:{what:'The runs CI replays to prove the engine still behaves, without a single LLM token.',
+   kv:[['CI','every commit, mock'],['integration','nightly, budgeted'],['tuning','--features tuning'],['red-team','≥20, grows']],
+   facts:['A recall measurement taken against a scripted mock measures the script — which is why the suites are separated.',
+          'Every exploit found after release lands in the red-team suite as a fixture.']}}
+ ],
+ edges:[['op','bin','commands'],['ci','bin','mock'],['pa','plug',''],['mt','corr','patch release'],
+        ['bin','fs','writes'],['bin','plug','loads'],['bin','api','HTTPS'],['keys','api','auth'],
+        ['user','bin',''],['ctab','corr','by hand'],['packs','bin',''],['pol','bin',''],['corr','bin',''],['fix','bin','']]};
+
+/* ══════════ view 2 — runtime topology ══════════ */
+var V2={zones:[
+  {x:16,y:14,w:640,h:596,t:'one machine — no orchestration, no scheduler',c:'m'},
+  {x:34,y:46,w:604,h:250,t:'arbiter process'},
+  {x:690,y:44,w:294,h:150,t:'the only egress',c:'n'}],
+ nodes:[
+ {id:'rt',t:'async runtime',d:'bounded concurrency · per-provider rate limits · circuit breakers',x:50,y:84,w:284,h:88,k:'eng',
+  cs:['tokio','bounded','retry'],
+  det:{what:'Runs stages concurrently inside the bounds the kernel enforces. Concurrency is capped, not opportunistic.',
+   kv:[['parallel calls','bounded'],['per provider','rate limited'],['on failure','circuit breaker']],
+   facts:['A provider timeout yields SkipItem — the reservation is released and the debate continues with fewer models.',
+          'Retries go through the reservation protocol, never around it.']}},
+ {id:'core2',t:'decision core',d:'synchronous, pure — no IO, no async, no LLM',x:350,y:84,w:272,h:88,k:'eng',
+  cs:['deterministic','single-threaded'],
+  det:{what:'Called once per run, on one thread, with the whole claim graph in memory. Nothing about it is concurrent.',
+   kv:[['threads','1'],['IO','none'],['determinism','byte-for-byte']],
+   facts:['Same graph, same policy version, same DecisionRecord — that property is what makes replay meaningful.',
+          'It never sees a provider, a file handle or a clock.']}},
+ {id:'wasm2',t:'WASM instances',d:'in-process · runtime-enforced host and fs limits',x:50,y:190,w:284,h:88,k:'eng',
+  cs:['SANDBOXED','declared hosts'],
+  det:{what:'Plugin code running inside the arbiter process behind a real boundary.',
+   kv:[['isolation','WASM runtime'],['network','declared hosts only'],['fs','declared paths only']],
+   facts:['The limits are enforced by the runtime, not by convention.',
+          'This is the tier to prefer for anything you did not write.']}},
+ {id:'adp',t:'provider adapters',d:'anthropic · openai-compatible · mock',x:350,y:190,w:272,h:88,k:'eng',
+  cs:['capabilities','idempotency'],
+  det:{what:'Translate a rendered prompt into a provider request and a response back into an artifact.',
+   kv:[['transport','HTTPS'],['mock','no socket at all'],['key use','request headers']],
+   facts:['mock is not a stub — it scripts the whole CI fixture suite.',
+          'Where a provider supports an idempotency key the kernel sends blake3(prompt_hash ‖ reservation_id), so a retry cannot be billed twice.']}},
+ {id:'sub',t:'plugin subprocesses',d:'JSON-RPC over stdio · optionally under bwrap / sandbox-exec',x:34,y:326,w:300,h:96,k:'eng',
+  cs:['TRUSTED','scrubbed env'],
+  det:{what:'Separate OS processes speaking JSON-RPC on stdin/stdout. Any language.',
+   kv:[['transport','stdio'],['env','scrubbed'],['confinement','optional'],['CI default','required']],
+   facts:['A subprocess can still reach the filesystem and network unless it is confined — the docs say so rather than implying parity with WASM.',
+          'ARBITER_PLUGIN_CONFINEMENT=required refuses to load a TRUSTED plugin that cannot be confined.']}},
+ {id:'fs2',t:'filesystem',d:'~/.arbiter (state) · ./.arbiter (project overrides)',x:350,y:326,w:288,h:96,k:'dat',
+  cs:['run.lock','flock','.part'],
+  det:{what:'The only durable state. Two locks, both narrow.',
+   kv:[['run.lock','{pid, boot_id, hostname, started_at}'],['index','flock, microseconds'],['cache writes','.part → rename']],
+   facts:['run.lock is broken only when the pid is dead AND the lock is stale.',
+          'reindex scans outside the lock and holds it only for the tail-merge and rename.',
+          'Readers take no lock and stop at the last valid hash link.']}},
+ {id:'cfg',t:'configuration precedence',d:'CLI flags → env → ./.arbiter → ~/.arbiter → builtin defaults',x:34,y:452,w:604,h:96,k:'eng',
+  cs:['--flags','ARBITER_*','project','user','builtin'],
+  det:{what:'Resolved once at init and snapshotted into the manifest, so a replay reads the config the run actually had.',
+   kv:[['ARBITER_CORRELATION_TABLE','table path'],['ARBITER_PLUGIN_PATH','discovery'],['ARBITER_PLUGIN_CONFINEMENT','none | required']],
+   facts:['Snapshotting at init is what makes a run explainable later — the config file may have changed since.',
+          'Plugin discovery order is project → user → env path → builtin, so a project can pin its own toolchain.']}},
+ {id:'net',t:'HTTPS → provider endpoints',d:'outbound, port 443, during a run only',x:706,y:80,w:262,h:98,k:'ext',
+  cs:['no inbound','no listener'],
+  det:{what:'The engine opens connections. Nothing ever connects to it.',
+   kv:[['inbound ports','none'],['listeners','none'],['outbound','443, providers only'],['CI','no egress at all']],
+   facts:['There is no attack surface in the usual sense because there is nothing listening.',
+          'A local model endpoint keeps even this flow on the machine — the openai-compatible adapter already supports it.']}},
+ {id:'obs',t:'observability',d:'the event log is the telemetry',x:706,y:222,w:262,h:110,k:'dat',
+  cs:['events.ndjson','--stream','doctor'],
+  det:{what:'There is no metrics endpoint and nothing phones home. What you can know about a run is what the log recorded.',
+   kv:[['telemetry','none'],['live','--stream'],['post-hoc','show · explain · replay'],['health','arbiter doctor']],
+   facts:['Every number the CLI prints is derived from the same NDJSON a future UI would read.',
+          'Consumers detect loss by sequence gap and prove integrity by hash chain.']}},
+ {id:'fail',t:'failure and resume',d:'kill it and run resume',x:706,y:360,w:262,h:118,k:'eng',
+  cs:['checkpoint','cache','torn tail'],
+  det:{what:'A killed process resumes from its last verified checkpoint and never intentionally repeats a completed provider call.',
+   kv:[['checkpoint','per stage'],['recovery','cache + event log'],['torn tail','verify → LOG_REPAIRED']],
+   facts:['Universal "no duplicate spend" is not claimable — a provider can bill a response that never reached disk.',
+          'That case is surfaced as orphaned spend rather than silently absorbed.',
+          'Exact replay is cache-only with the network disabled.']}},
+ {id:'scale',t:'what this does not do',d:'no cluster, no queue, no multi-tenant story',x:706,y:506,w:262,h:104,k:'ext',
+  cs:['designed for','not built'],
+  det:{what:'Named so it is a decision rather than an omission.',
+   kv:[['distributed stages','interface only'],['HTTP API','deferred'],['multi-tenant','out of scope'],['web UI','1.5+']],
+   facts:['StageExecutor is an interface, so distributing stages later does not require a redesign.',
+          'A shared team history would need a Store implementation, not a rewrite — that plane is public and stable.']}}
+ ],
+ edges:[['rt','adp',''],['rt','core2',''],['rt','wasm2',''],['adp','net','request'],['rt','sub','stdio'],
+        ['rt','fs2','events'],['cfg','rt','resolved at init'],['fs2','obs',''],['fs2','fail','']]};
+
+/* ══════════ view 3 — data at rest ══════════ */
+var REST=[
+ {g:'per run — ~/.arbiter/runs/&lt;run_id&gt;/'},
+ {n:'manifest.json',w:'init',f:'JSON',i:'—',d:'no',l:'once, at start',s:'~4 KB',
+  det:{what:'The config snapshot: panel, depth, budget, engine version, pack_hash, policy_version, table_version.',
+   facts:['Everything needed to explain a run later against the exact inputs it had.','Pinning table_version here is what lets a decision be re-read against the table in force at the time.']}},
+ {n:'events.ndjson',w:'kernel',f:'NDJSON',i:'blake3 chain',d:'no',l:'append-only',s:'~350 KB',
+  det:{what:'The source of truth. Sequence-numbered, hash-chained, append-only.',
+   facts:['Every other file in the run directory can be rebuilt from this one.','Unknown event types are skipped by readers but still chained, so adding a variant never breaks an older consumer.','A torn final line is detected on verify and repaired with LOG_REPAIRED.']}},
+ {n:'artifacts/&lt;name&gt;.json',w:'stages',f:'JSON',i:'schema-versioned',d:'yes',l:'per stage',s:'~30 KB',
+  det:{what:'Typed stage outputs — claims, options, relations, challenges.',
+   facts:['Derived: a replay regenerates them from the event log.','Schema-versioned so an older artifact can still be read.']}},
+ {n:'cache/&lt;blake3&gt;.json',w:'kernel',f:'JSON',i:'content-addressed',d:'no',l:'per call',s:'~250 KB',
+  det:{what:'Provider responses keyed by (provider, model, params, prompt_hash).',
+   facts:['Streamed to .part and renamed on completion, so a crash never leaves a half-written cache entry that looks complete.','Exact replay is cache-only with the network disabled.','Stored in plaintext — this is where a sensitive question and its answers actually live on disk.']}},
+ {n:'decision.json',w:'decision.synthesize',f:'JSON',i:'—',d:'yes',l:'once, at end',s:'~15 KB',
+  det:{what:'The canonical DecisionRecord.',
+   facts:['Derived — replay reproduces it byte for byte, which is one of the success criteria.','Carries policy_version, so it is only comparable to records under the same version.']}},
+ {n:'run.lock',w:'kernel',f:'JSON',i:'—',d:'no',l:'held during a run',s:'<1 KB',
+  det:{what:'{pid, boot_id, hostname, started_at}.',
+   facts:['Broken only when the pid is dead AND the lock is stale — boot_id is what makes pid reuse after a reboot detectable.']}},
+ {g:'shared — ~/.arbiter/'},
+ {n:'index.ndjson',w:'kernel',f:'NDJSON',i:'watermark',d:'yes',l:'appended per run',s:'grows',
+  det:{what:'The run list that powers arbiter history.',
+   facts:['Fully derived — rebuildable with arbiter reindex.','Appends take flock for microseconds; reindex holds it only for the tail-merge and rename.','The one file concurrent runs contend on, and the contention window is proportional to rows added, not to total runs.']}},
+ {n:'config.toml',w:'operator',f:'TOML',i:'—',d:'no',l:'edited by hand',s:'<4 KB',
+  det:{what:'User-level defaults: panel, depth, budget, model choices, correlation_table_path.',
+   facts:['Overridden by ./.arbiter in a project, and by flags and env above that.','Snapshotted into the manifest at init, so editing it later cannot retroactively change what a past run meant.']}},
+ {n:'plugins/',w:'plugin author',f:'dir',i:'plugin.toml',d:'no',l:'copied in',s:'varies',
+  det:{what:'User-level plugin discovery directory.',
+   facts:['Searched after ./.arbiter/plugins and before $ARBITER_PLUGIN_PATH and builtin.']}},
+ {g:'ships with the binary — release cadence, not run cadence'},
+ {n:'prompts/&lt;pack&gt;/&lt;v&gt;/',w:'maintainer',f:'MD + TOML',i:'pack_hash',d:'no',l:'new version',s:'~60 KB',
+  det:{what:'13 templates plus a manifest. Each declares its variable schema.',
+   facts:['prompt_hash is blake3(rendered template ‖ variable schema) and is recorded on every CALL_STARTED.','Replay refuses a pack mismatch; --repack makes the substitution explicit and mints a new run id.']}},
+ {n:'correlation.toml',w:'maintainer',f:'TOML',i:'table_version',d:'no',l:'patch releases',s:'~8 KB',
+  det:{what:'Model lineage groups, used by the independence term.',
+   facts:['Updated as shared-lineage models are identified.','Never fetched at run time — arbiter correlation update is an explicit operator action.','doctor warns when it is older than the shipped seed, or when a configured model has no row.']}},
+ {n:'policy constants',w:'maintainer',f:'compiled',i:'policy_version',d:'no',l:'new version',s:'—',
+  det:{what:'argument-v1: the fixpoint constants, caps and thresholds.',
+   facts:['Ship provisional=true until the tuning sweep and red-team session both pass.','Changing them mints argument-v2 rather than silently changing what past decisions meant.']}},
+ {n:'fixtures/',w:'maintainer',f:'JSON',i:'golden',d:'no',l:'per change',s:'~2 MB',
+  det:{what:'Four suites: CI, integration, tuning, red-team.',
+   facts:['CI proves the engine end to end with zero LLM tokens.','The red-team suite has a floor, not a target — every exploit found lands here.']}},
+ {g:'not on disk — and one of these is unspecified'},
+ {n:'API credentials',w:'—',f:'—',i:'—',d:'—',l:'UNSPECIFIED',s:'—',bad:1,
+  det:{what:'doctor checks "keys, reachability", but nothing defines where a key is read from or how it is kept out of the log and cache.',
+   facts:['Needs a decision: env var, OS keychain, or config — and whether config may hold one at all.','Needs a redaction rule for the event log and the response cache.','Everything else on this page is specified. This is the exception.']}}];
+
+/* ══════════ view 4 — data in motion ══════════ */
+var MOTION=[
+ {g:'starting a run'},
+ {s:'operator',t:'arbiter',p:'argv / stdin',pay:'question, --panel, --depth, --budget',tr:'local',per:'manifest',
+  det:{what:'The question is the only user data the system takes.',facts:['Snapshotted into the manifest at init together with the resolved config.']}},
+ {s:'config + env',t:'arbiter',p:'file read',pay:'flags → env → project → user → builtin',tr:'local',per:'manifest',
+  det:{what:'Precedence is resolved once and frozen.',facts:['Freezing it at init is what makes a replay read the config the run actually had, not the file as it is today.']}},
+ {s:'prompt pack',t:'kernel',p:'file read',pay:'template + variable schema',tr:'shipped',per:'prompt_hash',
+  det:{what:'Templates are rendered, not concatenated in stage code.',facts:['prompt_hash = blake3(rendered ‖ schema), recorded on every CALL_STARTED.']}},
+ {g:'the one flow that leaves the machine'},
+ {s:'adapter',t:'provider API',p:'HTTPS 443',pay:'rendered prompt + the question + prior claims',tr:'THIRD PARTY',per:'—',x:1,
+  det:{what:'The only outbound flow in the system, and the only place your question is seen by anyone else.',
+   facts:['Outbound only. Nothing ever connects to the engine — there is no listener.','Reserved against the budget ledger before it is sent, and committed at actual cost after.','With a local endpoint via the openai-compatible adapter, even this stays on the machine.','CI never makes this call — the mock provider opens no socket.']}},
+ {s:'provider API',t:'cache',p:'HTTPS → disk',pay:'raw response',tr:'THIRD PARTY',per:'cache/&lt;blake3&gt;.json',x:1,
+  det:{what:'Responses land content-addressed on disk, in plaintext.',
+   facts:['Streamed to .part and renamed on completion.','request_id is recorded at response-start so an orphaned call can be reconciled against a usage export.']}},
+ {g:'inside the machine'},
+ {s:'kernel',t:'events.ndjson',p:'append',pay:'every state transition',tr:'local',per:'source of truth',
+  det:{what:'Everything the engine does is an event before it is anything else.',
+   facts:['Sequence-numbered and hash-chained; consumers detect loss by gap and prove integrity by chain.','durable:false events may be buffered; the protocol defines which must be flushed before a call.']}},
+ {s:'stages',t:'artifacts/',p:'write',pay:'typed stage outputs',tr:'local',per:'derived',
+  det:{what:'Convenience, not truth — regenerated on replay.',facts:['Schema-versioned so an older artifact stays readable.']}},
+ {s:'core',t:'decision.json',p:'write',pay:'DecisionRecord',tr:'local',per:'derived',
+  det:{what:'The answer, computed rather than asked for.',facts:['Byte-for-byte reproducible from the same event log and policy version.']}},
+ {s:'kernel',t:'index.ndjson',p:'flock + append',pay:'one row per run',tr:'local',per:'derived',
+  det:{what:'The only shared-state write in the system.',facts:['The lock is held for microseconds; reindex does its scan outside it.']}},
+ {g:'plugins'},
+ {s:'kernel',t:'WASM instance',p:'in-process call',pay:'typed artifact',tr:'SANDBOXED',per:'—',
+  det:{what:'Runs inside the process behind a runtime-enforced boundary.',facts:['Reaches only the network hosts and filesystem paths it declared.']}},
+ {s:'kernel',t:'plugin subprocess',p:'JSON-RPC / stdio',pay:'typed artifact',tr:'TRUSTED',per:'—',
+  det:{what:'A separate OS process in any language.',
+   facts:['The environment is scrubbed and declared permissions are recorded and displayed — but it can still reach the filesystem and network unless confined.','ARBITER_PLUGIN_CONFINEMENT=required refuses to load one that cannot be confined.']}},
+ {g:'reading it back'},
+ {s:'events.ndjson',t:'stdout',p:'read',pay:'--stream, show, explain, history',tr:'local',per:'—',
+  det:{what:'Every read command is a projection of the log.',facts:['explain --json is the payload; the human renderer consumes the same structure a UI would.']}},
+ {s:'cache',t:'core',p:'read',pay:'recorded responses',tr:'local',per:'—',
+  det:{what:'Replay path: cache-only, network disabled.',facts:['A pack or policy mismatch is refused rather than silently re-run — --repack and --repolicy mint a new run id.']}},
+ {s:'operator',t:'correlation.toml',p:'explicit command',pay:'new lineage table',tr:'operator',per:'table_version',
+  det:{what:'arbiter correlation update [--from &lt;url&gt;] — never automatic.',
+   facts:['A scoring input pulled from the network at run time would break determinism and add a supply-chain path.']}}];
+
+var VIEWS=[V1,V2],cur=0;
+var cv=document.getElementById('cv'),svg=document.getElementById('edges'),
+    stage=document.getElementById('stage'),ins=document.getElementById('insp');
+var sel=null,hov=null,cache={};
+
+function nodeHTML(n){
+  return '<div class="t">'+n.t+'</div><div class="d">'+n.d+'</div>'+
+    (n.cs?'<div class="cs">'+n.cs.map(function(c){return '<span>'+c+'</span>'}).join('')+'</div>':'');
+}
+function anchor(a,b){
+  var ac={x:a.x+a.w/2,y:a.y+a.h/2},bc={x:b.x+b.w/2,y:b.y+b.h/2},dx=bc.x-ac.x,dy=bc.y-ac.y;
+  if(Math.abs(dy)>Math.abs(dx)*0.9)return dy>0?[{x:ac.x,y:a.y+a.h},{x:bc.x,y:b.y},'v']:[{x:ac.x,y:a.y},{x:bc.x,y:b.y+b.h},'v'];
+  return dx>0?[{x:a.x+a.w,y:ac.y},{x:b.x,y:bc.y},'h']:[{x:a.x,y:ac.y},{x:b.x+b.w,y:bc.y},'h'];
+}
+function pth(p,q,o){
+  if(o==='v'){var m=(p.y+q.y)/2;return 'M'+p.x+' '+p.y+' C'+p.x+' '+m+' '+q.x+' '+m+' '+q.x+' '+q.y}
+  var mx=(p.x+q.x)/2;return 'M'+p.x+' '+p.y+' C'+mx+' '+p.y+' '+mx+' '+q.y+' '+q.x+' '+q.y;
+}
+function renderGraph(V){
+  cv.innerHTML='<svg id="edges"></svg>';svg=document.getElementById('edges');
+  V.zones.forEach(function(z){var d=document.createElement('div');d.className='zone'+(z.c?' '+z.c:'');
+    d.style.cssText='left:'+z.x+'px;top:'+z.y+'px;width:'+z.w+'px;height:'+z.h+'px';
+    d.innerHTML='<b>'+z.t+'</b>';cv.appendChild(d)});
+  V.map={};
+  V.nodes.forEach(function(n){V.map[n.id]=n;
+    var d=document.createElement('div');d.className='nd '+(n.k||'');d.tabIndex=0;d.dataset.id=n.id;
+    d.style.cssText='left:'+n.x+'px;top:'+n.y+'px;width:'+n.w+'px;height:'+n.h+'px';
+    d.innerHTML=nodeHTML(n);
+    d.addEventListener('click',function(){pickNode(V,n.id)});
+    d.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();pickNode(V,n.id)}});
+    d.addEventListener('mouseenter',function(){hov=n.id;drawEdges(V)});
+    d.addEventListener('mouseleave',function(){hov=null;drawEdges(V)});
+    cv.appendChild(d);n.el=d});
+  drawEdges(V);
+}
+function drawEdges(V){
+  var s='<defs><marker id="mm" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">'+
+        '<path d="M0 .5 8 4 0 7.5z" fill="#1C5A4E"/></marker>'+
+        '<marker id="mn" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">'+
+        '<path d="M0 .5 8 4 0 7.5z" fill="#AB412B"/></marker></defs>',touched={};
+  V.edges.forEach(function(e){
+    var a=V.map[e[0]],b=V.map[e[1]];if(!a||!b)return;
+    var out=(e[2]==='HTTPS'||e[2]==='request'||e[2]==='auth');
+    var on=!hov||e[0]===hov||e[1]===hov;if(on&&hov){touched[e[0]]=1;touched[e[1]]=1}
+    var an=anchor(a,b);
+    s+='<path d="'+pth(an[0],an[1],an[2])+'" fill="none" stroke="'+(out?'#AB412B':'#1C5A4E')+
+       '" stroke-width="'+(hov&&on?2.5:1.6)+'" opacity="'+(on?(hov?1:.55):.09)+
+       '" marker-end="url(#'+(out?'mn':'mm')+')"/>';
+    if(e[2]&&on&&hov){var mx=(an[0].x+an[1].x)/2,my=(an[0].y+an[1].y)/2;
+      s+='<text class="elbl" x="'+(mx+5)+'" y="'+(my-5)+'"'+(out?' fill="#AB412B"':'')+'>'+e[2]+'</text>'}
+  });
+  svg.innerHTML=s;
+  V.nodes.forEach(function(n){n.el.classList.toggle('dim',!!hov&&n.id!==hov&&!touched[n.id])});
+}
+function pickNode(V,id){
+  sel=id;var n=V.map[id];
+  V.nodes.forEach(function(o){o.el.classList.toggle('sel',o.id===id)});
+  document.getElementById('selid').textContent=n.t;
+  var h='<div class="sec2"><p style="font-size:12.5px;line-height:1.5">'+n.det.what+'</p></div>';
+  if(n.det.kv){h+='<div class="sec2"><div class="lbl" style="margin-bottom:6px">Facts</div>';
+    n.det.kv.forEach(function(k){h+='<div class="kv"><span class="mut">'+k[0]+'</span><span class="v">'+k[1]+'</span></div>'});
+    h+='</div>'}
+  h+='<div class="sec2" style="border:0"><div class="lbl" style="margin-bottom:6px">What matters</div>';
+  n.det.facts.forEach(function(f){h+='<div class="li"><span>'+f+'</span></div>'});
+  ins.innerHTML=h+'</div>';
+}
+function renderRest(){
+  var h='<table class="dt"><thead><tr><th class="num">#</th><th>file</th><th>written by</th><th>format</th>'+
+        '<th>integrity</th><th>derived</th><th>lifecycle</th><th>typical</th></tr></thead><tbody>',i=0;
+  REST.forEach(function(r,ix){
+    if(r.g){h+='<tr class="g"><td colspan="8">'+r.g+'</td></tr>';return}
+    i++;h+='<tr data-i="'+ix+'"'+(r.bad?' class="cross"':'')+'><td class="num">'+i+'</td>'+
+      '<td class="mono"'+(r.bad?' style="color:var(--neg)"':'')+'>'+r.n+'</td><td>'+r.w+'</td><td class="mono">'+r.f+'</td>'+
+      '<td class="mono">'+r.i+'</td><td class="mono">'+r.d+'</td><td>'+r.l+'</td><td class="mono">'+r.s+'</td></tr>';
+  });
+  stage.innerHTML=h+'</tbody></table>';
+  bindRows(REST,function(r){return r.n});
+}
+function renderMotion(){
+  var h='<table class="dt"><thead><tr><th class="num">#</th><th>from</th><th>to</th><th>transport</th>'+
+        '<th>payload</th><th>trust</th><th>persisted as</th></tr></thead><tbody>',i=0;
+  MOTION.forEach(function(r,ix){
+    if(r.g){h+='<tr class="g"><td colspan="7">'+r.g+'</td></tr>';return}
+    i++;h+='<tr data-i="'+ix+'"'+(r.x?' class="cross"':'')+'><td class="num">'+i+'</td>'+
+      '<td class="mono">'+r.s+'</td><td class="mono">'+r.t+'</td><td class="mono">'+r.p+'</td><td>'+r.pay+'</td>'+
+      '<td><span class="chip '+(r.tr==='THIRD PARTY'?'neg':r.tr==='SANDBOXED'?'jd':r.tr==='TRUSTED'?'qual':'')+'">'+r.tr+'</span></td>'+
+      '<td class="mono">'+r.per+'</td></tr>';
+  });
+  stage.innerHTML=h+'</tbody></table>';
+  bindRows(MOTION,function(r){return r.s+' → '+r.t});
+}
+function bindRows(DATA,name){
+  [].forEach.call(stage.querySelectorAll('tbody tr[data-i]'),function(tr){
+    tr.addEventListener('click',function(){
+      [].forEach.call(stage.querySelectorAll('tr'),function(o){o.classList.remove('on')});
+      tr.classList.add('on');
+      var r=DATA[+tr.dataset.i];
+      document.getElementById('selid').textContent=name(r);
+      var h='<div class="sec2"><p style="font-size:12.5px;line-height:1.5">'+r.det.what+'</p></div>'+
+            '<div class="sec2" style="border:0"><div class="lbl" style="margin-bottom:6px">What matters</div>';
+      r.det.facts.forEach(function(f){h+='<div class="li"><span>'+f+'</span></div>'});
+      ins.innerHTML=h+'</div>';
+    });
+  });
+  stage.querySelector('tbody tr[data-i]').click();
+}
+var META=[['System context','C4 level 1 — actors and externals','ARCHITECTURE.md §4 · §10 · §15'],
+          ['Runtime topology','C4 level 2 — processes and boundaries','ARCHITECTURE.md §7 · §8 · §10'],
+          ['Data at rest','14 artifacts · 1 unspecified','ARCHITECTURE.md §8 · §15'],
+          ['Data in motion','14 flows · 2 cross the machine','ARCHITECTURE.md §8 · §9 · §11']];
+function show(v){
+  cur=v;hov=null;sel=null;
+  [].forEach.call(document.querySelectorAll('.vt'),function(b){b.classList.toggle('on',+b.dataset.v===v)});
+  document.getElementById('vname').textContent=META[v][0];
+  document.getElementById('vfoot').textContent=META[v][1];
+  document.getElementById('vnote').textContent=META[v][2];
+  document.getElementById('hint').textContent=v<2?'hover to trace · click for detail':'click a row for detail';
+  if(v<2){stage.innerHTML='<div class="cv" id="cv"></div>';cv=document.getElementById('cv');
+    renderGraph(VIEWS[v]);pickNode(VIEWS[v],VIEWS[v].nodes[v===0?4:0].id)}
+  else if(v===2)renderRest();else renderMotion();
+}
+[].forEach.call(document.querySelectorAll('.vt'),function(b){
+  b.addEventListener('click',function(){show(+b.dataset.v)})});
+document.addEventListener('keydown',function(e){
+  var i='1234'.indexOf(e.key);if(i>-1)show(i);
+});
+show(0);
+</script>
+</body>
+</html>

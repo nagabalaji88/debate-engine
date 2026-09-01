@@ -59,9 +59,19 @@ power surface. D is the one that could ship later.
 
 ## Diagrams
 
-Two interactive maps, separate on purpose — one answers *what the parts are*, the
-other *what happens in what order*. Mixing them is how architecture diagrams become
-unreadable.
+Three interactive maps, separate on purpose — one answers *what the system is*, one
+*what the code is*, one *what happens in what order*. Mixing them is how architecture
+diagrams become unreadable.
+
+**[`system-architecture.html`](system-architecture.html)** — the whole system, four
+views (keys `1`–`4`). *System context*: who touches it, what it talks to, what ships
+inside it. *Runtime topology*: processes, sandboxes, egress, config precedence.
+*Data at rest*: 14 artifacts — writer, format, integrity, derived-or-not, lifecycle,
+size. *Data in motion*: 14 flows — transport, payload, trust, what persists, with the
+two that cross the machine boundary marked.
+
+The shape it makes visible: there is no server, no database and no account; the whole
+system is one binary the operator runs, and **exactly one flow leaves the machine**.
 
 **[`architecture-map.html`](architecture-map.html)** — 8 crates, 8 plugin planes,
 2 mechanisms, 2 external resources. Click any block for its contract and its edges;
