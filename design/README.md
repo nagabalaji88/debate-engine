@@ -57,6 +57,30 @@ Not mutually exclusive. The most likely real product is **A during a run →
 C when it lands**, with **B** behind a key from any claim id and **E** as the
 power surface. D is the one that could ship later.
 
+## Diagrams
+
+Two interactive maps, separate on purpose — one answers *what the parts are*, the
+other *what happens in what order*. Mixing them is how architecture diagrams become
+unreadable.
+
+**[`architecture-map.html`](architecture-map.html)** — 8 crates, 8 plugin planes,
+2 mechanisms, 2 external resources. Click any block for its contract and its edges;
+hover to trace them and dim the rest. Toggles: dependency edges, data-flow edges,
+the engine boundary, and whether 1.5 items are shown. The footer states the
+dependency rule the map is checked against — `core → nothing internal · kernel →
+core · everything else → kernel · nothing → cli`.
+
+**[`workflow-map.html`](workflow-map.html)** — the 15 stages, the one controlled
+loop, and the gated Build Studio. Press **run** (or space) to play the pipeline:
+stages light in order, the budget gauge fills, calls and tokens accumulate.
+Switch **standard ↔ deep** to see the loop engage and the totals change. Overlays:
+LLM-only, cost heat. Click a stage for its contract, the events it emits, and what
+happens when it fails.
+
+The playback is not decorative — it is driven by the pre-flight table in
+`ARCHITECTURE.md` §11, and a standard run reproduces it exactly: **$0.480, 28 calls,
+74.5k tokens**. Deep lands at $0.900 against a $1.20 target.
+
 ## Design system
 
 Swiss/minimal, dashboard density (per `ui-ux-pro-max`: *Minimalism & Swiss

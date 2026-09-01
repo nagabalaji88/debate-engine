@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arbiter — architecture map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F2EEE7;--panel:#FAF7F2;--sunk:#EAE4DA;--sunk2:#E2DACE;--line:#DCD4C8;--line2:#C6BCAC;--dash:#B5AA97;
+  --ink:#221F1A;--ink2:#463F36;--mut:#6E665A;--fade:#A2977F;
+  --acc:#1C5A4E;--accw:#DFEBE6;--pos:#2A7259;--neg:#AB412B;--qual:#9A6A1C;--judge:#3F6486;
+  --posw:#E0EEE7;--negw:#F6E4DE;--qualw:#F5EBD8;--judgew:#E3EAF1;
+  --mono:'JetBrains Mono',ui-monospace,monospace;--r:5px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font:13px/1.45 'IBM Plex Sans',system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.mut{color:var(--mut)}
+.lbl{font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--mut)}
+.app{display:grid;grid-template-columns:214px 1fr 322px;grid-template-rows:46px 1fr;height:100vh}
+.top{grid-column:1/-1;display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--panel);
+  border-bottom:1px solid var(--line2)}
+.top h1{font-size:13.5px;font-weight:600;letter-spacing:-.01em}
+.pane{min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--line)}
+.pane:last-child{border-right:0;border-left:1px solid var(--line)}
+.ph{height:31px;flex:0 0 31px;display:flex;align-items:center;gap:8px;padding:0 11px;background:var(--panel);
+  border-bottom:1px solid var(--line)}
+.pb{flex:1;overflow:auto;min-height:0}
+.pf{flex:0 0 29px;display:flex;align-items:center;gap:10px;padding:0 11px;border-top:1px solid var(--line);
+  background:var(--panel);font-size:11px;color:var(--mut)}
+.sp{margin-left:auto}
+.chip{display:inline-flex;align-items:center;gap:5px;height:19px;padding:0 7px;border-radius:3px;background:var(--sunk);
+  border:1px solid var(--line);font-size:11px;color:var(--ink2);white-space:nowrap}
+.chip.acc{background:var(--accw);border-color:#BFD6CE;color:var(--acc)}
+.chip.pos{background:var(--posw);border-color:#BCD9CC;color:var(--pos)}
+.chip.neg{background:var(--negw);border-color:#E4C3B8;color:var(--neg)}
+.chip.qual{background:var(--qualw);border-color:#E2CFA6;color:var(--qual)}
+.chip.jd{background:var(--judgew);border-color:#C3D2E0;color:var(--judge)}
+.tg{height:22px;padding:0 9px;border:1px solid var(--line2);border-radius:var(--r);background:var(--panel);
+  font-size:11px;font-weight:500;display:inline-flex;align-items:center;gap:6px;transition:all .15s}
+.tg:hover{background:var(--sunk)}
+.tg[aria-pressed=true]{background:var(--acc);border-color:var(--acc);color:#F4F1EA}
+.tg .sq{width:8px;height:8px;border-radius:2px;border:1px solid currentColor;opacity:.7}
+.tg[aria-pressed=true] .sq{background:currentColor}
+
+/* index rail */
+.ix{display:flex;align-items:center;gap:8px;padding:5px 11px;border-bottom:1px solid var(--line);cursor:pointer;font-size:11.5px}
+.ix:hover{background:var(--panel)}
+.ix.on{background:var(--accw)}
+.ix .k{width:7px;height:7px;border-radius:2px;flex:0 0 7px}
+.ix .r{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--fade)}
+.grp{padding:8px 11px 4px;position:sticky;top:0;background:var(--bg);z-index:2}
+
+/* canvas */
+.cv{position:relative;margin:16px auto;width:940px;height:672px;
+  background-image:radial-gradient(var(--line) .9px,transparent .9px);background-size:22px 22px}
+.cv svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+.nd{position:absolute;border:1px solid var(--line2);border-radius:6px;background:var(--panel);
+  padding:6px 9px;cursor:pointer;transition:box-shadow .15s,border-color .15s,transform .12s,opacity .15s;
+  box-shadow:0 1px 0 rgba(120,105,80,.08);overflow:hidden}
+.nd:hover{box-shadow:0 3px 9px rgba(120,105,80,.17);transform:translateY(-1px)}
+.nd .t{font-family:var(--mono);font-size:11.5px;font-weight:600;display:flex;align-items:center;gap:6px}
+.nd .d{font-size:10.5px;color:var(--mut);line-height:1.35;margin-top:2px}
+.nd .chips{display:flex;flex-wrap:wrap;gap:3px;margin-top:5px}
+.nd .chips span{font-family:var(--mono);font-size:9.5px;background:var(--bg);border:1px solid var(--line);
+  border-radius:2px;padding:1px 4px;color:var(--ink2)}
+.nd.sel{border-color:var(--acc);border-width:2px;padding:5px 8px;box-shadow:0 0 0 3px var(--accw)}
+.nd.ghost{border-style:dashed;background:transparent;color:var(--mut)}
+.nd.ghost .t{color:var(--mut)}
+.nd.dim{opacity:.26}
+.nd.pure{border-color:var(--pos);background:var(--posw)}
+.nd.sand{border-color:var(--judge);background:var(--judgew)}
+.nd.trust{border-color:var(--qual);background:var(--qualw)}
+.zone{position:absolute;border:1px dashed var(--dash);border-radius:8px;pointer-events:none}
+.zone b{position:absolute;top:-8px;left:12px;background:var(--bg);padding:0 6px;font-family:var(--mono);
+  font-size:9.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--mut)}
+.elbl{font-family:var(--mono);font-size:9px;fill:var(--fade)}
+
+/* inspector */
+.sec{padding:10px 12px;border-bottom:1px solid var(--line)}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:3.5px 0;border-bottom:1px dotted var(--line);font-size:11.5px}
+.kv:last-child{border:0}
+.li{display:flex;gap:7px;font-size:11.5px;line-height:1.45;padding:3px 0}
+.li::before{content:'';width:4px;height:4px;border-radius:50%;background:var(--line2);flex:0 0 4px;margin-top:7px}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:var(--line2);border-radius:5px;border:2px solid var(--bg)}
+::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.5v13M2.5 5.5h11M4.5 5.5 2 11h5L4.5 5.5ZM11.5 5.5 9 11h5l-2.5-5.5Z" stroke="#1C5A4E" stroke-width="1.3" stroke-linejoin="round"/></svg>
+    <h1>Architecture map</h1>
+    <span class="chip mono">8 crates · 8 planes</span>
+    <div class="sp" style="display:flex;gap:6px">
+      <button class="tg" id="t-dep" aria-pressed="true"><span class="sq"></span>dependencies</button>
+      <button class="tg" id="t-flow" aria-pressed="false"><span class="sq"></span>data flow</button>
+      <button class="tg" id="t-trust" aria-pressed="false"><span class="sq"></span>trust boundary</button>
+      <button class="tg" id="t-def" aria-pressed="true"><span class="sq"></span>show 1.5</button>
+    </div>
+  </div>
+
+  <div class="pane">
+    <div class="ph"><span class="lbl">Index</span><span class="chip sp mono" id="cnt">—</span></div>
+    <div class="pb" id="index"></div>
+    <div class="pf"><span>click to inspect</span></div>
+  </div>
+
+  <div class="pane">
+    <div class="ph"><span class="lbl">System</span><span class="chip" id="viewname">dependency view</span>
+      <span class="sp chip mono" id="hint">hover a block to trace its edges</span></div>
+    <div class="pb"><div class="cv" id="cv"><svg id="edges"></svg></div></div>
+    <div class="pf"><span class="mono">core → nothing internal · kernel → core · everything else → kernel · nothing → cli</span></div>
+  </div>
+
+  <div class="pane">
+    <div class="ph"><span class="lbl">Inspector</span><span class="chip mono sp" id="selid">—</span></div>
+    <div class="pb" id="insp"></div>
+    <div class="pf"><span id="ifoot">ARCHITECTURE.md §4 · §7 · §10</span></div>
+  </div>
+</div>
+
+<script>
+var N=[
+ {id:'cli',t:'arbiter-cli',d:'the only frontend in phase 1',x:30,y:16,w:250,h:62,g:'crate',
+  chips:['run','explain','replay','accept','build','doctor'],
+  det:{what:'Parses commands, renders what the engine returns, and streams events. It holds no decision logic — every number it prints comes out of core.',
+       dep:['arbiter-kernel'],up:[],
+       facts:['Nothing in the workspace depends on cli — it can be replaced without touching the engine.',
+              'A future web app consumes the same NDJSON stream; it is not a second code path.',
+              '--json on every read command emits the same structure the human renderer consumes.']}},
+ {id:'spa',t:'web / SPA',d:'deferred to 1.5 — same event stream',x:296,y:16,w:190,h:62,g:'crate',ghost:1,
+  chips:['deferred'],
+  det:{what:'Explicitly out of phase 1. It reads events.ndjson and explain --json; it never re-implements the explanation.',
+       dep:['arbiter-store'],up:[],
+       facts:['Deferring it is what keeps the decision core the only source of truth.',
+              'The five screen concepts in design/concepts.html are what it would render.']}},
+
+ {id:'kernel',t:'arbiter-kernel',d:'orchestration, money, durability',x:30,y:116,w:552,h:132,g:'crate',
+  chips:['StageGraph','Budget ledger','Cache','Event store','Bounds','Idempotency'],
+  det:{what:'Runs the stage graph and owns everything that touches the outside world: concurrency, retries, spend, checkpoints, the log.',
+       dep:['arbiter-core'],up:['arbiter-cli','arbiter-providers','arbiter-store','arbiter-plugin','arbiter-build','arbiter-fixtures'],
+       facts:['StageGraph: typed artifacts in/out, idempotency key per (run, stage, input_hash), checkpoint per stage.',
+              'Budget ledger: reserve → call → commit → release. The guard’s drop releases the remainder.',
+              'An unsatisfiable reservation fails the call and the controller sees StopReason::BudgetExhausted.',
+              'Cache key is (provider, model, params, prompt_hash); replay is cache-only with the network disabled.',
+              'Idempotency is capability-gated — the Anthropic adapter ships None because the API documents no such header.']}},
+
+ {id:'core',t:'arbiter-core',d:'pure decision engine — no IO, no async, no LLM',x:30,y:284,w:552,h:132,g:'crate',pure:1,
+  chips:['E(c) evidence','fixpoint','standing','options','outcome','confidence','triggers'],
+  det:{what:'The whole decision. Given a claim graph it computes evidence strength, runs the damped Jacobi fixpoint, classifies standing, scores options, picks an outcome and decomposes the confidence.',
+       dep:[],up:['arbiter-kernel'],
+       facts:['Depends on nothing internal. That is what makes the golden fixtures runnable with zero LLM tokens.',
+              'Deterministic: same graph, same policy version, same DecisionRecord, byte for byte.',
+              'Confidence is 3 evidence dimensions minus 5 penalties, and every contribution carries its inputs.',
+              'Constants ship provisional=true until the tuning sweep and the red-team session both pass.',
+              'Model vote counts are not an input at any point.']}},
+
+ {id:'providers',t:'arbiter-providers',d:'model adapters',x:30,y:448,w:172,h:92,g:'crate',
+  chips:['anthropic','openai-compat','mock'],
+  det:{what:'Speaks to models. Declares capabilities — idempotency, streaming, max tokens — rather than assuming them.',
+       dep:['arbiter-kernel'],up:[],
+       facts:['mock is not a stub: it scripts the whole CI fixture suite, which is why CI costs nothing.',
+              'The provider request_id is recorded at response-start so orphaned calls can be reconciled.',
+              'Retries go through the kernel’s reservation, never around it.']}},
+ {id:'store',t:'arbiter-store',d:'filesystem / NDJSON',x:214,y:448,w:172,h:92,g:'crate',
+  chips:['events','artifacts','cache','index'],
+  det:{what:'Implements the Store traits over a directory. One writer per run, many readers, one lock for the shared index.',
+       dep:['arbiter-kernel'],up:[],
+       facts:['events.ndjson is the source of truth — append-only, sequenced, hash-chained.',
+              'Concurrent runs never contend: they own different directories.',
+              'reindex scans outside the lock and holds it only for the tail-merge and rename.',
+              'Readers take no lock and stop at the last valid hash link.']}},
+ {id:'build',t:'arbiter-build',d:'Build Studio — optional, downstream',x:398,y:448,w:184,h:92,g:'crate',
+  chips:['product','technical','prompt'],
+  det:{what:'Three generation stages that run only after a decision is accepted. Isolated by design.',
+       dep:['arbiter-kernel'],up:[],
+       facts:['Refuses to run without a DecisionAcceptance record.',
+              'Ships in 1.5. Its interfaces are defined in 1.0 so nothing has to be redesigned for it.',
+              'Downstream of DecisionRecord — it cannot influence the decision it builds from.']}},
+ {id:'plugin',t:'arbiter-plugin',d:'host + ABI',x:214,y:562,w:368,h:88,g:'crate',
+  chips:['plugin.toml','jsonrpc-1','wasm-1','permissions'],
+  det:{what:'Loads and confines third-party code. Enforces the permissions each plugin declares.',
+       dep:['arbiter-kernel'],up:[],
+       facts:['Discovery order: ./.arbiter/plugins → ~/.arbiter/plugins → $ARBITER_PLUGIN_PATH → builtin.',
+              'Name collisions with builtins require --allow-override.',
+              'Every plugin is labelled SANDBOXED or TRUSTED — the distinction is never implicit.',
+              'Plugin hosts ship in 1.5; the ABI is frozen in 1.0.']}},
+ {id:'fixtures',t:'arbiter-fixtures',d:'golden runs',x:30,y:562,w:172,h:88,g:'crate',
+  chips:['CI 28','integration','tuning','red-team'],
+  det:{what:'Four suites. CI proves the engine end to end without a single LLM token.',
+       dep:['arbiter-kernel'],up:[],
+       facts:['CI: 28 fixtures, scripted mock, every commit.',
+              'Integration: real providers, nightly, budgeted — measurement, not assertion.',
+              'Tuning: the graph corpus the fixpoint constants are swept against.',
+              'Red-team: ≥20 adversarial cases; the set only grows.']}},
+
+ {id:'p_provider',t:'Provider',d:'stable · public ABI',x:614,y:116,w:150,h:50,g:'plane',
+  det:{what:'Add a model vendor without touching the engine.',dep:[],up:[],
+       facts:['Stable tier: versioned ABI, in-process traits and JSON-RPC / WASM.','Declares capabilities rather than assuming them.']}},
+ {id:'p_judge',t:'Judge',d:'stable · public ABI',x:774,y:116,w:150,h:50,g:'plane',
+  det:{what:'Replace the 9-metric rubric with your own scoring.',dep:[],up:[],
+       facts:['Receives anonymised, shuffled positions — a judge plugin cannot see model identity either.']}},
+ {id:'p_store',t:'Store',d:'stable · public ABI',x:614,y:176,w:150,h:50,g:'plane',
+  det:{what:'Swap the filesystem for something else.',dep:[],up:[],
+       facts:['The NDJSON implementation is one implementation, not the contract.']}},
+ {id:'p_export',t:'Exporter',d:'stable · public ABI',x:774,y:176,w:150,h:50,g:'plane',
+  det:{what:'Render a DecisionRecord into your format.',dep:[],up:[],
+       facts:['Downstream only — an exporter can never change a decision.']}},
+ {id:'p_stage',t:'Stage',d:'internal · traits only',x:614,y:256,w:150,h:46,g:'plane',
+  det:{what:'Add or replace a pipeline stage.',dep:[],up:[],
+       facts:['Internal tier: in-process traits, no public ABI yet.','Becomes public when a second real implementation exists.']}},
+ {id:'p_extract',t:'Extractor',d:'internal · traits only',x:774,y:256,w:150,h:46,g:'plane',
+  det:{what:'Claim extraction and grounding.',dep:[],up:[],
+       facts:['The replacement point for non-English support — phase 1 grounding assumes Latin-script tokens.']}},
+ {id:'p_rel',t:'Relation',d:'internal · traits only',x:614,y:312,w:150,h:46,g:'plane',
+  det:{what:'Classify how two claims relate.',dep:[],up:[],
+       facts:['Cheap similarity proposes candidates; this classifies only the top-K.']}},
+ {id:'p_policy',t:'Policy',d:'internal · traits only',x:774,y:312,w:150,h:46,g:'plane',
+  det:{what:'The fixpoint constants and thresholds.',dep:[],up:[],
+       facts:['Swapping it mints a new policy_version. Decisions compare only within one.']}},
+
+ {id:'wasm',t:'WASM',d:'runtime-enforced limits',x:614,y:398,w:150,h:66,g:'mech',sand:1,
+  chips:['hosts','fs'],
+  det:{what:'The runtime enforces the declared network hosts and filesystem access.',dep:[],up:[],
+       facts:['A real boundary, not a convention.','A WASM plugin reaches only the hosts it declared.']}},
+ {id:'rpc',t:'JSON-RPC',d:'subprocess · any language',x:774,y:398,w:150,h:66,g:'mech',trust:1,
+  chips:['python','ts','go'],
+  det:{what:'A trusted local executable. The environment is scrubbed and permissions are recorded and shown — but it can still reach the filesystem and network unless confined.',dep:[],up:[],
+       facts:['confinement = none | bwrap | sandbox-exec | container.',
+              'ARBITER_PLUGIN_CONFINEMENT=required refuses to load a TRUSTED plugin that cannot be confined — the recommended default for CI and multi-tenant use.',
+              'Best-effort hardening, not parity with the WASM boundary. The docs say so.']}},
+
+ {id:'models',t:'model endpoints',d:'network',x:614,y:490,w:310,h:64,g:'ext',ghost:1,
+  chips:['anthropic','openai-compatible','local'],
+  det:{what:'Outside the trust boundary entirely.',dep:[],up:[],
+       facts:['The correlation table is never fetched at run time — that would break determinism and add a supply-chain path.']}},
+ {id:'disk',t:'~/.arbiter',d:'runs/ · index.ndjson',x:614,y:570,w:310,h:80,g:'ext',ghost:1,
+  chips:['events.ndjson','artifacts','cache','decision.json'],
+  det:{what:'Everything a run produced, on disk, replayable.',dep:[],up:[],
+       facts:['≈400 KB per run with raw payloads, ≈90 KB without.',
+              'run.lock carries {pid, boot_id, hostname, started_at} and is broken only when the pid is dead and the lock is stale.',
+              'index.ndjson is derived — rebuildable with arbiter reindex.']}}
+];
+
+var DEP=[['cli','kernel'],['kernel','core'],['providers','kernel'],['store','kernel'],
+         ['plugin','kernel'],['build','kernel'],['fixtures','kernel'],['spa','store']];
+var FLOW=[['kernel','providers','calls'],['providers','models','http'],['kernel','store','events'],
+          ['store','disk','ndjson'],['kernel','core','graph'],['core','kernel','record'],
+          ['plugin','wasm',''],['plugin','rpc',''],['p_provider','plugin',''],['p_judge','plugin',''],
+          ['p_store','plugin',''],['p_export','plugin',''],['build','store','artifacts']];
+var ZONES=[
+ {x:604,y:100,w:330,h:140,t:'stable tier — public ABI'},
+ {x:604,y:240,w:330,h:126,t:'internal tier — traits only'},
+ {x:604,y:382,w:330,h:96,t:'phase-1 mechanism'}
+];
+var byId={};N.forEach(function(n){byId[n.id]=n});
+
+var cv=document.getElementById('cv'),svg=document.getElementById('edges'),
+    ins=document.getElementById('insp'),ixEl=document.getElementById('index');
+var sel=null,hov=null,V={dep:true,flow:false,trust:false,def:true};
+
+ZONES.forEach(function(z){var d=document.createElement('div');d.className='zone';
+  d.style.cssText='left:'+z.x+'px;top:'+z.y+'px;width:'+z.w+'px;height:'+z.h+'px';
+  d.innerHTML='<b>'+z.t+'</b>';cv.appendChild(d)});
+
+N.forEach(function(n){
+  var d=document.createElement('div');
+  d.className='nd'+(n.ghost?' ghost':'')+(n.pure?' pure':'')+(n.sand?' sand':'')+(n.trust?' trust':'');
+  d.style.cssText='left:'+n.x+'px;top:'+n.y+'px;width:'+n.w+'px;height:'+n.h+'px';
+  d.dataset.id=n.id;d.tabIndex=0;
+  d.innerHTML='<div class="t">'+n.t+(n.pure?' <span class="chip pos" style="height:15px;font-size:9.5px">pure</span>':'')+
+    (n.sand?' <span class="chip jd" style="height:15px;font-size:9.5px">sandboxed</span>':'')+
+    (n.trust?' <span class="chip qual" style="height:15px;font-size:9.5px">trusted</span>':'')+'</div>'+
+    '<div class="d">'+n.d+'</div>'+
+    (n.chips?'<div class="chips">'+n.chips.map(function(c){return '<span>'+c+'</span>'}).join('')+'</div>':'');
+  d.addEventListener('click',function(){pick(n.id)});
+  d.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();pick(n.id)}});
+  d.addEventListener('mouseenter',function(){hov=n.id;draw()});
+  d.addEventListener('mouseleave',function(){hov=null;draw()});
+  cv.appendChild(d);n.el=d;
+});
+
+['crate','plane','mech','ext'].forEach(function(g){
+  var h=document.createElement('div');h.className='grp lbl';
+  h.textContent={crate:'workspace crates',plane:'plugin planes',mech:'plugin mechanisms',ext:'outside the boundary'}[g];
+  ixEl.appendChild(h);
+  N.filter(function(n){return n.g===g}).forEach(function(n){
+    var r=document.createElement('div');r.className='ix';r.dataset.id=n.id;
+    var col=n.pure?'var(--pos)':n.sand?'var(--judge)':n.trust?'var(--qual)':n.ghost?'var(--line2)':'var(--acc)';
+    r.innerHTML='<span class="k" style="background:'+col+'"></span><span>'+n.t+'</span>'+
+      (n.g==='crate'?'<span class="r">'+(n.det.dep.length?'→'+n.det.dep.length:'—')+'</span>':'');
+    r.addEventListener('click',function(){pick(n.id)});
+    r.addEventListener('mouseenter',function(){hov=n.id;draw()});
+    r.addEventListener('mouseleave',function(){hov=null;draw()});
+    ixEl.appendChild(r);n.ix=r;
+  });
+});
+document.getElementById('cnt').textContent=N.length+' blocks';
+
+function anchor(a,b){
+  var ac={x:a.x+a.w/2,y:a.y+a.h/2},bc={x:b.x+b.w/2,y:b.y+b.h/2};
+  var dx=bc.x-ac.x,dy=bc.y-ac.y;
+  if(Math.abs(dy)>Math.abs(dx)*0.8){
+    return dy>0?[{x:ac.x,y:a.y+a.h},{x:bc.x,y:b.y},'v']:[{x:ac.x,y:a.y},{x:bc.x,y:b.y+b.h},'v'];
+  }
+  return dx>0?[{x:a.x+a.w,y:ac.y},{x:b.x,y:bc.y},'h']:[{x:a.x,y:ac.y},{x:b.x+b.w,y:bc.y},'h'];
+}
+function path(p,q,o){
+  if(o==='v'){var m=(p.y+q.y)/2;return 'M'+p.x+' '+p.y+' C'+p.x+' '+m+' '+q.x+' '+m+' '+q.x+' '+q.y}
+  var mx=(p.x+q.x)/2;return 'M'+p.x+' '+p.y+' C'+mx+' '+p.y+' '+mx+' '+q.y+' '+q.x+' '+q.y;
+}
+function draw(){
+  var edges=[];
+  if(V.dep)DEP.forEach(function(e){edges.push({a:e[0],b:e[1],c:'#1C5A4E',w:1.7,dash:'',l:''})});
+  if(V.flow)FLOW.forEach(function(e){edges.push({a:e[0],b:e[1],c:'#9A6A1C',w:1.5,dash:'5 4',l:e[2]})});
+  var s='<defs>'+
+    '<marker id="mA" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 .5 8 4 0 7.5z" fill="#1C5A4E"/></marker>'+
+    '<marker id="mB" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 .5 8 4 0 7.5z" fill="#9A6A1C"/></marker></defs>';
+  var focus=hov, touched={}, emph=hov||sel;
+  edges.forEach(function(e){
+    var a=byId[e.a],b=byId[e.b];if(!a||!b)return;
+    if(!V.def&&(a.ghost&&a.id==='spa'||b.ghost&&b.id==='spa'))return;
+    var on=!focus||e.a===focus||e.b===focus;
+    if(on&&focus){touched[e.a]=1;touched[e.b]=1}
+    var hot=emph&&(e.a===emph||e.b===emph);
+    var an=anchor(a,b);
+    s+='<path d="'+path(an[0],an[1],an[2])+'" fill="none" stroke="'+e.c+'" stroke-width="'+
+       (hot?e.w+1:e.w)+'" stroke-dasharray="'+e.dash+'" opacity="'+(on?(hot?1:.5):.1)+
+       '" marker-end="url(#'+(e.c==='#1C5A4E'?'mA':'mB')+')"/>';
+    if(e.l&&on){var mx=(an[0].x+an[1].x)/2,my=(an[0].y+an[1].y)/2;
+      s+='<text class="elbl" x="'+(mx+5)+'" y="'+(my-4)+'" opacity="'+(hot?1:.7)+'">'+e.l+'</text>'}
+  });
+  if(V.trust){
+    s+='<path d="M598 380 L936 380" stroke="#AB412B" stroke-width="1.6" stroke-dasharray="7 5" opacity=".85"/>'+
+       '<text class="elbl" x="598" y="374" fill="#AB412B" style="font-weight:700">ENGINE BOUNDARY — below this line the engine does not own the code or the resource</text>'+
+       '<text class="elbl" x="598" y="476" fill="#3F6486" style="font-weight:700">sandboxed: limits enforced</text>'+
+       '<text class="elbl" x="770" y="476" fill="#9A6A1C" style="font-weight:700">trusted: confinement is best-effort</text>';
+  }
+  svg.innerHTML=s;
+  N.forEach(function(n){
+    n.el.classList.toggle('dim',!!focus&&n.id!==focus&&!touched[n.id]);
+    n.el.style.display=(!V.def&&(n.id==='spa'))?'none':'';
+  });
+}
+function pick(id){
+  sel=id;var n=byId[id];
+  N.forEach(function(o){o.el.classList.toggle('sel',o.id===id);o.ix.classList.toggle('on',o.id===id)});
+  document.getElementById('selid').textContent=n.t;
+  var h='<div class="sec"><div class="lbl" style="margin-bottom:6px">'+
+    ({crate:'workspace crate',plane:'plugin plane',mech:'plugin mechanism',ext:'outside the boundary'}[n.g])+
+    '</div><p style="font-size:12.5px;line-height:1.5">'+n.det.what+'</p></div>';
+  if(n.det.dep.length||n.det.up.length){
+    h+='<div class="sec"><div class="lbl" style="margin-bottom:6px">Edges</div>';
+    n.det.dep.forEach(function(d){h+='<div class="kv"><span class="mut">depends on</span><span class="mono">'+d+'</span></div>'});
+    if(!n.det.dep.length&&n.g==='crate')h+='<div class="kv"><span class="mut">depends on</span><span class="mono">nothing internal</span></div>';
+    n.det.up.forEach(function(d){h+='<div class="kv"><span class="mut">used by</span><span class="mono">'+d+'</span></div>'});
+    h+='</div>';
+  }
+  h+='<div class="sec" style="border:0"><div class="lbl" style="margin-bottom:6px">What matters</div>';
+  n.det.facts.forEach(function(f){h+='<div class="li"><span>'+f+'</span></div>'});
+  h+='</div>';
+  ins.innerHTML=h;
+  draw();
+}
+function tog(id,k,name){document.getElementById(id).addEventListener('click',function(){
+  V[k]=!V[k];this.setAttribute('aria-pressed',V[k]);
+  document.getElementById('viewname').textContent=
+    V.dep&&V.flow?'dependency + data flow':V.flow?'data-flow view':V.dep?'dependency view':'blocks only';
+  draw()})}
+tog('t-dep','dep');tog('t-flow','flow');tog('t-trust','trust');tog('t-def','def');
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape'){sel=null;N.forEach(function(o){o.el.classList.remove('sel');o.ix.classList.remove('on')});
+    document.getElementById('selid').textContent='—';ins.innerHTML='';draw()}
+});
+pick('core');
+</script>
+</body>
+</html>

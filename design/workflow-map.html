@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arbiter — pipeline workflow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F2EEE7;--panel:#FAF7F2;--sunk:#EAE4DA;--sunk2:#E2DACE;--line:#DCD4C8;--line2:#C6BCAC;--dash:#B5AA97;
+  --ink:#221F1A;--ink2:#463F36;--mut:#6E665A;--fade:#A2977F;
+  --acc:#1C5A4E;--accw:#DFEBE6;--pos:#2A7259;--neg:#AB412B;--qual:#9A6A1C;--judge:#3F6486;
+  --posw:#E0EEE7;--negw:#F6E4DE;--qualw:#F5EBD8;--judgew:#E3EAF1;
+  --mono:'JetBrains Mono',ui-monospace,monospace;--r:5px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font:13px/1.45 'IBM Plex Sans',system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.mut{color:var(--mut)}
+.lbl{font-size:10px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--mut)}
+.app{display:grid;grid-template-columns:232px 1fr 322px;grid-template-rows:46px 1fr;height:100vh}
+.top{grid-column:1/-1;display:flex;align-items:center;gap:9px;padding:0 14px;background:var(--panel);
+  border-bottom:1px solid var(--line2)}
+.top h1{font-size:13.5px;font-weight:600;letter-spacing:-.01em}
+.pane{min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--line)}
+.pane:last-child{border-right:0;border-left:1px solid var(--line)}
+.ph{height:31px;flex:0 0 31px;display:flex;align-items:center;gap:8px;padding:0 11px;background:var(--panel);
+  border-bottom:1px solid var(--line)}
+.pb{flex:1;overflow:auto;min-height:0}
+.pf{flex:0 0 29px;display:flex;align-items:center;gap:10px;padding:0 11px;border-top:1px solid var(--line);
+  background:var(--panel);font-size:11px;color:var(--mut)}
+.sp{margin-left:auto}
+.chip{display:inline-flex;align-items:center;gap:5px;height:19px;padding:0 7px;border-radius:3px;background:var(--sunk);
+  border:1px solid var(--line);font-size:11px;color:var(--ink2);white-space:nowrap}
+.chip.acc{background:var(--accw);border-color:#BFD6CE;color:var(--acc)}
+.chip.pos{background:var(--posw);border-color:#BCD9CC;color:var(--pos)}
+.chip.neg{background:var(--negw);border-color:#E4C3B8;color:var(--neg)}
+.chip.qual{background:var(--qualw);border-color:#E2CFA6;color:var(--qual)}
+.chip.jd{background:var(--judgew);border-color:#C3D2E0;color:var(--judge)}
+.tg{height:22px;padding:0 9px;border:1px solid var(--line2);border-radius:var(--r);background:var(--panel);
+  font-size:11px;font-weight:500;display:inline-flex;align-items:center;gap:6px;transition:all .15s}
+.tg:hover{background:var(--sunk)}
+.tg[aria-pressed=true]{background:var(--acc);border-color:var(--acc);color:#F4F1EA}
+.tg .sq{width:8px;height:8px;border-radius:2px;border:1px solid currentColor;opacity:.7}
+.tg[aria-pressed=true] .sq{background:currentColor}
+.pl{height:26px;padding:0 12px;border-radius:var(--r);background:var(--acc);color:#F4F1EA;font-size:11.5px;
+  font-weight:600;display:inline-flex;align-items:center;gap:7px}
+.pl:hover{background:#164a40}
+.pl.gh{background:var(--panel);color:var(--ink);border:1px solid var(--line2);font-weight:500}
+.pl.gh:hover{background:var(--sunk)}
+
+/* canvas */
+.cv{position:relative;margin:14px auto;width:1000px;height:640px;
+  background-image:radial-gradient(var(--line) .9px,transparent .9px);background-size:22px 22px}
+.cv svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none}
+.st{position:absolute;width:176px;border:1px solid var(--line2);border-radius:6px;background:var(--panel);
+  padding:6px 8px;cursor:pointer;box-shadow:0 1px 0 rgba(120,105,80,.08);
+  transition:box-shadow .15s,border-color .15s,transform .12s,opacity .18s,background .18s}
+.st:hover{box-shadow:0 3px 9px rgba(120,105,80,.17);transform:translateY(-1px)}
+.st .h{display:flex;align-items:center;gap:5px}
+.st .n{font-family:var(--mono);font-size:9.5px;color:var(--fade);flex:0 0 auto}
+.st .t{font-family:var(--mono);font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st .llm{margin-left:auto;width:7px;height:7px;border-radius:50%;border:1.5px solid var(--qual);flex:0 0 7px}
+.st .llm.on{background:var(--qual)}
+.st .d{font-size:10.5px;color:var(--mut);line-height:1.32;margin-top:3px;height:40px;overflow:hidden}
+.st .m{display:flex;align-items:center;gap:6px;margin-top:4px;font-family:var(--mono);font-size:9.5px;color:var(--fade)}
+.st .bar{flex:1;height:3px;border-radius:2px;background:var(--sunk2);overflow:hidden}
+.st .bar i{display:block;height:100%;background:var(--qual);width:0}
+.st.sel{border-color:var(--acc);border-width:2px;padding:5px 7px;box-shadow:0 0 0 3px var(--accw)}
+.st.done{background:var(--posw);border-color:#BCD9CC}
+.st.live{background:var(--accw);border-color:var(--acc);box-shadow:0 0 0 4px rgba(28,90,78,.13)}
+.st.idle{opacity:.5}
+.st.off{opacity:.22}
+.st.heat{background:linear-gradient(90deg,var(--qualw) var(--hp),transparent var(--hp))}
+.zone{position:absolute;border:1px dashed var(--dash);border-radius:8px;pointer-events:none}
+.zone b{position:absolute;top:-8px;left:12px;background:var(--bg);padding:0 6px;font-family:var(--mono);
+  font-size:9.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--mut)}
+.elbl{font-family:var(--mono);font-size:9.5px;fill:var(--fade)}
+.spin{width:8px;height:8px;border-radius:50%;border:1.5px solid var(--acc);border-right-color:transparent;
+  animation:sp .9s linear infinite;flex:0 0 8px}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+.sec{padding:10px 12px;border-bottom:1px solid var(--line)}
+.kv{display:flex;justify-content:space-between;gap:10px;padding:3.5px 0;border-bottom:1px dotted var(--line);font-size:11.5px}
+.kv:last-child{border:0}
+.li{display:flex;gap:7px;font-size:11.5px;line-height:1.45;padding:3px 0}
+.li::before{content:'';width:4px;height:4px;border-radius:50%;background:var(--line2);flex:0 0 4px;margin-top:7px}
+.ev{display:grid;grid-template-columns:20px 1fr;gap:8px;padding:2.5px 11px;font-family:var(--mono);font-size:10.5px;
+  border-bottom:1px solid rgba(220,212,200,.5)}
+.gauge{height:9px;border-radius:2px;background:var(--sunk2);position:relative;overflow:hidden}
+.gauge i{position:absolute;inset:0 auto 0 0;background:var(--acc);width:0;transition:width .3s}
+.gauge .hd{position:absolute;inset:0 0 0 auto;width:5%;border-left:1px solid var(--mut);
+  background:repeating-linear-gradient(45deg,transparent 0 2px,var(--line2) 2px 4px)}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:var(--line2);border-radius:5px;border:2px solid var(--bg)}
+::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 1.5v13M2.5 5.5h11M4.5 5.5 2 11h5L4.5 5.5ZM11.5 5.5 9 11h5l-2.5-5.5Z" stroke="#1C5A4E" stroke-width="1.3" stroke-linejoin="round"/></svg>
+    <h1>Pipeline workflow</h1>
+    <span class="chip mono">15 stages · 1 controlled loop</span>
+    <div style="display:flex;gap:5px;margin-left:14px">
+      <button class="pl" id="play">▶ run</button>
+      <button class="pl gh" id="reset">reset</button>
+      <button class="pl gh" id="speed">1×</button>
+    </div>
+    <div class="sp" style="display:flex;gap:6px">
+      <button class="tg" id="d-std" aria-pressed="true">standard · 1 round</button>
+      <button class="tg" id="d-deep" aria-pressed="false">deep · 3 rounds</button>
+      <span style="width:10px"></span>
+      <button class="tg" id="t-llm" aria-pressed="false"><span class="sq"></span>LLM only</button>
+      <button class="tg" id="t-heat" aria-pressed="false"><span class="sq"></span>cost heat</button>
+    </div>
+  </div>
+
+  <div class="pane">
+    <div class="ph"><span class="lbl">Run state</span><span class="chip sp mono" id="rstate">idle</span></div>
+    <div class="pb">
+      <div class="sec">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+          <span class="mono" style="font-size:17px;font-weight:600" id="spend">$0.000</span>
+          <span class="mut mono" style="font-size:11px">cap $2.00</span>
+        </div>
+        <div class="gauge"><i id="gi"></i><span class="hd"></span></div>
+        <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:10px;color:var(--mut)">
+          <span id="pct">0%</span><span id="target">target $0.50</span><span>headroom 5%</span>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="lbl" style="margin-bottom:6px">Totals</div>
+        <div class="kv"><span class="mut">stages done</span><span class="mono" id="m-st">0 / 14</span></div>
+        <div class="kv"><span class="mut">LLM calls</span><span class="mono" id="m-c">0</span></div>
+        <div class="kv"><span class="mut">tokens</span><span class="mono" id="m-tk">0</span></div>
+        <div class="kv"><span class="mut">round</span><span class="mono" id="m-r">—</span></div>
+      </div>
+      <div class="sec">
+        <div class="lbl" style="margin-bottom:6px">Loop</div>
+        <div style="font-size:11.5px;line-height:1.5;color:var(--ink2)">
+          Only <span class="mono">controller.decide</span> may loop, and it re-enters at
+          <span class="mono">options.cluster</span> — new claims must be attached before they can be
+          ranked. Everything else runs once per round.</div>
+        <div class="chip qual" style="margin-top:7px;height:auto;padding:4px 7px;white-space:normal;line-height:1.4">
+          §5 draws the loop but never names its re-entry point. This follows §11, which says attachment re-runs each round.</div>
+        <div class="kv" style="margin-top:7px"><span class="mut">max_rounds</span><span class="mono" id="m-mr">1</span></div>
+        <div class="kv"><span class="mut">hard ceiling</span><span class="mono">6</span></div>
+      </div>
+      <div class="sec" style="border:0">
+        <div class="lbl" style="margin-bottom:6px">Legend</div>
+        <div style="display:flex;flex-direction:column;gap:5px;font-size:11px">
+          <span style="display:flex;align-items:center;gap:7px"><i style="width:7px;height:7px;border-radius:50%;background:var(--qual)"></i>calls a model</span>
+          <span style="display:flex;align-items:center;gap:7px"><i style="width:7px;height:7px;border-radius:50%;border:1.5px solid var(--qual)"></i>deterministic, no tokens</span>
+          <span style="display:flex;align-items:center;gap:7px"><i style="width:14px;height:0;border-top:2px solid var(--acc)"></i>sequence</span>
+          <span style="display:flex;align-items:center;gap:7px"><i style="width:14px;height:0;border-top:2px dashed var(--neg)"></i>round loop</span>
+          <span style="display:flex;align-items:center;gap:7px"><i style="width:14px;height:0;border-top:2px dashed var(--dash)"></i>gated / optional</span>
+        </div>
+      </div>
+    </div>
+    <div class="pf"><span class="mono" id="cmd">arbiter run … --depth standard</span></div>
+  </div>
+
+  <div class="pane">
+    <div class="ph"><span class="lbl">Stages</span><span class="chip" id="depthname">standard</span>
+      <span class="sp chip mono" id="hint">click a stage · space to play</span></div>
+    <div class="pb"><div class="cv" id="cv"><svg id="edges"></svg></div></div>
+    <div class="pf"><span class="mono">decision.synthesize calls no model — the answer is computed, not asked for</span></div>
+  </div>
+
+  <div class="pane">
+    <div class="ph"><span class="lbl">Stage</span><span class="chip mono sp" id="selid">—</span></div>
+    <div class="pb" id="insp"></div>
+    <div class="pf"><span>ARCHITECTURE.md §5 · §11</span></div>
+  </div>
+</div>
+
+<script>
+var W=176,COL=[26,222,418,614,810],ROW=[24,182,340];
+function P(r,c){return{x:COL[c],y:ROW[r]}}
+var S=[
+ {id:'init',t:'init',r:0,c:0,llm:0,cost:0,tok:0,d:'validate, snapshot config + pack hash, seed RNG, open log',
+  det:{in:'question, config',out:'run manifest',ev:['RUN_STARTED','STAGE_STARTED'],
+   why:'Everything reproducible about a run is fixed here. The prompt-pack hash is snapshotted so a later --repack cannot silently change what a replay means.',
+   fail:'Invalid question or unreachable provider fails before a cent is spent.'}},
+ {id:'panel',t:'panel.resolve',r:0,c:1,llm:0,cost:0,tok:0,d:'resolve an explicit panel, or ask the recommender plugin',
+  det:{in:'--panel',out:'panel + correlation groups',ev:['PANEL_RESOLVED'],
+   why:'Explicit selection is the default path. Recommendation is a plugin and never a mandatory dependency.',
+   fail:'A model missing from correlation.toml is grouped by provider, which overstates independence — doctor warns.'}},
+ {id:'positions',t:'positions.generate',r:0,c:2,llm:1,cost:.181,tok:18200,calls:5,d:'each model answers independently — no cross-talk',
+  det:{in:'question, panel',out:'raw positions',ev:['POSITION_STARTED','POSITION_COMPLETED','CALL_*','BUDGET_*'],
+   why:'Independence in round 1 is what makes later agreement meaningful. Models never see each other here.',
+   fail:'A provider timeout yields SkipItem — the reservation is released and the debate continues with fewer models.'}},
+ {id:'extract',t:'claims.extract',r:0,c:3,llm:1,cost:.045,tok:13200,calls:6,d:'structured claims + grounding, with one repair pass',
+  det:{in:'positions',out:'claims with grounding',ev:['CLAIM_EXTRACTED','CLAIM_UNGROUNDED'],
+   why:'A claim keeps its verbatim span (DirectQuote), declares its premises (Derived), or gets one repair call on the cheap model — an extraction task, not authorship, so it does not pay the author rate.',
+   fail:'Repair fails → Unsupported at 0.15. The claim still reaches the decision, weighted near zero.'}},
+ {id:'normalize',t:'claims.normalize',r:0,c:4,llm:1,cost:.010,tok:5200,calls:1,d:'cluster equivalent claims across models, members preserved',
+  det:{in:'claims',out:'canonical claims',ev:['CLAIM_NORMALISED'],
+   why:'Three tiers: lexical blocking, polarity sweep, then batched LLM grouping on the survivors. Biased toward splitting — a merge error corrupts independence, a split error only dilutes.',
+   fail:'Over 180 claims the batch partitions and a stitch pass recurses. No claim is lost.'}},
+
+ {id:'cluster',t:'options.cluster',r:1,c:0,llm:1,cost:.020,tok:9500,calls:2,d:'derive candidate options, attach claims to them',
+  det:{in:'canonical claims',out:'options + attachment matrix',ev:['CANDIDATES_SELECTED'],rounds:1,
+   why:'Everything downstream scores options, so something has to define them. OptionId is the cluster identity, not a hash of its text — rewording mints option_version, not a new option.',
+   fail:'Fewer than two options above option_floor routes to INSUFFICIENT_EVIDENCE, not a fake split.'}},
+ {id:'relations',t:'relations.analyze',r:1,c:1,llm:1,cost:.011,tok:3100,calls:1,d:'cheap similarity proposes pairs, LLM classifies top-K',
+  det:{in:'claims',out:'typed relations',ev:['RELATIONSHIP_FOUND','PREMISE_CYCLE_DETECTED'],rounds:1,
+   why:'All-pairs is quadratic and unaffordable. Candidates come from similarity; only the top-K get a model call.',
+   fail:'A premise cycle is topologically sorted and cut at the minimum edge set — a verified fact keeps its evidence kind.'}},
+ {id:'disputes',t:'disputes.rank',r:1,c:2,llm:0,cost:0,tok:0,d:'deterministic dispute-priority score',
+  det:{in:'relations, standings',out:'ranked disputes',ev:['DISPUTE_PRIORITISED'],
+   why:'Re-ranked every round. priority = 0.35·contested_mass + 0.35·decision_leverage + 0.20·evidence_gap − 0.10·resolution_cost. Leverage reuses the counterfactual machinery, so money goes to disputes that could change the answer.',
+   fail:'None — pure arithmetic over artifacts the round already produced.'}},
+ {id:'plan',t:'challenge.plan',r:1,c:3,llm:0,cost:0,tok:0,d:'select pairs within the round budget — never all-pairs',
+  det:{in:'ranked disputes, budget',out:'challenge plan',ev:['STAGE_CHECKPOINT'],
+   why:'The budget is derived from money, not panel size: remaining_budget ÷ remaining_rounds, judge share reserved first. Sizing by panel × rounds priced a 7-model deep run at $2.03 against a $2.00 cap.',
+   fail:'A shrinking budget shrinks the plan. It never overspends to keep a fixed pair count.'}},
+ {id:'challenge',t:'challenge.run',r:1,c:4,llm:1,cost:.084,tok:7800,calls:6,d:'issue the selected challenges in parallel',
+  det:{in:'challenge plan',out:'challenges',ev:['CHALLENGE_ISSUED','CALL_*'],
+   why:'Targeted cross-examination is where a debate stops being five monologues.',
+   fail:'Per-provider rate limits and circuit breakers throttle here; failures degrade the round, not the run.'}},
+
+ {id:'rebuttal',t:'rebuttal.run',r:2,c:0,llm:1,cost:.061,tok:6000,calls:6,d:'defend / modify / withdraw → versioned claim deltas',
+  det:{in:'challenges',out:'claim versions',ev:['REBUTTAL_RECEIVED'],
+   why:'A claim that survives a challenge is worth more than one never tested. Modifications mint v2 rather than overwriting v1.',
+   fail:'No response = the claim stands undefended and its standing reflects that.'}},
+ {id:'controller',t:'controller.decide',r:2,c:1,llm:0,cost:0,tok:0,loop:1,d:'continue or stop, inside hard bounds',
+  det:{in:'round artifacts',out:'StopReason or next round',ev:['CONTROLLER_DECIDED','ROUND_COMPLETED'],
+   why:'Both stop predicates are computed from artifacts the round already produced — no extra call, no model opinion. NoNewInformation: new claims < 2 AND max |Δ standing| < 0.05. Converged: no live attacker ≥ τ_dissent AND margin ≥ 0.225 AND no unresolved change trigger.',
+   fail:'At standard depth max_rounds is 1, so it exits on RoundLimit by construction — that is not a failure to converge.'}},
+ {id:'judge',t:'judge.evaluate',r:2,c:2,llm:1,cost:.068,tok:11500,calls:1,d:'anonymised A–E, shuffled, 9-metric rubric',
+  det:{in:'final claim graph',out:'judge scores',ev:['JUDGE_SCORED'],
+   why:'Positions are anonymised and shuffled before scoring; identities are revealed after. Deep depth uses two cross-vendor judges — so this stage costs twice as much there — and adds a dispersion penalty when they disagree.',
+   fail:'Invalid judge JSON → one retry → the judge term degrades rather than failing the run.'}},
+ {id:'synth',t:'decision.synthesize',r:2,c:3,llm:0,cost:0,tok:0,d:'run the pure decision core',
+  det:{in:'claim graph, judge scores',out:'DecisionRecord',ev:['DECISION_SYNTHESIZED'],
+   why:'The only stage that produces the answer, and it calls no model. Evidence strength → damped Jacobi fixpoint → standing → option scores → outcome → confidence, all deterministic.',
+   fail:'A non-convergent fixpoint hits the iteration cap, records FIXPOINT_NOT_CONVERGED and applies the convergence penalty. The record is still deterministic.'}},
+ {id:'accept',t:'user accepts',r:2,c:4,llm:0,cost:0,tok:0,gate:1,d:'DecisionAcceptance — required before Build Studio',
+  det:{in:'DecisionRecord',out:'acceptance record',ev:['DECISION_ACCEPTED','DECISION_OVERRIDDEN'],
+   why:'A human gate, not a stage. Build Studio refuses to run without it, so generated artifacts always trace to a decision someone owned.',
+   fail:'An override is recorded with its reason and carried as UserOverride provenance.'}},
+
+ {id:'bp',t:'build.product',r:3,c:2,llm:1,cost:.09,tok:9000,opt:1,d:'optional · 1.5',
+  det:{in:'accepted decision',out:'product brief',ev:['STAGE_COMPLETED'],
+   why:'Downstream of DecisionRecord and isolated — Build Studio cannot influence the decision it builds from.',fail:'—'}},
+ {id:'bt',t:'build.technical',r:3,c:3,llm:1,cost:.09,tok:9000,opt:1,d:'optional · 1.5',
+  det:{in:'product brief',out:'technical plan',ev:['STAGE_COMPLETED'],why:'Sequenced after the product stage.',fail:'—'}},
+ {id:'bpr',t:'build.prompt',r:3,c:4,llm:1,cost:.06,tok:6000,opt:1,d:'optional · 1.5',
+  det:{in:'technical plan',out:'prompt pack',ev:['STAGE_COMPLETED'],why:'The last artifact, and the only one meant to leave the tool.',fail:'—'}}
+];
+ROW[3]=498;
+var E=[['init','panel'],['panel','positions'],['positions','extract'],['extract','normalize'],
+       ['normalize','cluster','wrap'],['cluster','relations'],['relations','disputes'],['disputes','plan'],
+       ['plan','challenge'],['challenge','rebuttal','wrap'],['rebuttal','controller'],
+       ['controller','judge'],['judge','synth'],['synth','accept'],
+       ['accept','bp','gate'],['bp','bt'],['bt','bpr']];
+var byId={};S.forEach(function(s){byId[s.id]=s;var p=P(s.r,s.c);s.x=p.x;s.y=p.y;s.w=W;s.h=s.opt?70:98});
+
+var cv=document.getElementById('cv'),svg=document.getElementById('edges'),ins=document.getElementById('insp');
+var sel=null,deep=false,vLLM=false,vHeat=false,playing=false,timer=null,speed=1,SP=[1,2,4];
+var maxCost=0;S.forEach(function(s){if(!s.opt&&s.cost>maxCost)maxCost=s.cost});
+
+var z=document.createElement('div');z.className='zone';
+z.style.cssText='left:'+(COL[2]-14)+'px;top:'+(ROW[3]-16)+'px;width:'+(COL[4]+W+14-COL[2]+14)+'px;height:98px';
+z.innerHTML='<b>build studio — gated, isolated, ships in 1.5</b>';cv.appendChild(z);
+
+S.forEach(function(s){
+  var d=document.createElement('div');d.className='st'+(s.opt?' idle':'');
+  d.style.cssText='left:'+s.x+'px;top:'+s.y+'px;height:'+s.h+'px';
+  d.dataset.id=s.id;d.tabIndex=0;
+  d.innerHTML='<div class="h"><span class="n">'+(s.gate?'⏸':s.opt?'+':'')+'</span><span class="t">'+s.t+'</span>'+
+    '<span class="llm'+(s.llm?' on':'')+'"></span></div>'+
+    '<div class="d">'+s.d+'</div>'+
+    (s.opt?'':'<div class="m"><span class="cst">'+(s.cost?'$'+s.cost.toFixed(3):'—')+'</span><span class="bar"><i></i></span><span class="tk">'+(s.tok?(s.tok/1000)+'k':'0')+'</span></div>');
+  d.addEventListener('click',function(){pick(s.id)});
+  d.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();pick(s.id)}});
+  cv.appendChild(d);s.el=d;
+});
+
+function anch(a,b,k){
+  if(k==='wrap')return[{x:a.x+a.w/2,y:a.y+a.h},{x:b.x+b.w/2,y:b.y},'w'];
+  if(a.r===b.r)return[{x:a.x+a.w,y:a.y+a.h/2},{x:b.x,y:b.y+b.h/2},'h'];
+  return[{x:a.x+a.w/2,y:a.y+a.h},{x:b.x+b.w/2,y:b.y},'v'];
+}
+function pth(p,q,o){
+  if(o==='h'){var mx=(p.x+q.x)/2;return 'M'+p.x+' '+p.y+' C'+mx+' '+p.y+' '+mx+' '+q.y+' '+q.x+' '+q.y}
+  if(o==='w'){var my=p.y+30;return 'M'+p.x+' '+p.y+' C'+p.x+' '+my+' '+q.x+' '+(q.y-30)+' '+q.x+' '+q.y}
+  var m=(p.y+q.y)/2;return 'M'+p.x+' '+m+' C'+p.x+' '+m+' '+q.x+' '+m+' '+q.x+' '+q.y;
+}
+function draw(){
+  var s='<defs>'+
+   '<marker id="m1" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 .5 8 4 0 7.5z" fill="#1C5A4E"/></marker>'+
+   '<marker id="m2" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 .5 8 4 0 7.5z" fill="#AB412B"/></marker>'+
+   '<marker id="m3" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 .5 8 4 0 7.5z" fill="#B5AA97"/></marker></defs>';
+  E.forEach(function(e){
+    var a=byId[e[0]],b=byId[e[1]],g=e[2]==='gate',an=anch(a,b,e[2]);
+    s+='<path d="'+pth(an[0],an[1],an[2])+'" fill="none" stroke="'+(g?'#B5AA97':'#1C5A4E')+
+       '" stroke-width="1.7" '+(g?'stroke-dasharray="5 4" ':'')+'opacity="'+(g?.8:.75)+
+       '" marker-end="url(#'+(g?'m3':'m1')+')"/>';
+  });
+  var c=byId['controller'],dr=byId['cluster'];
+  var bx=c.x+c.w/2, by=c.y+c.h, cy=by+30, ly=dr.y+dr.h/2;
+  s+='<path d="M'+bx+' '+by+' L'+bx+' '+(cy-10)+' Q'+bx+' '+cy+' '+(bx-12)+' '+cy+
+     ' L26 '+cy+' Q12 '+cy+' 12 '+(cy-14)+' L12 '+(ly+12)+' Q12 '+ly+' 26 '+ly+
+     '" fill="none" stroke="#AB412B" stroke-width="'+(deep?2.4:1.6)+
+     '" stroke-dasharray="6 4" opacity="'+(deep?1:.4)+'" marker-end="url(#m2)"/>';
+  s+='<text class="elbl" x="44" y="'+(cy-7)+'" fill="#AB412B" opacity="'+(deep?1:.5)+
+     '">round loop — '+(deep?'up to 3 rounds · attachment re-runs each round':'unused at standard depth')+'</text>';
+  svg.innerHTML=s;
+}
+function paint(){
+  S.forEach(function(s){
+    s.el.classList.toggle('off',vLLM&&!s.llm);
+    s.el.classList.toggle('heat',vHeat&&!s.opt&&s.cost>0);
+    if(vHeat&&!s.opt&&s.cost>0)s.el.style.setProperty('--hp',Math.round(s.cost/maxCost*100)+'%');
+    var b=s.el.querySelector('.bar i');
+    if(b)b.style.width=(s.cost/maxCost*100)+'%';
+  });
+  document.getElementById('depthname').textContent=deep?'deep · 3 rounds':'standard · 1 round';
+  document.getElementById('m-mr').textContent=deep?'3':'1';
+  document.getElementById('target').textContent=deep?'target $1.20':'target $0.50';
+  document.getElementById('cmd').textContent='arbiter run … --depth '+(deep?'deep':'standard');
+  draw();
+}
+function pick(id){
+  sel=id;var s=byId[id];
+  S.forEach(function(o){o.el.classList.toggle('sel',o.id===id)});
+  document.getElementById('selid').textContent=s.t;
+  var h='<div class="sec"><div style="display:flex;gap:6px;margin-bottom:7px;flex-wrap:wrap">'+
+    '<span class="chip '+(s.llm?'qual':'pos')+'">'+(s.llm?'calls a model':'deterministic')+'</span>'+
+    (s.loop?'<span class="chip neg">may loop</span>':'')+
+    (s.gate?'<span class="chip jd">human gate</span>':'')+
+    (s.opt?'<span class="chip">optional · 1.5</span>':'')+
+    '</div><p style="font-size:12.5px;line-height:1.5">'+s.det.why+'</p></div>';
+  h+='<div class="sec"><div class="lbl" style="margin-bottom:6px">Contract</div>'+
+    '<div class="kv"><span class="mut">in</span><span class="mono">'+s.det.in+'</span></div>'+
+    '<div class="kv"><span class="mut">out</span><span class="mono">'+s.det.out+'</span></div>'+
+    '<div class="kv"><span class="mut">cost</span><span class="mono">'+(s.cost?'$'+s.cost.toFixed(3):'$0.000')+
+      (deep&&s.det.rounds?' × 3 rounds':deep&&s.id==='judge'?' × 2 judges':'')+'</span></div>'+
+    '<div class="kv"><span class="mut">tokens</span><span class="mono">'+(s.tok?s.tok.toLocaleString():'0')+'</span></div>'+
+    '<div class="kv"><span class="mut">calls</span><span class="mono">'+(s.calls||0)+'</span></div></div>';
+  h+='<div class="sec"><div class="lbl" style="margin-bottom:6px">Events emitted</div><div style="display:flex;flex-wrap:wrap;gap:4px">'+
+    s.det.ev.map(function(e){return '<span class="chip mono" style="font-size:10px">'+e+'</span>'}).join('')+'</div></div>';
+  h+='<div class="sec" style="border:0"><div class="lbl" style="margin-bottom:6px">When it goes wrong</div>'+
+    '<div class="li"><span>'+s.det.fail+'</span></div></div>';
+  ins.innerHTML=h;
+}
+
+/* ---- playback ---- */
+var seq=[],qi=0,acc=0,calls=0,toks=0;
+function build(){
+  seq=[];var pre=['init','panel','positions','extract','normalize'];
+  pre.forEach(function(i){seq.push({s:i,r:1})});
+  var R=deep?3:1;
+  for(var r=1;r<=R;r++){
+    ['cluster','relations','disputes','plan','challenge','rebuttal','controller'].forEach(function(i){seq.push({s:i,r:r})});
+  }
+  ['judge','synth'].forEach(function(i){seq.push({s:i,r:R})});
+}
+function reset(){
+  clearTimeout(timer);playing=false;qi=0;acc=0;calls=0;toks=0;
+  S.forEach(function(s){s.el.classList.remove('done','live')});
+  document.getElementById('play').textContent='▶ run';
+  document.getElementById('rstate').textContent='idle';
+  document.getElementById('m-r').textContent='—';
+  upd();build();
+}
+function upd(){
+  document.getElementById('spend').textContent='$'+acc.toFixed(3);
+  document.getElementById('gi').style.width=(acc/2*100)+'%';
+  document.getElementById('pct').textContent=Math.round(acc/2*100)+'%';
+  document.getElementById('m-st').textContent=qi+' / '+seq.length;
+  document.getElementById('m-c').textContent=calls;
+  document.getElementById('m-tk').textContent=(toks/1000).toFixed(1)+'k';
+}
+function step(){
+  if(qi>=seq.length){
+    playing=false;document.getElementById('play').textContent='▶ run';
+    document.getElementById('rstate').textContent='complete';
+    S.forEach(function(s){s.el.classList.remove('live')});
+    return;
+  }
+  var it=seq[qi],s=byId[it.s];
+  S.forEach(function(o){o.el.classList.remove('live')});
+  s.el.classList.add('live');
+  document.getElementById('rstate').textContent=s.t;
+  document.getElementById('m-r').textContent=it.r+(deep?' / 3':' / 1');
+  var dur=s.llm?760:280;
+  timer=setTimeout(function(){
+    s.el.classList.remove('live');s.el.classList.add('done');
+    var mult=(deep&&s.id==='judge')?2:1;
+    acc+=s.cost*mult;toks+=s.tok*mult;if(s.llm)calls+=(s.calls||1)*mult;qi++;upd();
+    if(playing)step();
+  },dur/SP[speed-1]);
+}
+document.getElementById('play').addEventListener('click',function(){
+  if(playing){playing=false;clearTimeout(timer);this.textContent='▶ resume';
+    document.getElementById('rstate').textContent='paused';return}
+  if(qi>=seq.length)reset();
+  playing=true;this.textContent='❚❚ pause';step();
+});
+document.getElementById('reset').addEventListener('click',reset);
+document.getElementById('speed').addEventListener('click',function(){
+  speed=speed%3+1;this.textContent=SP[speed-1]+'×';
+});
+function depth(d){deep=d;
+  document.getElementById('d-std').setAttribute('aria-pressed',!d);
+  document.getElementById('d-deep').setAttribute('aria-pressed',d);
+  reset();paint();if(sel)pick(sel);
+}
+document.getElementById('d-std').addEventListener('click',function(){depth(false)});
+document.getElementById('d-deep').addEventListener('click',function(){depth(true)});
+document.getElementById('t-llm').addEventListener('click',function(){
+  vLLM=!vLLM;this.setAttribute('aria-pressed',vLLM);paint()});
+document.getElementById('t-heat').addEventListener('click',function(){
+  vHeat=!vHeat;this.setAttribute('aria-pressed',vHeat);paint()});
+document.addEventListener('keydown',function(e){
+  if(e.key===' '){e.preventDefault();document.getElementById('play').click()}
+  if(e.key==='r')reset();
+});
+build();paint();pick('synth');reset();pick('synth');
+</script>
+</body>
+</html>
