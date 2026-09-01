@@ -1,6 +1,6 @@
 # AI Debate & Decision Engine — Architecture Specification
 
-**Version:** 2.7.1 (frozen for implementation)
+**Version:** 2.7.2 (frozen for implementation)
 **Status:** approved — implementation in progress
 **Supersedes:** v1.0 (Python · LangGraph · Postgres · FastAPI · WebSocket · React)
 **Companion:** `docs/INTERFACES.md` — concrete trait definitions and protocols
@@ -55,7 +55,7 @@ point in code, not just a statement of intent.
 | Python + LangGraph state machine | **Rust + own `StageGraph`** | The decision core is a finite state machine over closed states. Exhaustive `match` turns "someone added `CONDITIONAL_CONSENSUS`" into a compile error rather than a silent fallthrough. A framework's node model would also become the plugin ceiling. |
 | Postgres + SQLAlchemy | **Embedded SQLite, hash-chained events** | A CLI must run with zero infrastructure — no server, no daemon, no migration step the operator performs. SQLite is embedded, so that holds; and unlike the NDJSON store it replaced in v2.7, it supplies transactions, crash recovery and query rather than making the engine hand-roll all three. |
 | FastAPI + WebSocket + React | **CLI first; NDJSON event stream on stdout** | The same stream a UI or API would consume. Building the frontend later makes it a consumer of a proven engine. |
-| 5 "pillars" as services | **Pure kernel + 7 extension planes in two tiers** | Pillars were layers, not seams. Seams must be typed contracts with a versioned ABI. |
+| 5 "pillars" as services | **Pure kernel + 8 extension planes in two tiers** | Pillars were layers, not seams. Seams must be typed contracts with a versioned ABI. |
 | Confidence = judge output | **Confidence = 3 evidence dimensions − 5 penalties** | The judge scores one input among several. Arithmetic never happens inside a model. |
 | Consensus by claim counting | **Weighted argumentation fixpoint** | "Claims are evaluated" requires actual defeat logic, not tallies. |
 | Fixed 1 rebuttal round | **Adaptive controller inside hard bounds** | The controller may stop early; it can never exceed rounds, cost, tokens or wall-clock. |
@@ -729,9 +729,19 @@ foundation of explainability — one shape, four uses.
 
 ## 7. Kernel
 
-**StageGraph** — typed artifacts in/out; idempotency key per `(run, stage, input_hash)`;
-checkpoint per stage; resume from the verified log; bounded concurrency; per-provider
-rate limits and circuit breakers.
+**StageGraph** — typed artifacts in/out; idempotency key per `(run_id, stage,
+input_hash)`; checkpoint per stage; resume from the committed prefix; bounded concurrency;
+per-provider rate limits and circuit breakers.
+
+**Which axes the stage key carries, and which it does not.** `input_hash` covers the
+stage's input artifacts, and that is all it needs. `policy_version`, `pack_hash`,
+`table_version` and `config_hash` are frozen by `init` and recorded in the manifest, so
+within a single run they are constants — and `run_id` is already in the key, so a stage
+can never collide across runs. The axis that genuinely crosses runs is the **response
+cache**, keyed on `(provider, model, params, prompt_hash)` with no `run_id` at all; there,
+`prompt_hash` moves with the pack, so `--repack` cannot serve a response rendered from a
+different template. `--repolicy` mints a new run id and touches only the decision core,
+which makes no provider calls, so it cannot serve a stale one either.
 
 **Budget ledger** — reservation protocol; `reserve()` returns a guard whose drop
 releases the unused remainder; an unsatisfiable reservation fails the call and the
@@ -808,6 +818,13 @@ not a separate entity, and giving it a table would split one concept across two 
 inherent row order, and a `DecisionRecord` that must reproduce byte-for-byte cannot
 depend on one that happens to hold today.
 
+**Event payloads are always inline**, as `TEXT` in the row — the blob threshold in §8.2
+applies to provider responses and artifacts, never to events. Two reasons: the largest
+event payload is well under the threshold (an extracted claim, a judge rubric), and
+replay is a sequential scan over `events` that must not become a scan plus a file open
+per row. If an event ever needs to carry something large, it carries the artifact's hash
+and the artifact carries the bytes.
+
 That ordering is free rather than a sort: `seq INTEGER PRIMARY KEY` is a rowid alias in
 SQLite, so rows are physically stored in `seq` order and replay is a sequential scan.
 `run_id` is a constant within a `run.db` and is carried for portability only — it is not
@@ -840,6 +857,20 @@ by any committed `cache_entries` or `artifacts` row and reports the bytes reclai
 nothing deletes blobs during a run. The one rule that keeps this safe: **a run whose lease
 is live is skipped entirely**, because a blob written and fsynced before its row commits
 is indistinguishable from an orphan and is not one.
+
+`doctor` is a reader and cannot take a lease to find out, so it must apply the *same*
+liveness predicate `reopen` uses (INTERFACES §1) rather than a simpler one:
+
+| Condition | Owner |
+|---|---|
+| `boot_id != current_boot_id` | gone — the recorded pid refers to a previous boot |
+| `boot_id == current_boot_id` and the pid is not alive | gone |
+| otherwise | **live — skip this run entirely** |
+
+A naive "is this pid alive?" check gets the first row backwards: after a reboot, pid reuse
+makes a dead owner look alive, and on a shared filesystem another host's live run looks
+dead. Deleting blobs out from under a run writing on another machine is the failure this
+predicate exists to prevent.
 
 ### 8.3 Durability
 
@@ -877,14 +908,30 @@ BEGIN IMMEDIATE;
 COMMIT;
 
 -- release, on FAILED or on a reservation the run no longer needs
-UPDATE budget SET reserved = reserved - ? WHERE run_id = ?;
+BEGIN IMMEDIATE;
+  UPDATE budget SET reserved = reserved - ? WHERE run_id = ?;
+  INSERT INTO events (…);   -- BUDGET_RELEASED
+COMMIT;
 ```
+
+**`BUDGET_RELEASED` fires exactly when `reserved` falls without `committed` rising.**
+That is a `FAILED` call, or a reservation the controller abandons at run end. It does
+*not* fire on the common case: when a call completes for less than its estimate, the
+remainder returns inside the `CALL_COMPLETED` transaction, and `BUDGET_COMMITTED` carries
+both `actual` and `released_remainder`. Emitting a second event there would let a naive
+consumer summing release events double-count the refund. One movement, one event.
 
 **The ledger invariant, checked on every `resume` and by `doctor`:**
 
 ```
-budget.reserved  ==  SUM(reserved_amount) over provider_calls in RESERVED | SENT | ACKNOWLEDGED
+budget.reserved  ==  SUM(reserved_amount) over provider_calls in
+                     RESERVED | SENT | ACKNOWLEDGED | ORPHANED
 ```
+
+`ORPHANED` is in that set deliberately. Money that may already be spent stays held until
+an operator or a usage export resolves it, so it correctly reduces what later rounds may
+commit. `doctor` reports the orphaned subtotal separately, because a run that is short of
+budget for that reason should say so rather than look merely expensive.
 
 A mismatch means a reservation leaked or was double-released, and it is the one accounting
 bug that silently shrinks the budget of every later round. `budget_reconciliation`
@@ -951,6 +998,14 @@ over-reports orphaned spend and permanently consumes budget that was never charg
 | `RESERVED` | the request never left the machine → `FAILED` | **release** the reservation |
 | `SENT` | it may have been billed, and there is no id to check | hold; report as orphaned |
 | `ACKNOWLEDGED` | it may have been billed, and there **is** an id | hold; reconcilable against a usage export |
+
+**Retry is capability-gated, and the reservation is never released to enable one.** From
+`SENT` or `ACKNOWLEDGED`, a retry is permitted only where the adapter declares
+`idempotency: Some(_)`, and the reservation stays held across it. Where the adapter
+declares `None` — which the Anthropic adapter does — the call becomes `ORPHANED`, the
+money stays held, and nothing retries automatically. The stage then degrades exactly as a
+provider timeout does, via `SkipItem`: a weaker debate with one fewer response, which is
+the cheaper failure. Full branch logic: `docs/INTERFACES.md` §5.
 | `COMPLETED` | nothing to do | already committed |
 
 That table is the whole operational payoff of naming the states, and `crash_midcall`
@@ -979,6 +1034,34 @@ and retried at the next boundary.
 `run.lock` goes away: SQLite already excludes a second writer, and the lock file existed
 to hand-roll that. Owner metadata — pid, boot_id, hostname, started_at — moves into a
 `run` table row updated on open, so `doctor` can still say who holds a run.
+
+```sql
+CREATE TABLE run_catalog (
+  run_id          TEXT PRIMARY KEY,
+  status          TEXT NOT NULL,      -- running | completed | failed | abandoned
+  question        TEXT NOT NULL,
+  outcome         TEXT,               -- null while running
+  confidence      REAL,
+  margin          REAL,
+  cost            REAL NOT NULL DEFAULT 0,
+  orphaned_cost   REAL NOT NULL DEFAULT 0,
+  duration_ms     INTEGER,
+  model_count     INTEGER,
+  depth           TEXT,
+  policy_version  TEXT NOT NULL,      -- history is only comparable within one
+  started_at      TEXT NOT NULL,
+  completed_at    TEXT,
+  run_path        TEXT NOT NULL
+);
+CREATE INDEX ix_catalog_time    ON run_catalog(started_at DESC);
+CREATE INDEX ix_catalog_outcome ON run_catalog(policy_version, outcome, confidence);
+```
+
+That is the whole catalogue — the columns `arbiter history` filters and sorts on, and
+nothing else. It is not a summary of the debate: no claims, no options, no judge scores.
+Anything richer belongs in `run.db`, and duplicating it here would create the second
+source of truth §8.1 exists to prevent. `policy_version` leads the second index because
+decisions only compare within one.
 
 Concurrent runs now contend on `history.db`, briefly and by design. A run inserts one row
 at start (status `running`) and updates it at completion. WAL keeps readers unblocked
@@ -1109,6 +1192,12 @@ the failure mode being avoided.
 |---|---|---|
 | **Stable** — public, versioned ABI | `Provider` · `Judge` · `Store` · `Exporter` | in-process traits **and** JSON-RPC / WASM |
 | **Internal** — traits only | `Stage` · `Extractor` · `Relation` · `Policy` | in-process traits |
+
+**Eight planes, four per tier.** The spec said "7" from v1.0 through v2.7.1 while the table
+listed eight names — a count that was never updated when a plane was added. Eight is the
+number; `Store` and `Exporter` are not merged to rescue the old one, because they are
+genuinely different seams (one persists a run, one renders a finished decision outward).
+The SQLite database and the blob store both sit behind the single `Store` plane.
 
 An internal plane becomes public when a second real implementation exists.
 
@@ -1353,8 +1442,9 @@ or service, any UI.
 
 ## 17. Scope
 
-**In:** kernel, full pipeline, complete decision core, all 7 plugin planes (2 tiers),
-providers (mock + anthropic + openai-compatible), filesystem store, CLI, Build Studio,
+**In:** kernel, full pipeline, complete decision core, all 8 plugin planes (2 tiers),
+providers (mock + anthropic + openai-compatible), SQLite store + filesystem blob store,
+CLI, Build Studio,
 golden fixtures.
 
 **Designed for, not built:** distributed stage execution (`StageExecutor` is an
@@ -1470,7 +1560,7 @@ stays in, as decided, and "optional and isolated" is exactly what makes it separ
 
 | Phase | Contents | Gate to the next |
 |---|---|---|
-| **1.0 — core** | 15-stage pipeline, decision core, filesystem store, CLI (`run` … `accept`), mock + 2 providers, in-process plugin traits, 28 CI fixtures | CI green with zero tokens; `paraphrase_corpus` and the tuning sweep run once against real providers to pin `argument-v1` and `t3_merge_threshold` |
+| **1.0 — core** | 15-stage pipeline, decision core, SQLite store + blob store, CLI (`run` … `accept`), mock + 2 providers, in-process plugin traits, 31 CI fixtures | CI green with zero tokens; `paraphrase_corpus` and the tuning sweep run once against real providers to pin `argument-v1` and `t3_merge_threshold` |
 | **1.5 — build & extend** | `arbiter-build` and its own fixture suite, `arbiter build` CLI, WASM plugin host, JSON-RPC host, confinement | — |
 
 Everything in 1.5 sits behind an interface that 1.0 defines and exercises, so deferring
@@ -1559,6 +1649,28 @@ The implementation is successful when:
 **v2.0** — Rust kernel, pure decision core, NDJSON store, CLI-first. Superseded v1.0
 (Python · LangGraph · Postgres · FastAPI · WebSocket · React).
 
+
+**v2.7.2** — second review of the SQLite design. Ten findings, all real; one was a
+regression introduced by v2.7.1 itself.
+
+| # | Change | Worth it because |
+|---|---|---|
+| 1 | `resume` branches on **call state**, not on the cache. No release-and-retry from `SENT`/`ACKNOWLEDGED`; retry only where the adapter declares `idempotency: Some(_)`, reservation held throughout | v2.7.1 added the §8.4 resume table saying *hold* the reservation, and left INTERFACES §5 saying *"release the reservation, emit `CALL_ORPHANED`, retry"*. The two contradicted, and §5 is the one an implementer follows. For a provider shipping `idempotency: None` — which Anthropic does — that path pays twice for one response and tells the ledger the money is free. This was the whole point of naming `ORPHANED` and v2.7.1 undercut it |
+| 2 | Orphaned calls degrade via `SkipItem`, like a timeout | a branch that cannot retry has to say what the run does next; a weaker debate is the cheaper failure |
+| 3 | Ledger invariant extended to count `ORPHANED` | money held against an unresolved call must reduce what later rounds may commit, or the invariant flags a leak that is not one |
+| 4 | Eight plugin planes, not seven | the table listed eight names against a count carried since v1.0. `Store` and `Exporter` are not merged to rescue the number — they are different seams |
+| 5 | §17 and §19 say SQLite store + blob store, and 31 CI fixtures | both still said "filesystem store", and the delivery gate still said 28 while §18 listed 31 |
+| 6 | `BUDGET_RELEASED` fires only when `reserved` falls without `committed` rising | the under-estimate remainder returns inside the `CALL_COMPLETED` transaction; a second event there would let a consumer summing releases double-count the refund |
+| 7 | `doctor --gc` uses `reopen`'s liveness predicate, boot_id first | `doctor` is a reader and cannot take a lease. A naive pid check treats every pre-reboot run as dead and can delete blobs under a run live on another host |
+| 8 | `history.db` schema written out | concurrent writers were specified against a table that was never shown. It stays a catalogue — no claims, no scores, or it becomes the second source of truth §8.1 forbids |
+| 9 | Event payloads stated as always inline | the blob threshold applies to provider responses and artifacts; replay must stay a sequential scan, not a scan plus a file open per row |
+| 10 | `dispersion` added to the `explain --json` example | fifth occurrence of the same stale count — the struct has had five penalties since v2.5 |
+
+On the stage idempotency key: no axes were added. `policy_version`, `pack_hash`,
+`table_version` and `config_hash` are frozen by `init` and constant within a run, and
+`run_id` is already in the key. The axis that genuinely crosses runs is the response
+cache, and `prompt_hash` already moves with the pack. §7 now says so rather than leaving
+it to be re-derived.
 
 **v2.7.1** — review of the SQLite design; twelve findings, all of them real. Three were
 blockers.

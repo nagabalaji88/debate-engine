@@ -1,6 +1,6 @@
 # Arbiter — Interface Definitions
 
-**Companion to** `ARCHITECTURE.md` v2.7.1. Where the spec says *what*, this says *how*.
+**Companion to** `ARCHITECTURE.md` v2.7.2. Where the spec says *what*, this says *how*.
 Every item here closes a numbered finding from the v2.0 review.
 
 ---
@@ -398,15 +398,46 @@ exist. What it cannot do is reach outside the machine: a crash after step 2 and 
 step 3 leaves a call that may have been billed with no id to reconcile it by, which is
 `ORPHANED` and must never be reopened as `FAILED`.
 
-**On `resume`, for every `CALL_STARTED` with no `CALL_COMPLETED`:**
+**On `resume`, for every `provider_calls` row in a non-terminal state.** The branch is on
+the *state*, not on the cache, because the state is what says whether the request reached
+the provider. Releasing money for a call that did reach it is how a resume double-spends.
 
 ```
-cache hit on the full key → emit CALL_RECOVERED, use the response, commit actual cost
-  (provider, model, params, prompt_hash) — never prompt_hash alone: the same
-  prompt sent to two models has one prompt_hash and two different answers
-cache miss                → release the reservation, emit CALL_ORPHANED, retry
-                            (bounded by max_retries)
+state RESERVED  (no CALL_STARTED committed)
+    → the request never left the machine
+    → release the reservation, mark FAILED, retry freely
+
+state SENT | ACKNOWLEDGED, cache hit on the full key
+    (provider, model, params, prompt_hash) — never prompt_hash alone: the same
+    prompt sent to two models has one prompt_hash and two different answers
+    → emit CALL_RECOVERED, use the response, commit the actual cost
+
+state SENT | ACKNOWLEDGED, cache miss, provider.idempotency == Some
+    → retry with blake3(prompt_hash ‖ reservation_id); the provider deduplicates
+    → the reservation stays HELD across the retry — never released and re-reserved,
+      which would momentarily under-report committed liability
+
+state SENT | ACKNOWLEDGED, cache miss, provider.idempotency == None
+    → mark ORPHANED. HOLD the reservation. Do NOT auto-retry.
+    → surface in `doctor` and in the run's orphaned total; only an operator or a
+      usage-export reconciliation moves it to RECOVERED
 ```
+
+**Why the last branch does not retry.** `ORPHANED` means *the provider may have served and
+billed this request*. Retrying it without an idempotency key asks for the same work a
+second time and pays for it a second time, and releasing the reservation first tells the
+budget ledger the money is available when it may already be gone. The Anthropic adapter
+ships `idempotency: None`, so this is the default path for the default provider — not an
+edge case.
+
+**What the run does instead.** The stage is short one response, which is the same
+situation a provider timeout produces, and it degrades the same way: `SkipItem`. The
+debate continues with fewer models and the record says so. A missing position is a
+weaker debate; a double charge is a broken promise, and the spec prefers the first.
+
+Because the reservation is held, the ledger invariant in ARCHITECTURE §8.3 counts
+`ORPHANED` among the non-terminal states. Held-but-unresolved money legitimately reduces
+what later rounds may spend — that is the uncertainty being represented, not a leak.
 
 Under v2.7 the cached response and the completion event commit **together**, so the
 v2.0 rule that the cache must be written first no longer applies — there is no window
@@ -1182,7 +1213,9 @@ future UI reimplements the explanation and the two drift.
         "derived_from": ["C-031", "C-014"] },
       { "name": "assumption",  "input": 0.07, "rate": 0.15, "contribution": -0.0105 },
       { "name": "truncation",  "input": 0.0,  "rate": 0.10, "contribution":  0.0 },
-      { "name": "convergence", "input": 0.0,  "rate": 0.05, "contribution":  0.0 }
+      { "name": "convergence", "input": 0.0,  "rate": 0.05, "contribution":  0.0 },
+      { "name": "dispersion",  "input": null, "rate": 0.20, "contribution":  0.0,
+        "note": "inactive — judge_count == 1" }
     ]
   },
 
