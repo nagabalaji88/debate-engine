@@ -4,4 +4,5 @@
 //! `G2`–`G9` task lands its own stage as it is implemented.
 
 pub mod claims_extract;
+pub mod claims_normalize;
 pub mod positions_generate;

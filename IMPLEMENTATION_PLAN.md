@@ -962,11 +962,27 @@ exact/fuzzy matcher, and — the one deliberate scope narrowing — cycle-cuttin
 uses only the greedy-by-ascending-confidence algorithm INTERFACES §2 names for
 large SCCs, not the exact brute-force variant it also names for |SCC| ≤ 12.
 
-`panel.resolve`/`claims.normalize` remain their own passes: `panel.resolve`
-needs `correlation.toml` (not yet shipped); `claims.normalize` carries the
-full three-tier similarity matching and cross-position clustering (§5.4) —
-substantial enough on its own, and the natural next consumer of
-`claims.extract`'s singleton-`CanonicalClaim` output.
+`claims.normalize` (`arbiter-kernel/src/stages/claims_normalize.rs`) is now
+also implemented and tested — clusters `claims.extract`'s singleton claims
+into multi-member `CanonicalClaim`s using the T1 (lexical: trigram
+IDF-weighted cosine, K-scaling top-K) and T3 (batched LLM grouping call, with
+`t3_merge_threshold`/`t3_max_claims_per_batch`, connected-component
+partitioning, first-fit-decreasing packing, and a one-level stitch pass)
+machinery INTERFACES §3 gives — the only concrete "cheap similarity"
+algorithm either spec file provides anywhere, reused here rather than
+inventing a second one. See D33 for the full reasoning (including why that
+machinery, textually anchored to `relations.analyze`, belongs here too), the
+K-formula transcription, the merge-kind rule, and the stitch-recursion
+narrowing (one level, not the full depth-2 protocol). T2 (polarity sweep,
+needs `options.cluster`'s output) stays out of scope, deferred to
+`relations.analyze`'s own future pass.
+
+`panel.resolve` remains its own pass — it needs `correlation.toml`, not yet
+shipped (`crates/arbiter-core/data/correlation.toml`, per ARCHITECTURE §6.2).
+With `init`, `positions.generate`, `claims.extract` and `claims.normalize` all
+landed, G2 is functionally complete for the no-panel-recommendation path
+(explicit panel selection, which ARCHITECTURE §5 itself calls "the default
+path" — recommendation "is never a mandatory dependency").
 
 ---
 
@@ -1315,7 +1331,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | P3 | ☐ | deferred as own pass — security-sensitive (OS keychain, redaction) | |
 | P4 | ☐ | deferred as own pass — needs real HTTP adapters against live provider APIs, no CI-testable acceptance criterion | |
 | G1 | ✅ | (this commit) | D28 — see PLAN_DEVIATIONS.md; pack machinery only, no production prompt content — see plan text above |
-| G2 | ☐ (partial: `init` + `positions.generate` + `claims.extract`) | (this commit) | D30, D31, D32 — see PLAN_DEVIATIONS.md; panel.resolve/claims.normalize remain, see plan text above |
+| G2 | ☐ (partial: `init` + `positions.generate` + `claims.extract` + `claims.normalize`; `panel.resolve` deferred) | (this commit) | D30, D31, D32, D33 — see PLAN_DEVIATIONS.md; see plan text above |
 | G3 | ☐ | | |
 | G4 | ☐ | | |
 | G5 | ☐ | | |

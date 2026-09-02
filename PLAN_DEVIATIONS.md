@@ -965,6 +965,82 @@ INTERFACES §2 calls out by name: a claim whose derivation chain still traces
 back to a real, independently-grounded `DirectQuote` after the cut survives
 as `Derived`, never falls to `Unsupported`.
 
+## D33 — `claims.normalize`: which similarity machinery it reuses, and what it narrows
+
+ARCHITECTURE's own description of this stage is one line: "cluster equivalent
+claims across models; members preserved | cheap similarity + LLM tie-break on
+top-K." No algorithm, no code block, nowhere else in either spec file gives
+this stage its own worked mechanism. The only concrete "cheap similarity"
+machinery given anywhere is INTERFACES §3's T1 (lexical: normalise → trigrams
+→ IDF-weighted cosine → top-K, with the K-scaling formula) and T3 (one
+batched LLM call — "group claims that state the same underlying point," with
+`t3_merge_threshold`, `t3_max_claims_per_batch`, and the partition/pack/stitch
+protocol for large claim sets). That machinery sits under ARCHITECTURE §5.4's
+"Relationship detection" heading, and its own worked pipeline opens with
+"claims → normalise" — i.e. it is written for `relations.analyze` (G4), which
+consumes *this* stage's output, not the other way around. Two things settle
+that this task should still reuse it rather than invent a second mechanism:
+
+1. It is the *only* concrete algorithm INTERFACES gives for "cheap similarity"
+   anywhere in the document — inventing a second, parallel one for
+   `claims.normalize` specifically would be a bigger deviation than reusing
+   the one given, and would leave two undocumented "cheap similarity"
+   algorithms in the workspace instead of one spec-anchored one.
+2. `prompts/<pack>/<version>/claims.group.md` — T3's own batched grouping
+   call — is named explicitly in ARCHITECTURE §15's prompt-pack file list, a
+   file name that only makes sense as this stage's (a *relationship*
+   classification call would produce `RelationKind`s, not merge groups; "group
+   claims that state the same underlying point" is a clustering decision,
+   exactly `claims.normalize`'s stated job).
+
+So this task implements exactly the T1+T3 half of the §3 machinery — the half
+that needs no `options.cluster` output. **T2 (the polarity sweep) is
+explicitly out of scope here**: it requires attachment to options, which
+don't exist until `options.cluster` (G3) runs, two stages later in the
+pipeline; T2 belongs to `relations.analyze`'s own future implementation, which
+runs after options exist.
+
+**Implementation choices, all D19-category (no code block given for any of
+these):**
+
+- **No SimHash blocking.** T1's own blocking step (64-bit SimHash) is a
+  scalability optimization ahead of the cosine step, not a correctness
+  requirement; `top_k_pairs` computes cosine directly over every pair, which
+  is correct — just not the eventual production performance profile — at the
+  claim counts a real debate produces before F2's fixture suite exists to
+  stress it.
+- **The K-scaling formula is transcribed as literally given**
+  (`clamp(ceil(3.0 · log2(n+1)), 8, 24)`), not reverse-engineered from
+  INTERFACES §3's own worked-example table (`n=12 → 11`, `n=32 → 16`, ...),
+  which does not reproduce exactly under this reading with ordinary rounding
+  — most likely a documentation rounding inconsistency in the table rather
+  than in the formula, which is given as an actual expression. Tests assert
+  the formula's stated properties (clamped to `[8,24]`, monotonic) rather than
+  the table's exact numbers.
+- **Merge-kind rule for a mixed-kind group**: the strongest (lowest
+  `kind_weight`-rank) `EvidenceKind` among the group's members, e.g. a group
+  with one `Fact` member and one `Unverified` member merges to `Fact`. Neither
+  spec file states a rule for this; corroboration (multiple models converging
+  on one point) should never make a claim look *less* evidenced than its
+  best-supported member alone would, so this is the conservative choice in
+  the evidence-favourable direction. (`arbiter-core::decision::evidence::effective_kind`
+  already handles the one case this doesn't need to: a claim whose surviving
+  members are *all* `Unsupported` still degrades to `Unverified` downstream,
+  regardless of what this stage records.)
+- **Surviving id on merge**: the lexicographically smallest claim id in the
+  group — deterministic, independent of processing or LLM-response order.
+- **Stitch recursion**: implemented to one level, not the full recursive
+  depth-2 protocol INTERFACES §3 describes for extreme claim counts (300+).
+  If more than one batch exists, one stitch call runs over the resulting
+  per-batch representatives; if there are more than `t3_max_claims_per_batch`
+  representatives even after batching (the spec's own words: "far past any
+  realistic debate"), this stage emits `CANDIDATES_SELECTED { tier:
+  "stitch_depth_exceeded" }` and skips the stitch call rather than recursing
+  — matching the greedy-not-exhaustive posture already established for
+  `claims.extract`'s cycle-cutting (D32): a real, terminating, documented
+  fallback for a case the spec itself calls a rare defensive branch, not the
+  common path.
+
 ## D31 — `positions.generate`: `Question`/`Position`/`Positions`, the missing per-provider semaphore, and the first real prompt
 
 ARCHITECTURE §5.1's only description of a position is "position text"; no spec
