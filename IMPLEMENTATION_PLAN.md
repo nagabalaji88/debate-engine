@@ -1490,7 +1490,24 @@ is a plan bug.** All run against the scripted mock with **zero LLM tokens**.
 Integration (nightly, real providers, budgeted — **not** in the commit path):
 `paraphrase_corpus`, `recommendation_corpus`, `judge_identity_leakage`.
 
-**F1/F2 scope note (F1 done; F2 32/36):** F1
+**`serve_localhost_only`/`serve_rejects_foreign_origin` land in `arbiter-cli`,
+not `arbiter-fixtures` (U1, done):** ARCHITECTURE §19's own phase table
+already says so — "34 of the 36 CI fixtures (the two `serve_*` fixtures land
+with 1.1)" — and the dependency rule makes it structural, not a choice:
+`arbiter-fixtures` cannot depend on `arbiter-cli` (X2's own
+`nothing_depends_on_cli` test), so a fixture exercising `arbiter serve`'s
+own admission gate can only ever live beside it. `arbiter-cli::serve::tests`
+(U1) is where both actually live: `binding_non_loopback_is_refused` proves
+`serve_localhost_only`'s own line ("binding a non-loopback address is
+refused, not warned") outright; `serve_rejects_foreign_origin`'s line ("a
+request with a wrong token, Host, or Origin is refused before any work") is
+covered jointly by `wrong_host_header_is_403`, `foreign_origin_is_403`,
+`missing_token_is_403` and `rejection_precedes_run_lookup` (the "before any
+work" half — a probe against an unknown run id is rejected identically to
+one against a real one). See PLAN_DEVIATIONS.md D48.
+
+**F1/F2 scope note (F1 done; F2 32/36 in `arbiter-fixtures`, 2 more in
+`arbiter-cli` per above):** F1
 (`arbiter-fixtures/src/harness.rs`) is implemented and tested — shared
 scaffolding (`ProviderRegistry`/`BudgetLedger`/`ResponseCache`/a
 `RecordingSink` `EventSink`/a `StageContext` constructor/a minimal
