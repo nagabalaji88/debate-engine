@@ -769,9 +769,15 @@ K5 (`cache.rs`, §7): key is the **full tuple** `(provider, model, params, promp
 never `prompt_hash` alone, or the same prompt to two models collides. Committed in the same
 transaction as the call and its budget charge. Replay is cache-only with the network disabled.
 
+K5 done; K3 not yet — `Stage`'s own supporting types (`RunContext`, `Parallelism`,
+`Key`, `CostEstimate`, `StageError`) are as underspecified as K0's were (D19's
+category of gap), and K3 additionally needs bounded concurrency, per-provider rate
+limits and circuit breakers designed from scratch, which is a substantially larger
+lift than K5's — it is picked up as its own pass rather than rushed alongside K5.
+
 **Acceptance**
 ```bash
-cargo test -p arbiter-kernel stage::tests::same_input_hash_is_not_recomputed
+cargo test -p arbiter-kernel stage::tests::same_input_hash_is_not_recomputed   # K3, not yet
 cargo test -p arbiter-kernel cache::tests::same_prompt_two_models_do_not_collide
 cargo test -p arbiter-kernel cache::tests::replay_opens_no_socket
 ```
@@ -1181,9 +1187,9 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | S6 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K1 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K2 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
-| K3 | ☐ | | |
+| K3 | ☐ | picked up as its own pass, see plan text above | |
 | K4 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
-| K5 | ☐ | | |
+| K5 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | P1 | ☐ | | |
 | P2 | ☐ | | |
 | P3 | ☐ | | |

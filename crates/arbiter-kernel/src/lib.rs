@@ -10,6 +10,7 @@
 
 pub mod bounds;
 pub mod budget;
+pub mod cache;
 pub mod calls;
 pub mod event;
 pub mod ids;
