@@ -469,6 +469,12 @@ score(A)=0.11, score(B)=0.08  ->  INSUFFICIENT_EVIDENCE, never SPLIT_DECISION
 **Files:** `decision/confidence.rs` · **Spec:** §6.7, INTERFACES §14
 
 Three dimensions minus **five** penalties. `dispersion` is inactive when `judge_count == 1`.
+`ConfidenceWeights` (added in C1) only carried two of the five penalty coefficients —
+`truncation_penalty`, `convergence_penalty`, `dispersion_weight` and
+`dispersion_threshold` were missing and are added now (D14). `judge_score` for
+`judge_count > 1` is the mean of each judge's `Scorecard::weighted()`, and
+`judge_dispersion` its population stdev — neither aggregation is stated explicitly in
+the spec, so this is the documented, conservative reading (D15).
 
 **Acceptance** — pin the spec's worked example exactly:
 ```
@@ -1094,7 +1100,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | C3 | ✅ | (this commit) | D8 — see PLAN_DEVIATIONS.md |
 | C4 | ✅ | (this commit) | D9, D10, D11 — see PLAN_DEVIATIONS.md |
 | C5 | ✅ | (this commit) | D12, D13 — see PLAN_DEVIATIONS.md |
-| C6 | ☐ | | |
+| C6 | ✅ | (this commit) | D14, D15 — see PLAN_DEVIATIONS.md |
 | C7 | ☐ | | |
 | C8 | ☐ | | |
 | K0 | ☐ | | |

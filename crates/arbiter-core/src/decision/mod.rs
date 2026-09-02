@@ -4,6 +4,7 @@
 //! which is what makes golden-fixture testing possible without spending a token.
 
 pub mod attachment;
+pub mod confidence;
 pub mod evidence;
 pub mod fixpoint;
 pub mod outcome;

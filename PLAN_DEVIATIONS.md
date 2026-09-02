@@ -295,3 +295,37 @@ places, and keeps one definition of "margin" in the whole document.
 **Resolved:** `outcome::classify` reads `OptionScore.share` for every comparison against
 `option_floor` and `τ_gap` in §6.6 rules 1–3. If a future spec revision states `raw` was
 intended, this is the one function to change.
+
+## D14 — `ConfidenceWeights` (C1) only carried two of the five penalty coefficients
+
+C1 added `ConfidenceWeights{evidence_mass, margin, judge, unresolved_penalty,
+assumption_penalty}` — the three dimension weights plus exactly the two penalties C1
+happened to test against. But IMPLEMENTATION_PLAN.md's own §0.6 constants table (row
+"penalties") already named all five: `0.25 unresolved · 0.15 assumption · 0.10
+truncation · 0.05 convergence · 0.20 dispersion`, plus a separate row for the 0.15
+dispersion threshold. `truncation_penalty`, `convergence_penalty`, `dispersion_weight`
+and `dispersion_threshold` were simply never added to the struct — a gap invisible
+until C6 became the first task to actually evaluate the formula that needs them.
+
+**Resolved:** extended `ConfidenceWeights` with the four missing fields, defaults
+1.2×-consistent with §0.6 (`truncation_penalty: 0.10`, `convergence_penalty: 0.05`,
+`dispersion_weight: 0.20`, `dispersion_threshold: 0.15`), pinned by a new test
+alongside the existing dimension-weight-sum test.
+
+## D15 — `judge_score` and `judge_dispersion` for `judge_count > 1`: aggregation left unstated
+
+ARCHITECTURE §6.7 and INTERFACES §14 define `judge_score` as "weighted 9-metric
+rubric" (singular) and `judge_dispersion` as "the spread of weighted scores over the
+same anonymised dossier" — both assume a single number per run, but neither states
+how multiple judges' individual `Scorecard::weighted()` values combine into that one
+`judge_score` when `judge_count > 1`. The dispersion table (§14) only shows the
+*penalty*, derived from the gap between two judges, never the base term those same
+two judges would produce.
+
+**Resolved:** `judge_score` = arithmetic mean of `Scorecard::weighted()` across all
+supplied judges (0.0 for zero judges, an edge case that cannot occur once `arbiter`
+requires at least one judge, but the function does not panic on it). This is the only
+aggregate consistent with `judge_dispersion` being defined as *spread around* a
+central value from the same set. If a future spec revision states a different
+aggregation (e.g. min, to be conservative about weak judges), `confidence()` is the
+one function to change.

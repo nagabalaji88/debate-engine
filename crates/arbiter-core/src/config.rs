@@ -109,14 +109,31 @@ pub struct Thresholds {
     pub truncation_factor: f64,
 }
 
+/// §6.7 — three evidence-dimension weights, plus the five penalty coefficients
+/// (PLAN_DEVIATIONS.md D14: the original C1 pass only carried two of the five —
+/// `truncation_penalty`, `convergence_penalty` and the dispersion pair were missing
+/// until C6, which is the first task that actually evaluates them).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConfidenceWeights {
+    /// Weight on `evidence_mass` in `base`.
     pub evidence_mass: f64,
+    /// Weight on `decision_margin` in `base`.
     pub margin: f64,
+    /// Weight on `judge_score` in `base`.
     pub judge: f64,
+    /// Multiplies `unresolved_critical_ratio`.
     pub unresolved_penalty: f64,
+    /// Multiplies `assumption_dependency_ratio`.
     pub assumption_penalty: f64,
+    /// Flat penalty subtracted when the run is `Completeness::Truncated`.
+    pub truncation_penalty: f64,
+    /// Flat penalty subtracted when the fixpoint did not converge.
+    pub convergence_penalty: f64,
+    /// Multiplies `max(0, judge_dispersion − dispersion_threshold)`.
+    pub dispersion_weight: f64,
+    /// Below this population-stdev of judge scores, dispersion costs nothing.
+    pub dispersion_threshold: f64,
 }
 
 impl Default for Weights {
@@ -178,6 +195,10 @@ impl Default for ConfidenceWeights {
             judge: 0.35,
             unresolved_penalty: 0.25,
             assumption_penalty: 0.15,
+            truncation_penalty: 0.10,
+            convergence_penalty: 0.05,
+            dispersion_weight: 0.20,
+            dispersion_threshold: 0.15,
         }
     }
 }
@@ -212,5 +233,16 @@ mod tests {
             (sum - 1.0).abs() < 1e-9,
             "sum was {sum}, not within 1e-9 of 1.0"
         );
+    }
+
+    #[test]
+    fn all_five_penalty_coefficients_match_the_spec() {
+        let c = ConfidenceWeights::default();
+        assert_eq!(c.unresolved_penalty, 0.25);
+        assert_eq!(c.assumption_penalty, 0.15);
+        assert_eq!(c.truncation_penalty, 0.10);
+        assert_eq!(c.convergence_penalty, 0.05);
+        assert_eq!(c.dispersion_weight, 0.20);
+        assert_eq!(c.dispersion_threshold, 0.15);
     }
 }
