@@ -346,9 +346,9 @@ async fn main() -> anyhow::Result<()> {
         } => maintenance::export_command(RunId::new(run_id), format, store),
         Command::Keys { action } => match action {
             KeysAction::List => maintenance::keys_list_command(),
-            KeysAction::Set { .. } => maintenance::keys_unimplemented("set"),
-            KeysAction::Test { .. } => maintenance::keys_unimplemented("test"),
-            KeysAction::Rm { .. } => maintenance::keys_unimplemented("rm"),
+            KeysAction::Set { provider } => maintenance::keys_set_command(provider),
+            KeysAction::Test { .. } => maintenance::keys_test_unimplemented(),
+            KeysAction::Rm { provider } => maintenance::keys_rm_command(provider),
         },
         Command::Providers { action } => match action {
             ProvidersAction::List => maintenance::providers_list_command(),

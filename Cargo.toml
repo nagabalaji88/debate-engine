@@ -47,6 +47,20 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# providers: credential handling (ARCHITECTURE §11.1, INTERFACES §25). `zeroize`
+# is how `SecretString` clears its buffer on drop without `unsafe` (forbidden
+# workspace-wide) — hand-rolling safe, guaranteed zeroing of a `String`'s heap
+# buffer isn't possible without it. `keyring` is the one cross-platform crate
+# that reaches macOS Keychain / Linux Secret Service / Windows Credential
+# Manager behind one API, matching source 3 of §11.1's resolution order.
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
+keyring = { version = "4", default-features = false, features = [
+    "v1",
+    "apple-native-keyring-store",
+    "windows-native-keyring-store",
+    "zbus-secret-service-keyring-store",
+] }
+
 # cli
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"

@@ -2051,3 +2051,110 @@ counts unchanged — this task added no new unit tests, verified instead by
 the CLI-level regressions above, the same split this session has used
 throughout for CLI-only code), `cargo fmt --all -- --check` clean, `cargo
 clippy --workspace --all-targets --all-features -- -D warnings` clean.
+
+## D46 — P3: credential resolution + redaction — a lint/spec conflict, `unsafe`-free env tests, and what stays untestable in this sandbox
+
+New `arbiter-providers::keys` (ARCHITECTURE §11.1, INTERFACES §25): the
+three-source resolution order, `SecretString`, `KeyState`/`KeySource`,
+config-file scanning, a `Redactor`, and the 24h verification cache.
+`IMPLEMENTATION_PLAN.md`'s own P1-P4 scope note had already deferred P3 as
+"security-sensitive... deserves focused attention and its own review" —
+this task is that pass.
+
+- **`SecretString` has a manual, redacting `Debug` impl, not no `Debug` impl
+  at all.** INTERFACES §25's own words are "`SecretString` does not
+  implement `Display` or `Debug`." Taken completely literally that conflicts
+  with this workspace's own `missing_debug_implementations = "warn"` lint
+  (every crate's `[lints.rust]`), which under this session's own
+  `-D warnings` quality gate turns "no `Debug` impl on a public type" into a
+  hard build failure. The spec's own reasoning names the actual goal: "the
+  most common way a secret reaches a log is a struct derived with
+  `#[derive(Debug)]` three layers up from anything that knows it holds
+  one." A hand-written `Debug` that always prints `"[REDACTED]"` satisfies
+  that goal exactly — an outer struct's own `#[derive(Debug)]` calls this
+  impl for its `SecretString` field and never sees the plaintext — while
+  also satisfying the lint. `Display` is never implemented, full stop, per
+  the letter of the spec (nothing needs it). `Redactor` gets the same
+  treatment for the same reason: it holds the plaintext secrets it scans
+  for, so its own `Debug` reports only a count, never the values.
+- **`KeySource::ArbiterEnv`/`ProviderEnv` hold owned `String`s, not
+  `&'static str`.** INTERFACES §25's literal signature
+  (`ArbiterEnv(&'static str)`) cannot compile as given: the env var name is
+  derived per-provider at runtime (`ARBITER_{PROVIDER}_API_KEY`), and no
+  runtime `String` can be borrowed as `'static` without leaking it. The
+  same class of "the literal signature doesn't compile as written" resolved
+  by adjusting it that K0's own D19/D20 already established a precedent
+  for.
+- **`SecretString::fingerprint()` returns the first 16 hex *characters* of
+  `blake3(key)`, not 16 bytes.** ARCHITECTURE §11.1's own prose is
+  `blake3(key)[..16]`; its own `GET /api/providers` JSON example shows a
+  4-character fingerprint (`"4f2c"`), which reads as the example's own
+  shorthand for display, not a literal width contradicting the prose's
+  explicit slice notation. 16 hex characters matches every other
+  fingerprint-shaped string already in this codebase (`content_hash`,
+  `pack_hash`, ...).
+- **Tests for the two environment-based resolution sources inject a fake
+  lookup instead of mutating real process env vars.** `std::env::set_var`/
+  `remove_var` are `unsafe fn` as of this edition — real env vars are also
+  global, process-wide mutable state shared across every test in the
+  binary regardless. `#![forbid(unsafe_code)]` (every crate) blocks
+  `unsafe` even inside `#[cfg(test)]`, so mutating real env vars in a test
+  was never an option here. The actual resolution logic
+  (`resolve_from_env`) is factored out to take an injectable lookup
+  closure; `EnvCredentialSource` calls it against `std::env::var` for
+  real, tests call it against a local `BTreeMap` — same logic, no shared
+  mutable state, no `unsafe`.
+- **The OS keychain source (`KeychainCredentialSource`, via the `keyring`
+  crate) is real wiring, not a stub — but its actual round-trip cannot be
+  exercised in this sandbox.** No D-Bus session bus is running here (Linux
+  Secret Service needs one), and there is obviously no real macOS/Windows
+  to test the other two backends against — the same class of gap P4 was
+  already deferred for ("no CI-testable acceptance criterion"), just
+  narrower: only this one resolution source, not the whole task. Verified
+  live instead: `arbiter keys set anthropic` against this sandbox fails
+  with a real, honest `keyring` error ("No default store has been set"),
+  exactly the failure mode expected with no backend reachable — not a
+  silent no-op, not a fabricated success.
+- **Config-file scanning is a line scan for an `api_key`-shaped
+  assignment, not a full TOML-schema check.** ARCHITECTURE §11.1 asks for
+  catching the *shape* wherever it appears across several files
+  (`config.toml`, `.arbiter/config.toml`, a plugin's `plugin.toml`) that
+  are never read for a key — no config-loading module exists anywhere in
+  this codebase yet to define what a validated schema for any of them
+  would even be, and inventing one is not this task's job. The scan takes
+  a list of candidate paths (a missing one is not an error — most
+  candidates never exist on a given machine) and reports the first
+  key-shaped line's file and 1-indexed line number, matching the
+  acceptance test's own name exactly.
+- **The verification cache is in-memory only**, the same "no persistence
+  path yet, since nothing that would populate it exists as a live command
+  yet either" precedent `ResponseCache`/`BudgetLedger` were also built
+  under before L1/L3 gave them one. `arbiter keys test` (the only thing
+  that would ever call `VerificationCache::put`) still needs P4 to make
+  the real request it would cache the result of.
+- **The `Redactor` type is built and tested in isolation; it is not yet
+  wired into any real write path** (event payloads, cached responses, the
+  manifest, exports, error strings) ARCHITECTURE §11.1 names. There is no
+  live secret flowing through any of those paths yet — `--panel mock` (the
+  only panel this codebase can run, L1) needs no key at all — so there is
+  nothing to integration-test the wiring against until P4 lands a real
+  adapter that actually makes a network call with a real key. Deferred
+  rather than wired in speculatively.
+- **L4's `keys`/`providers` CLI stubs were upgraded in this same task**,
+  not left stale: `keys list/set/rm`, `providers list`, and `doctor`'s own
+  credential line now report/act on real state via
+  `arbiter-providers::keys`, for the one provider id this codebase's spec
+  ever names (`anthropic`) plus `mock` (needs no key). `keys test` and
+  `providers test` still refuse, now naming P4 specifically rather than
+  P3, since P3 no longer blocks them — only the real adapter that would
+  make the verification request does.
+
+Verified: `cargo test -p arbiter-providers` — 17 passed (5 pre-existing
+`mock` tests unchanged, 12 new); `keys list` against a clean environment and
+again with `ARBITER_ANTHROPIC_API_KEY` set, both correct; `providers list`;
+`keys test`/`providers test` refusing and naming P4; `keys set` failing
+honestly against this sandbox's absent keychain backend; `doctor`'s
+credential line reflecting the same real state. Full workspace: build
+clean, `cargo test --workspace` green (17 arbiter-providers, up from 5; all
+other crates unchanged), `cargo fmt --all -- --check` clean, `cargo clippy
+--workspace --all-targets --all-features -- -D warnings` clean.

@@ -3,4 +3,5 @@
 //! CI fixture suite and opens no socket, which is what makes CI free.
 #![forbid(unsafe_code)]
 
+pub mod keys;
 pub mod mock;

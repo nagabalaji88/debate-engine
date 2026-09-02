@@ -1,16 +1,20 @@
 //! `arbiter doctor [--gc]`, `arbiter reindex`, and `keys`/`providers` (L4).
-//! `doctor`/`reindex` need nothing this codebase doesn't already have; the
-//! `keys`/`providers` subcommands are honest stubs — P3 (credential
-//! resolution: OS keychain, redaction) and P4 (real HTTP adapters) are
-//! deliberately deferred to their own pass (IMPLEMENTATION_PLAN.md's own
-//! P1-P4 scope note), so there is no credential state or real provider
-//! roster to report (PLAN_DEVIATIONS.md D45).
+//! `doctor`/`reindex` need nothing this codebase doesn't already have.
+//! `keys list/set/rm` and `providers list` now report/act on real
+//! credential state, now that P3 (`arbiter-providers::keys`) exists; `keys
+//! test` and `providers test` still need P4 (real HTTP adapters, which
+//! actually make the one minimal request "test" means) and stay honest
+//! stubs naming that (PLAN_DEVIATIONS.md D46).
 
-use arbiter_core::{Policy, RunId};
+use arbiter_core::{Policy, ProviderId, RunId};
 use arbiter_kernel::provider::CallState;
 use arbiter_kernel::store::RunStore;
+use arbiter_providers::keys::{
+    CredentialSource, EnvCredentialSource, KeySource, KeyState, KeychainCredentialSource,
+};
 use arbiter_store::sqlite_store::SqliteRunStore;
 use std::collections::BTreeSet;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub fn reindex_command(store_root: PathBuf) -> anyhow::Result<()> {
@@ -59,10 +63,16 @@ pub fn doctor_command(gc: bool, store_root: PathBuf) -> anyhow::Result<()> {
         );
     }
 
-    println!(
-        "credentials: not available -- P3 (credential resolution) is not implemented in this \
-         build (PLAN_DEVIATIONS.md D45)"
-    );
+    println!("credentials:");
+    let (env, keychain) = credential_sources();
+    let sources: [&dyn CredentialSource; 2] = [&env, &keychain];
+    for provider in known_providers() {
+        if provider.as_str() == "mock" {
+            continue;
+        }
+        let state = arbiter_providers::keys::resolve_state(&sources, &provider);
+        println!("  {}: {}", provider.as_str(), describe_state(&state));
+    }
     println!(
         "correlation table: not tracked -- no correlation table exists in this build; \
          --panel is always explicit (G2's own scope note)"
@@ -307,39 +317,131 @@ fn render_markdown(record: &arbiter_core::DecisionRecord) -> String {
     out
 }
 
+/// Every provider id this build has a name for. Not a real roster --
+/// `panel.resolve`/the correlation table don't exist yet (G2's own scope
+/// note), so there is no discovered list of providers, only the ones named
+/// anywhere in this codebase's own spec/code: `mock` (the only one `--panel`
+/// can ever select, needs no key) and `anthropic` (ARCHITECTURE §11.1's own
+/// worked example -- its credential *state* is real and reportable even
+/// though no adapter can spend it yet, P4, PLAN_DEVIATIONS.md D46).
+fn known_providers() -> Vec<ProviderId> {
+    vec![ProviderId::new("mock"), ProviderId::new("anthropic")]
+}
+
+fn credential_sources() -> (EnvCredentialSource, KeychainCredentialSource) {
+    (EnvCredentialSource, KeychainCredentialSource)
+}
+
+fn describe_state(state: &KeyState) -> String {
+    match state {
+        KeyState::Missing => "missing".to_string(),
+        KeyState::Present { source } => format!("present ({})", describe_source(source)),
+        KeyState::Verified { source, at } => {
+            format!("verified ({}) at {at}", describe_source(source))
+        }
+        KeyState::Rejected { source, status, at } => {
+            format!(
+                "rejected ({}, HTTP {status}) at {at}",
+                describe_source(source)
+            )
+        }
+    }
+}
+
+fn describe_source(source: &KeySource) -> String {
+    match source {
+        KeySource::ArbiterEnv(var) => format!("env:{var}"),
+        KeySource::ProviderEnv(var) => format!("env:{var}"),
+        KeySource::Keychain => "keychain".to_string(),
+    }
+}
+
 pub fn keys_list_command() -> anyhow::Result<()> {
+    let (env, keychain) = credential_sources();
+    let sources: [&dyn CredentialSource; 2] = [&env, &keychain];
+    for provider in known_providers() {
+        if provider.as_str() == "mock" {
+            println!(
+                "{}: not required (synthetic, no network access)",
+                provider.as_str()
+            );
+            continue;
+        }
+        let state = arbiter_providers::keys::resolve_state(&sources, &provider);
+        println!("{}: {}", provider.as_str(), describe_state(&state));
+    }
     println!(
-        "No credential sources are resolved in this build -- P3 (ARCHITECTURE §11.1: \
-         ARBITER_<P>_API_KEY -> the provider's own var -> OS keychain) is not yet implemented \
-         (PLAN_DEVIATIONS.md D45)."
-    );
-    println!(
-        "The only provider this build can run against is `mock` (--panel mock), which needs no key."
+        "(fingerprints and sources only -- never the key itself, ARCHITECTURE §11.1's own \
+         `keys list` contract)"
     );
     Ok(())
 }
 
-pub fn keys_unimplemented(subcommand: &str) -> anyhow::Result<()> {
+/// Reads the key from stdin (never a CLI argument -- a key on the command
+/// line ends up in shell history and `ps`), per ARCHITECTURE §12: "`arbiter
+/// keys set <provider>` read from stdin, store in the OS keychain."
+pub fn keys_set_command(provider: String) -> anyhow::Result<()> {
+    let mut value = String::new();
+    std::io::stdin()
+        .read_to_string(&mut value)
+        .map_err(|e| anyhow::anyhow!("reading key from stdin: {e}"))?;
+    let value = value.trim();
+    if value.is_empty() {
+        anyhow::bail!("no key was read from stdin");
+    }
+    let provider = ProviderId::new(provider);
+    let secret = arbiter_providers::keys::SecretString::new(value);
+    KeychainCredentialSource::set(&provider, &secret).map_err(|e| {
+        anyhow::anyhow!(
+            "storing the key for {} in the OS keychain: {e} -- this may mean no OS keychain \
+             backend is reachable here (no D-Bus Secret Service session, no macOS/Windows), \
+             PLAN_DEVIATIONS.md D46",
+            provider.as_str()
+        )
+    })?;
+    println!("Stored a key for {} in the OS keychain.", provider.as_str());
+    Ok(())
+}
+
+pub fn keys_rm_command(provider: String) -> anyhow::Result<()> {
+    let provider = ProviderId::new(provider);
+    KeychainCredentialSource::remove(&provider).map_err(|e| {
+        anyhow::anyhow!("removing the keychain entry for {}: {e}", provider.as_str())
+    })?;
+    println!("Removed the keychain entry for {}.", provider.as_str());
+    Ok(())
+}
+
+pub fn keys_test_unimplemented() -> anyhow::Result<()> {
     anyhow::bail!(
-        "`arbiter keys {subcommand}` needs P3 (credential resolution, OS keychain), which is \
-         not implemented in this build (PLAN_DEVIATIONS.md D45)"
+        "`arbiter keys test` needs P4 (real provider adapters) to make the one minimal request \
+         it verifies against -- not implemented in this build (PLAN_DEVIATIONS.md D46)"
     )
 }
 
 pub fn providers_list_command() -> anyhow::Result<()> {
-    println!("id: mock");
-    println!("  name: Mock");
-    println!("  key: not required (synthetic, no network access)");
-    println!(
-        "Real provider adapters (P4: Anthropic, OpenAI-compatible) are not implemented in this \
-         build (PLAN_DEVIATIONS.md D45)."
-    );
+    let (env, keychain) = credential_sources();
+    let sources: [&dyn CredentialSource; 2] = [&env, &keychain];
+    for provider in known_providers() {
+        println!("id: {}", provider.as_str());
+        if provider.as_str() == "mock" {
+            println!("  name: Mock");
+            println!("  key: not required (synthetic, no network access)");
+            continue;
+        }
+        let state = arbiter_providers::keys::resolve_state(&sources, &provider);
+        println!("  key: {}", describe_state(&state));
+        println!(
+            "  usable: false (P4 real adapters not implemented in this build, \
+             PLAN_DEVIATIONS.md D46)"
+        );
+    }
     Ok(())
 }
 
 pub fn providers_test_unimplemented() -> anyhow::Result<()> {
     anyhow::bail!(
         "`arbiter providers test` needs P4 (real provider adapters), which is not implemented \
-         in this build (PLAN_DEVIATIONS.md D45)"
+         in this build (PLAN_DEVIATIONS.md D46)"
     )
 }

@@ -855,25 +855,31 @@ P3 — credentials, §11.1:
 
 P4 — Anthropic ships `idempotency: None`; several OpenAI-compatible gateways accept a key.
 
-**Scope note (P1, P2 done; P3, P4 deferred to their own pass):** P1 (`Provider`
+**Scope note (P1, P2, P3 done; P4 deferred to its own pass):** P1 (`Provider`
 trait, `ProviderRequest`/`ProviderResponse`/`ProviderError` in
 `arbiter-kernel/src/provider.rs`) and P2 (`MockProvider` in
 `arbiter-providers/src/mock.rs`, scripted, structurally socket-free) are
 implemented and tested — see D25/D26 in PLAN_DEVIATIONS.md for the types
 neither spec file defines and the dyn-dispatch design choice. `ProviderRegistry`
 (`arbiter-kernel/src/stage.rs`, K3/D24) is filled in against the real `Provider`
-trait. P3 and P4 are deliberately left for a dedicated pass rather than folded
-in here: P3 is security-sensitive credential handling (OS keychain integration,
-write-path redaction, secret zeroization) that deserves focused attention and
-its own review rather than being rushed alongside P1/P2; P4 requires real
-`reqwest`/`eventsource-stream` wiring against live Anthropic/OpenAI-compatible
-APIs, which has no CI-testable acceptance criterion and depends on P3's
-credential resolution existing first.
+trait. P3 (`arbiter-providers::keys`: the three-source resolution order,
+`SecretString`, config-file scanning, a `Redactor`, the 24h verification
+cache) is now implemented and tested too — see D46 for where it deviates
+from the literal spec text (a redacting `Debug` impl rather than none, to
+satisfy this workspace's own `missing_debug_implementations` lint under
+`-D warnings`; owned `String`s in `KeySource` rather than `&'static str`,
+which cannot hold a runtime-derived name), and for what stays honestly
+untestable in this sandbox (the OS keychain's actual round-trip — no D-Bus
+session, no real macOS/Windows). L4's `keys`/`providers` CLI stubs were
+upgraded in the same task to use it for real. P4 is still deliberately left
+for its own pass: real `reqwest`/`eventsource-stream` wiring against live
+Anthropic/OpenAI-compatible APIs, which has no CI-testable acceptance
+criterion.
 
 **Acceptance**
 ```bash
 cargo test -p arbiter-providers keys::tests::config_file_key_fails_and_names_the_file
-cargo test -p arbiter-providers keys::tests::secret_string_has_no_debug_impl   # compile-fail test
+cargo test -p arbiter-providers keys::tests::secret_string_debug_never_reveals_the_value   # was secret_string_has_no_debug_impl, D46
 cargo test -p arbiter-providers keys::tests::key_echoed_in_an_error_body_is_redacted
 cargo test -p arbiter-providers keys::tests::rotating_a_key_invalidates_its_cached_result
 cargo test -p arbiter-providers mock::tests::mock_opens_no_socket
@@ -1551,7 +1557,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | K5 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | P1 | ✅ | (this commit) | D25 — see PLAN_DEVIATIONS.md |
 | P2 | ✅ | (this commit) | D26 — see PLAN_DEVIATIONS.md |
-| P3 | ☐ | deferred as own pass — security-sensitive (OS keychain, redaction) | |
+| P3 | ✅ | (this commit) | D46 — see PLAN_DEVIATIONS.md; redacting `Debug` impl (lint conflict), owned `String` in `KeySource`, OS keychain round-trip untestable in this sandbox; L4's `keys`/`providers` stubs upgraded to use it |
 | P4 | ☐ | deferred as own pass — needs real HTTP adapters against live provider APIs, no CI-testable acceptance criterion | |
 | G1 | ✅ | (this commit) | D28 — see PLAN_DEVIATIONS.md; pack machinery only, no production prompt content — see plan text above |
 | G2 | ☐ (partial: `init` + `positions.generate` + `claims.extract` + `claims.normalize`; `panel.resolve` deferred) | (this commit) | D30, D31, D32, D33 — see PLAN_DEVIATIONS.md; see plan text above |
@@ -1565,7 +1571,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | L1 | ✅ | (this commit) | D42 — see PLAN_DEVIATIONS.md; first StageGraph executor, `--panel mock` only, content_hash collision fixed across G4–G9 |
 | L2 | ✅ | (this commit) | D43 — see PLAN_DEVIATIONS.md; new artifact-read path, `claim_standings`, `defeat_chain_for`, `history.db` writes added to `run_command` |
 | L3 | ✅ | (this commit) | D44 — see PLAN_DEVIATIONS.md; `cache_entries` was never written to before this task, fixed for `run` too; `--repolicy`/`--repack` deferred |
-| L4 | ✅ (partial) | (this commit) | D45 — see PLAN_DEVIATIONS.md; `accept`/`doctor`/`reindex`/`export` built for real, `keys`/`providers` are honest P3/P4-deferred stubs; fixed a real RunHandle event-id collision and a `doctor` false positive |
+| L4 | ✅ (partial) | (this commit) | D45 — see PLAN_DEVIATIONS.md; `accept`/`doctor`/`reindex`/`export` built for real; fixed a real RunHandle event-id collision and a `doctor` false positive. `keys`/`providers` since upgraded to real P3-backed implementations (D46); `keys test`/`providers test` still need P4 |
 | F1 | ☐ | | |
 | F2 | ☐ | | |
 | U1 | ☐ | | |
