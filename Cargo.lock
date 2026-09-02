@@ -100,6 +100,7 @@ dependencies = [
  "arbiter-store",
  "blake3",
  "clap",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",

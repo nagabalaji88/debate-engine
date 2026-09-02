@@ -1947,3 +1947,89 @@ to resume. Full workspace: build clean, `cargo test --workspace` green
 other crates' counts unchanged), `cargo fmt --all -- --check` clean,
 `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 clean.
+
+## D45 — L4: `accept`/`doctor`/`reindex`/`keys`/`providers` — a real event-id collision, a real `doctor` false positive, and P3/P4's own honest stub
+
+L4's own dependency line in IMPLEMENTATION_PLAN.md names `L2, P3` — and P3
+(credential resolution: OS keychain, write-path redaction, secret
+zeroization) is explicitly deferred to its own pass by that same plan's own
+P1-P4 scope note ("security-sensitive... deserves focused attention and its
+own review rather than being rushed alongside P1/P2"), with P4 (real HTTP
+adapters) deferred alongside it for the same reason. Rather than block this
+entire task on a dependency the plan itself already chose to defer, L4 is
+split along the line the plan's own scope note draws: `accept`, `doctor`,
+`reindex` need nothing from P3/P4 and are built for real; `keys`/`providers`
+are the two subcommands that genuinely cannot exist without it, and get
+honest stubs that name the gap rather than fabricate credential state or a
+provider roster that doesn't exist.
+
+- **`DecisionAcceptance`/`DecisionOverride`** (INTERFACES §17), new in
+  `arbiter-core::acceptance` — pure recorded data, not computed, the same
+  category `DecisionRecord` itself is. `DecisionOverride::from` is always
+  `Value::Null`: INTERFACES §17's own example (`path:
+  "technical.cloud_provider"`) is a *Build Studio* document field, and Build
+  Studio (ARCHITECTURE §13) does not exist in this codebase — there is no
+  generated spec to read a prior value from, so it is left honestly absent
+  rather than guessed at. `arbiter accept` persists the acceptance as a new
+  `decision_acceptance.v1` artifact and emits `DecisionAccepted`/one
+  `DecisionOverridden` per override, refusing outright if the run has no
+  synthesized decision yet or an override arrives with an empty `--reason`
+  (INTERFACES §17: "an unexplained override is rejected"). It never checks
+  or blocks anything against the record it writes — the gate it exists to
+  feed (`arbiter build`, Build Studio) is out of scope, so `accept` is
+  write-only.
+- **A real bug, found by `accept` itself: `RunHandle`'s event ids only stay
+  unique within one process.** `RunHandle::append`'s id was
+  `evt_<run_id>_<counter>`, with the counter restarting at 1 on every
+  `RunHandle::new` — fine for `arbiter run`, which only ever constructs one
+  `RunHandle` per run, but `accept` is the first command to construct a
+  *second* `RunHandle` against a run that already has a full event history
+  from a first one, and its counter's `000001` collided with an id the
+  first process had already used, failing loudly on `events.event_id`'s own
+  `UNIQUE` constraint. `resume` (L3) carried the same latent bug — invisible
+  there only because the one scenario it was tested against (a run
+  interrupted after `init` but before any stage-driven event) had no prior
+  `RunHandle`-minted events to collide with. Fixed by mixing a
+  nanosecond timestamp captured once per `RunHandle` construction into
+  every id it mints (`evt_<run_id>_<instance_tag>_<counter>`), making each
+  instance's own id space disjoint from every other's without needing to
+  read prior state back first. Re-verified: `replay --json` still
+  byte-identical to `show --json` after the fix (`NullWriter` never
+  persists ids, so it was never exposed to this bug, but the fix still had
+  to not regress it), and `accept`/`resume` both exercised against a run
+  with ~75 pre-existing events, cleanly.
+- **A real `doctor` false positive, found by running it against a normal,
+  cleanly-completed run: every finished run was reported "stuck in
+  running."** A dead lease (`is_run_lease_live`, S5) is not, on its own,
+  evidence of an abandoned run — a run that finishes normally also ends with
+  no live owner, since the process just exits without taking any special
+  action on the `run` table. Fixed by only counting a dead-lease run as
+  stuck when its own event log also lacks a `RunCompleted`/`RunFailed`
+  event — the same "did this run actually finish" check `resume` (L3, D44)
+  already makes before deciding whether there is anything to resume.
+- **`doctor`'s ledger-invariant check** recomputes `Σ reserved_amount` over
+  every `provider_calls` row in a non-terminal state (`CallState::
+  is_non_terminal`, already built) and flags any run where that disagrees
+  with `budget`'s own persisted `reserved` column — the invariant
+  `arbiter-kernel/src/budget.rs`'s own doc comment already states, given its
+  own first real reader here. Orphaned spend and (with `--gc`) blob
+  reclamation reuse `provider_calls`/`cache_entries` (L3) and `blob::gc_run`
+  (S5) exactly as built, with zero changes to either.
+- **`keys`/`providers` are honest stubs, not fabricated ones.** `keys list`
+  and `providers list` state plainly that no credential source is resolved
+  and no real provider adapter exists in this build, and that `mock` is the
+  only provider `--panel` can select; `keys set/test/rm` and `providers
+  test` refuse outright, naming P3/P4 as the reason, rather than pretending
+  to read a keychain or make a network call that has nowhere to go.
+  `doctor`'s own "credentials: not available" line says the same for the
+  same reason.
+
+Verified end to end: `reindex` against a real store; `doctor` against a
+real completed run (no false "stuck" report after the fix) and a
+simulated interrupted one; `accept` with and without `--override`, and its
+rejection of an unexplained override; `keys`/`providers` list and their
+refusals. Full workspace: build clean, `cargo test --workspace` green (all
+counts unchanged — this task added no new unit tests, verified instead by
+the CLI-level regressions above, the same split this session has used
+throughout for CLI-only code), `cargo fmt --all -- --check` clean, `cargo
+clippy --workspace --all-targets --all-features -- -D warnings` clean.

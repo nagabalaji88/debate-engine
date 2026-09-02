@@ -1,6 +1,8 @@
 //! `arbiter` — the only frontend in phase 1. A renderer, not a second engine:
 //! every number it prints comes out of `arbiter-core` (ARCHITECTURE.md §12).
 
+mod accept;
+mod maintenance;
 mod orchestrator;
 mod render;
 mod resume_replay;
@@ -112,6 +114,45 @@ enum Command {
         #[arg(long, default_value = ".arbiter/runs")]
         store: PathBuf,
     },
+    /// Record a `DecisionAcceptance` for a run, optionally with overrides.
+    Accept {
+        run_id: String,
+        /// A field path to override, `path=value`. Repeatable; each one
+        /// needs a matching `--reason`.
+        #[arg(long = "override")]
+        overrides: Vec<String>,
+        /// Required alongside each `--override`, in the same order.
+        #[arg(long)]
+        reason: Vec<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value = ".arbiter/runs")]
+        store: PathBuf,
+    },
+    /// Preflight: constants, stuck runs, the budget ledger invariant,
+    /// orphaned spend, orphaned blobs.
+    Doctor {
+        /// Also delete orphaned blobs from every run whose lease is dead.
+        #[arg(long)]
+        gc: bool,
+        #[arg(long, default_value = ".arbiter/runs")]
+        store: PathBuf,
+    },
+    /// Rebuild `history.db` by scanning every run under `--store`.
+    Reindex {
+        #[arg(long, default_value = ".arbiter/runs")]
+        store: PathBuf,
+    },
+    /// Credential sources -- P3 is not implemented in this build.
+    Keys {
+        #[command(subcommand)]
+        action: KeysAction,
+    },
+    /// The provider roster -- P4 is not implemented in this build.
+    Providers {
+        #[command(subcommand)]
+        action: ProvidersAction,
+    },
     /// List past runs from the history catalogue.
     History {
         #[arg(long)]
@@ -127,6 +168,24 @@ enum Command {
         #[arg(long, default_value = ".arbiter/runs")]
         store: PathBuf,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum KeysAction {
+    /// Which providers have a key, from which source, and its state.
+    List,
+    /// Read a key from stdin and store it in the OS keychain.
+    Set { provider: String },
+    /// One minimal request per model; caches the result for 24h.
+    Test { provider: Option<String> },
+    /// Remove the keychain entry.
+    Rm { provider: String },
+}
+
+#[derive(Subcommand, Debug)]
+enum ProvidersAction {
+    List,
+    Test { provider: Option<String> },
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,6 +322,25 @@ async fn main() -> anyhow::Result<()> {
             json,
             store,
         } => resume_replay::replay_command(RunId::new(run_id), json, store).await,
+        Command::Accept {
+            run_id,
+            overrides,
+            reason,
+            json,
+            store,
+        } => accept::accept_command(RunId::new(run_id), overrides, reason, json, store),
+        Command::Doctor { gc, store } => maintenance::doctor_command(gc, store),
+        Command::Reindex { store } => maintenance::reindex_command(store),
+        Command::Keys { action } => match action {
+            KeysAction::List => maintenance::keys_list_command(),
+            KeysAction::Set { .. } => maintenance::keys_unimplemented("set"),
+            KeysAction::Test { .. } => maintenance::keys_unimplemented("test"),
+            KeysAction::Rm { .. } => maintenance::keys_unimplemented("rm"),
+        },
+        Command::Providers { action } => match action {
+            ProvidersAction::List => maintenance::providers_list_command(),
+            ProvidersAction::Test { .. } => maintenance::providers_test_unimplemented(),
+        },
         Command::History {
             outcome,
             since,
@@ -277,7 +355,7 @@ async fn main() -> anyhow::Result<()> {
 /// directory lives; `history.db` is its sibling, matching ARCHITECTURE §8's
 /// own layout (`~/.arbiter/{history.db, runs/<run_id>/run.db}`) one level
 /// down from wherever `--store` is rooted.
-fn history_db_path(store_root: &Path) -> PathBuf {
+pub(crate) fn history_db_path(store_root: &Path) -> PathBuf {
     store_root
         .parent()
         .map(|p| p.join("history.db"))

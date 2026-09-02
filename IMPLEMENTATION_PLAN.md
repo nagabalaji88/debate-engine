@@ -1212,6 +1212,31 @@ simulated interrupted run (one genuine `RESERVED` provider call) for
 staleness, models missing from the table, provisional constants, runs stuck in `running`,
 the ledger invariant, orphaned spend, and orphaned blobs.
 
+**L4 scope note.** L4's own dependency line names `L2, P3` — and P3
+(credential resolution) is explicitly deferred to its own pass by the P1-P4
+scope note above ("security-sensitive... deserves focused attention"), P4
+(real adapters) deferred alongside it. Rather than block the whole task on a
+dependency the plan itself already chose to defer, this splits along that
+same line: `accept`, `doctor`, `reindex` need nothing from P3/P4 and are
+built for real; `keys`/`providers` are the two subcommands that genuinely
+cannot exist without it, and get honest stubs naming the gap rather than
+fabricated credential state. New: `arbiter-core::acceptance`
+(`DecisionAcceptance`/`DecisionOverride`, INTERFACES §17) — `from` is always
+`null` since there is no Build Studio document to read a prior value from
+(Build Studio does not exist, ARCHITECTURE §13). Running `accept` for real
+surfaced a genuine bug: `RunHandle`'s event ids were only unique within one
+process (a counter restarting at 1 on every construction), so the *second*
+`RunHandle` ever built against an already-populated run collided on
+`events.event_id`'s own `UNIQUE` constraint -- `resume` (L3) carried the
+same latent bug, invisible there only because its one tested scenario had
+no prior events to collide with. Fixed by mixing a per-construction
+timestamp into every id. Running `doctor` against a real completed run
+surfaced a second bug: every cleanly-finished run was reported "stuck in
+running," since a dead lease alone (the process just exited normally) isn't
+evidence of an abandoned one -- fixed by also checking for a
+`RunCompleted`/`RunFailed` event before flagging, the same check `resume`
+already makes. See D45 for the full account.
+
 ---
 
 ## 7. Tasks — the UI
@@ -1538,7 +1563,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | L1 | ✅ | (this commit) | D42 — see PLAN_DEVIATIONS.md; first StageGraph executor, `--panel mock` only, content_hash collision fixed across G4–G9 |
 | L2 | ✅ | (this commit) | D43 — see PLAN_DEVIATIONS.md; new artifact-read path, `claim_standings`, `defeat_chain_for`, `history.db` writes added to `run_command` |
 | L3 | ✅ | (this commit) | D44 — see PLAN_DEVIATIONS.md; `cache_entries` was never written to before this task, fixed for `run` too; `--repolicy`/`--repack` deferred |
-| L4 | ☐ | | |
+| L4 | ✅ (partial) | (this commit) | D45 — see PLAN_DEVIATIONS.md; `accept`/`doctor`/`reindex` built for real, `keys`/`providers` are honest P3/P4-deferred stubs; fixed a real RunHandle event-id collision and a `doctor` false positive |
 | F1 | ☐ | | |
 | F2 | ☐ | | |
 | U1 | ☐ | | |

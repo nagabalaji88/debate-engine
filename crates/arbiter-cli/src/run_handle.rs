@@ -33,6 +33,17 @@ pub struct RunHandle {
     run_id: RunId,
     inner: Mutex<Inner>,
     next_event_id: AtomicU64,
+    /// Mixed into every event id this handle mints, alongside `next_event_id`
+    /// — a counter alone collides the moment a *second* `RunHandle` is ever
+    /// constructed against the same run (`resume`, `accept`, a second
+    /// `replay`, ...): each restarts its own counter at 1, so its first
+    /// event id would repeat one this run's very first process already used
+    /// (`events.event_id` is `UNIQUE`, so this failed loudly rather than
+    /// silently, but only once a second handle actually existed to collide —
+    /// PLAN_DEVIATIONS.md D45). A nanosecond timestamp captured once per
+    /// `RunHandle` construction makes every instance's own id space disjoint
+    /// from every other's, with no need to read prior state back first.
+    instance_tag: u128,
     error: Mutex<Option<StoreError>>,
 }
 
@@ -44,6 +55,10 @@ impl std::fmt::Debug for Inner {
 
 impl RunHandle {
     pub fn new(run_id: RunId, writer: Box<dyn RunWriter>) -> Self {
+        let instance_tag = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
         Self {
             run_id,
             inner: Mutex::new(Inner {
@@ -51,6 +66,7 @@ impl RunHandle {
                 chain: arbiter_store::events::ChainState::empty(),
             }),
             next_event_id: AtomicU64::new(1),
+            instance_tag,
             error: Mutex::new(None),
         }
     }
@@ -114,7 +130,11 @@ impl RunHandle {
         let n = self.next_event_id.fetch_add(1, Ordering::SeqCst);
         let event = Event {
             schema_version: 1,
-            event_id: EventId::new(format!("evt_{}_{n:06}", self.run_id.as_str())),
+            event_id: EventId::new(format!(
+                "evt_{}_{}_{n:06}",
+                self.run_id.as_str(),
+                self.instance_tag
+            )),
             run_id: self.run_id.clone(),
             sequence: None,
             timestamp: arbiter_store::now_rfc3339(),

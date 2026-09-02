@@ -9,6 +9,7 @@
 //! of the workspace consume this crate; it consumes nothing internal.
 #![forbid(unsafe_code)]
 
+pub mod acceptance;
 pub mod claim;
 pub mod config;
 pub mod decision;
@@ -18,6 +19,7 @@ pub mod option;
 pub mod policy;
 pub mod relation;
 
+pub use acceptance::{DecisionAcceptance, DecisionOverride};
 pub use claim::{
     CanonicalClaim, ClaimLifecycle, ClaimMember, ClaimStanding, EvidenceKind, Grounding, TextSpan,
 };
@@ -33,8 +35,8 @@ pub use decision::record::{
 };
 pub use decision::triggers::{CounterfactualFlip, FlipDirection};
 pub use ids::{
-    ClaimId, GroupId, ModelId, OptionId, OptionVersion, PolicyVersion, PositionId, ProviderId,
-    RunId,
+    ClaimId, GroupId, ModelId, OptionId, OptionVersion, OverrideId, PolicyVersion, PositionId,
+    ProviderId, RunId,
 };
 pub use judge::Scorecard;
 pub use option::{DecisionOption, OptionScore};

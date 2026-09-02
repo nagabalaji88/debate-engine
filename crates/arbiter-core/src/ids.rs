@@ -46,6 +46,11 @@ id_type!(/// Which panel members are correlated priors, not independent evidence
 id_type!(/// The fixpoint constants and thresholds a `DecisionRecord` was computed
     /// under, e.g. `"argument-v1"`. Decisions are only comparable within one version.
     PolicyVersion);
+id_type!(/// One `DecisionOverride` within a `DecisionAcceptance` (INTERFACES §17) —
+    /// what a generated Build Studio spec's `Provenance::UserOverride` points back
+    /// at. Arbitrary construction, like `GroupId`: a label identifying one override
+    /// among the several `arbiter accept` may record in a single call, not a hash.
+    OverrideId);
 
 /// `blake3` of an option's canonical text. The **only** way to construct one is from
 /// text — never from an arbitrary string — because the whole point of separating
