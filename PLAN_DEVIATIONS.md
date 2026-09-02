@@ -1361,3 +1361,88 @@ so far. What required a decision:
   `disputes.rank`'s own output — `challenge.run` will need the claim texts,
   relations and standing again, and re-deriving them from scratch would
   duplicate work this stage's input already did.
+
+## D38 — `challenge.run` / `rebuttal.run`: issuing the challenge, applying the verdict, and versioned deltas without a claim-history artifact
+
+ARCHITECTURE §5's own pipeline table gives both stages one line each ("issue
+challenges in parallel"; "defend / modify / withdraw → versioned claim
+deltas") and no dedicated subsection in either spec file works through the
+mechanics — the least-specified G-task pair since G1. What was authored, in
+`arbiter-kernel/src/stages/challenge_run.rs` and
+`.../rebuttal_run.rs`:
+
+- **`challenge.run` fans out `PerItem`, mirroring `positions.generate`'s own
+  reasoning exactly**: independent calls to independent models (the
+  challengers `challenge.plan` already chose), none waiting on any other, one
+  bounded join set (`buffer_unordered`), `FailurePolicy::SkipItem` — a
+  challenger's call failing means one fewer challenge issued this round, not
+  a fatal stage.
+- **A challenged claim's lifecycle moves to `Challenged` in `challenge.run`
+  itself**, not deferred to `rebuttal.run`. ARCHITECTURE §6.1's own state
+  list (`Proposed | Verified | Challenged | Defended | Modified(v) |
+  Withdrawn | Rejected`) gives `Challenged` a place between "nothing has
+  happened to it yet" and every possible rebuttal outcome; stamping it the
+  moment a challenge actually goes out is the literal reading, and it means a
+  claim whose *rebuttal* call later fails (or whose response is
+  unparseable) still correctly reads `Challenged` — "has an open challenge,
+  outcome not yet known" — rather than silently reverting to whatever it was
+  before, or requiring `rebuttal.run` to special-case "no verdict" as its own
+  branch.
+- **`rebuttal.run` addresses one representative defender, not every
+  co-asserting model.** D37 already generalised "the claim's author"
+  (singular) to a claim's full asserter set for the self-challenge check;
+  here the same plurality means a merged claim could in principle owe a
+  rebuttal call to several models at once. Read as one call to the first
+  asserting model in deterministic (sorted) order: the debate defends *the
+  claim*, and multiple co-asserting models independently restating the same
+  defence would not add dialectical information, only cost. `defenders` is
+  still carried on `IssuedChallenge`/recorded in the exchange for provenance
+  — this narrows *who is asked*, not what is recorded.
+- **`Modify` appends a member; it does not rewrite `text`.** ARCHITECTURE
+  §5.2's own invariant — "originals are never destroyed; every derived
+  number traces back to a member" — is a statement about `members`, not
+  about the canonical `text` field, and no spec text says a modification
+  rewrites the cluster's representative wording. The conservative reading:
+  `lifecycle` moves to `Modified{version}` (version computed as `1` for a
+  claim modified for the first time, `v + 1` if it was already
+  `Modified{version: v}` from an earlier round — no spec file gives this
+  counting rule either), and the model's revised wording is appended as a
+  **new** `ClaimMember` (synthetic `PositionId::new("pos_rebuttal_<claim>_<v>")`,
+  since a rebuttal is not itself a position) rather than overwriting any
+  existing member's `original_text`. The claim's top-level `text` is left
+  untouched.
+- **No grounding pipeline re-runs on a rebuttal.** `claims.extract`'s
+  exact/fuzzy/derived/repair protocol (D32) is that stage's own job, not
+  this one's — re-running it here would be a large, unrequested scope
+  expansion for a one-line spec entry. The new member from a `Modify`
+  verdict is admitted at `Grounding::Unsupported`, the same conservative
+  floor `claims.extract` itself falls back to for anything it cannot verify
+  — unevidenced-but-real risk, not silently dropped (ARCHITECTURE §5.1's own
+  stated reason `Unsupported` is admitted rather than rejected).
+- **No claim-version-history artifact.** INTERFACES §18's `C-024@v1` /
+  `C-024@v2` citation format (Build Studio's provenance gates, out of 1.0
+  scope per this plan) implies *some* notion of addressing a specific past
+  version, but nothing in G1–G9's own scope needs it yet, and inventing a
+  parallel history store ahead of a real consumer would be exactly the kind
+  of unrequested abstraction this project's own discipline avoids. The
+  version number lives where ARCHITECTURE §6.1 already puts it —
+  `ClaimLifecycle::Modified { version }` on the current claim — and nothing
+  more.
+- **`RebuttalsRun.next_round_input` reuses `RankInput` verbatim**, not a
+  bespoke output type. INTERFACES §11's controlled loop
+  (`challenge.plan → challenge.run → rebuttal.run → controller.decide`) folds
+  back into another `disputes.rank` pass for the next round (`round` in the
+  idempotency key is what makes a resumed run re-enter the right iteration);
+  giving `rebuttal.run`'s output exactly the shape `disputes.rank` already
+  consumes means the next round needs no adapter stage. `standing` and the
+  propagated matrix are deliberately **not** carried forward from
+  `RankedDisputes` into this output — they were computed from the
+  *pre-rebuttal* claims and are stale the instant a lifecycle changes;
+  recomputing them from the updated claims is exactly what feeding back into
+  `disputes.rank` is for.
+- **`ChallengeIssued` fires in `challenge.run`; `RebuttalReceived` fires in
+  `rebuttal.run`** — both already named in the event taxonomy (ARCHITECTURE
+  §9 / INTERFACES §13), wired here for the first time now that both stages
+  exist, at the same "one event per completed item" granularity D36's
+  `RelationshipFound` fix established as this workspace's consistent
+  reading.

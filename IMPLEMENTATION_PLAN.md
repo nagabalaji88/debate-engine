@@ -1037,6 +1037,24 @@ and D37 for the `ResolvedGraph`/`PolicyConfig` signature gap, the
 claim's author" generalised to a claim's full asserter set, and a
 `RELATIONSHIP_FOUND` emission gap in already-shipped G4 fixed in passing.
 
+**G6** (`arbiter-kernel/src/stages/challenge_run.rs` +
+`.../rebuttal_run.rs`) is implemented and tested. `challenge.run` fans the
+pairs `challenge.plan` selected out `PerItem` (the same reasoning
+`positions.generate` used: independent calls, `SkipItem` on failure) and
+stamps a challenged claim's lifecycle `Challenged` the moment its challenge
+actually goes out. `rebuttal.run` asks the defended claim's representative
+asserting model to defend/modify/withdraw, and applies the verdict as an
+ARCHITECTURE §6.1 lifecycle transition — `Defended`, `Withdrawn`, or
+`Modified{version}` with the revision appended as a new `ClaimMember`
+(originals never overwritten). Its output reuses `disputes.rank`'s own input
+shape verbatim, so the controlled loop
+(`challenge.plan → challenge.run → rebuttal.run → controller.decide`,
+INTERFACES §11) re-enters `disputes.rank` for the next round with no adapter
+stage. See D38 for the representative-defender reading, why canonical claim
+text is never rewritten on `Modify`, and why `standing`/the propagated
+matrix are deliberately dropped rather than carried stale into the next
+round.
+
 ---
 
 ## 6. Tasks — CLI
@@ -1388,7 +1406,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | G3 | ✅ | (this commit) | D34 — see PLAN_DEVIATIONS.md; propagate/score_options already built by C4, see plan text above |
 | G4 | ✅ | (this commit) | D35 — see PLAN_DEVIATIONS.md; shared `similarity.rs`, T2 polarity sweep literal reading |
 | G5 | ✅ | (this commit) | D36, D37 — see PLAN_DEVIATIONS.md; Step 3 propagation runs in disputes.rank |
-| G6 | ☐ | | |
+| G6 | ✅ | (this commit) | D38 — see PLAN_DEVIATIONS.md; rebuttal.run's output reuses disputes.rank's own input shape |
 | G7 | ☐ | | |
 | G8 | ☐ | | |
 | G9 | ☐ | | |

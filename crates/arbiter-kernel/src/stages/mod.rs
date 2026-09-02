@@ -4,10 +4,12 @@
 //! `G2`–`G9` task lands its own stage as it is implemented.
 
 pub mod challenge_plan;
+pub mod challenge_run;
 pub mod claims_extract;
 pub mod claims_normalize;
 pub mod disputes_rank;
 pub mod options_cluster;
 pub mod positions_generate;
+pub mod rebuttal_run;
 pub mod relations_analyze;
 pub(crate) mod similarity;
