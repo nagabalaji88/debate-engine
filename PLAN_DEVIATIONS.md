@@ -2158,3 +2158,103 @@ credential line reflecting the same real state. Full workspace: build
 clean, `cargo test --workspace` green (17 arbiter-providers, up from 5; all
 other crates unchanged), `cargo fmt --all -- --check` clean, `cargo clippy
 --workspace --all-targets --all-features -- -D warnings` clean.
+
+## D47 — F1/F2: the fixture harness and 32 of the 36 CI fixtures — a toolkit, not a second pipeline, four fixtures genuinely blocked, and three real gaps the fixtures themselves found
+
+F1 (`arbiter-fixtures/src/harness.rs`) and F2 (`arbiter-fixtures/tests/*.rs`,
+32 of the 36 fixtures in IMPLEMENTATION_PLAN.md §8's ledger).
+
+- **F1 is a toolkit, not a wrapper around `arbiter-cli::orchestrator::run_pipeline`.**
+  `arbiter-fixtures` cannot depend on `arbiter-cli` (X2's own
+  `nothing_depends_on_cli` test), so `run_pipeline`'s wiring is simply
+  unreachable from this crate. `harness.rs` instead builds the same
+  primitives (`ProviderRegistry`, `BudgetLedger`, `ResponseCache`, a
+  `RecordingSink` `EventSink`, a `StageContext` constructor, a
+  minimal-construction `PromptTemplate` helper) directly against
+  `arbiter-kernel`'s already-public API — the same primitives
+  `orchestrator.rs` itself uses, wired independently. Most of the 36
+  fixtures need only `arbiter-core`'s pure functions or one or two kernel
+  stages called directly, not a full 13-stage run, so this is deliberately
+  a set of shared helpers a fixture assembles from, not a second copy of
+  `run_pipeline`. Only `simple_consensus` (F2's own fixture, the one the
+  ledger names as genuinely end-to-end) wires every stage — done directly
+  in that test itself, following `orchestrator.rs`'s exact stage order,
+  since a second reusable "mini-orchestrator" inside the harness would be
+  exactly the unrequested abstraction this project's own discipline avoids
+  for a single caller.
+- **Four fixtures are genuinely blocked, not built:**
+  - `serve_localhost_only`, `serve_rejects_foreign_origin` — owned by U1
+    (`arbiter serve`), which does not exist anywhere in this workspace.
+  - `panel_without_keys` — owned by U2 (a UI screen), which does not exist
+    anywhere in this workspace.
+  - `cites_defeated_claim` — owned by C1, but "an assertion citing a
+    defeated claim" needs a `Provenance`/`Assertion` type from Build
+    Studio (INTERFACES §18), and Build Studio (ARCHITECTURE §13) is
+    explicitly out of this plan's 1.0 scope. No such type exists anywhere
+    in `arbiter-core` (confirmed by grep: the only match anywhere in this
+    workspace is a single doc-comment mention of `Provenance::UserOverride`
+    in `arbiter-core::ids`, D45's own scope note).
+  This leaves 32 buildable fixtures, all 32 written and passing.
+- **The ledger's `G4` ownership for `premise_cycle`/`premise_cycle_grounded_fact`
+  is a labeling mismatch already covered by D32, not a new gap.**
+  IMPLEMENTATION_PLAN.md's own G2-G9 stage table (line 907) also describes
+  "premise cycles: Kahn sort, minimum edge cut..." against
+  `relations.analyze`, but the actual mechanism (`topo_sort`,
+  `cut_cycle_edges`, the untangle-then-degrade sequence) lives entirely in
+  `claims.extract` (`arbiter-kernel/src/stages/claims_extract.rs`) — G2's
+  own scope note already documents this in full, and D32 is the deviation
+  that first recorded it. `g4_premise_cycles.rs` builds both fixtures
+  against `ClaimsExtract`'s real `Stage::run`, not against
+  `relations_analyze.rs` (which has no cycle-handling code to call).
+  Separately noticed while locating this: `EventType::PremiseCycleDetected`
+  (`arbiter-kernel/src/event.rs`) is declared but never emitted anywhere in
+  this workspace — `claims_extract.rs`'s cycle path only ever emits
+  `ClaimUngrounded` for whatever remains ungrounded after the untangle
+  sequence runs, never a distinct event when a cycle is first detected.
+  Not fixed here (emitting it correctly is `claims.extract`'s own scope,
+  already closed, and inventing an emission site now — with no consumer
+  anywhere that reads it — would be exactly the unrequested scope creep
+  this project's discipline avoids); flagged here since a future task
+  wiring the Integrity event family end-to-end will need to know this one
+  is currently a dead enum variant.
+- **`judge_failure`'s "retry" wording has no literal counterpart in
+  `judge.evaluate`.** ARCHITECTURE §18's own proves-line reads "invalid
+  judge JSON → retry → judge term degrades," but `JudgeEvaluate::run`
+  makes exactly one call per judge with no per-judge retry loop anywhere —
+  an unparseable response is simply skipped (this file's own
+  `an_unparseable_judge_response_degrades_without_scoring_anyone` proves
+  it). The fixture built instead proves the part that is real: a model
+  still gets scored from its remaining valid judges when one judge's
+  response fails to parse, rather than the whole evaluation failing.
+- **`decision_override`'s "provenance carries UserOverride" is unreachable
+  from this crate for two independent reasons, both already logged.**
+  `Provenance::UserOverride` is a *generated Build Studio spec's* own
+  pointer type (D45, and this entry's own `cites_defeated_claim` note
+  above) — no `Provenance` type exists anywhere to carry that variant.
+  Separately, `arbiter accept`'s own validation ("an unexplained override
+  is rejected," INTERFACES §17) lives in `arbiter-cli::accept_command`,
+  unreachable per the dependency rule. The fixture instead proves what
+  *is* real and in this crate's reach: `DecisionAcceptance`/
+  `DecisionOverride` (`arbiter-core::acceptance`, D45's own scope) carry
+  the full override audit trail — id, path, from, to, reason — intact
+  through a real serialize/deserialize round trip, the actual persistence
+  path `accept` uses.
+- **`arbiter-fixtures` gained a `rusqlite` dev-dependency** (workspace
+  version, matching every other crate that uses it) for
+  `interrupted_commit`/`projection_rebuild`, which need to drive
+  `arbiter-store`'s real `SqliteRunStore`/`rebuild_operational_projections`
+  against a throwaway on-disk or in-memory database. `arbiter-store` was
+  already a normal dependency of this crate; only the direct `rusqlite`
+  import needed adding, to construct `Connection`s and raw query rows the
+  same way `arbiter-store`'s own test modules already do. Verified this
+  does not violate the dependency rule: `cargo test -p
+  arbiter-workspace-checks --test dependency_rule` (all five rules,
+  `nothing_depends_on_cli` included) still passes — `rusqlite` is an
+  external crate, outside the internal `arbiter-*` graph the rule checks.
+
+Verified: `cargo test -p arbiter-fixtures` — 32 fixtures, all passing, no
+fix-up cycles needed on 29 of them (every API signature looked up against
+the real source before writing the call). Full workspace: `cargo test
+--workspace` green (all pre-existing suites unchanged), `cargo fmt --all --
+--check` clean, `cargo clippy --workspace --all-targets --all-features --
+-D warnings` clean.

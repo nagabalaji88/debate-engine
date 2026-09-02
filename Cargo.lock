@@ -147,6 +147,7 @@ dependencies = [
  "arbiter-kernel",
  "arbiter-providers",
  "arbiter-store",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",

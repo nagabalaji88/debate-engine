@@ -16,6 +16,7 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+rusqlite = { workspace = true }
 
 [lints.rust]
 missing_debug_implementations = "warn"

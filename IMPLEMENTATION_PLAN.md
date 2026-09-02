@@ -1490,6 +1490,30 @@ is a plan bug.** All run against the scripted mock with **zero LLM tokens**.
 Integration (nightly, real providers, budgeted — **not** in the commit path):
 `paraphrase_corpus`, `recommendation_corpus`, `judge_identity_leakage`.
 
+**F1/F2 scope note (F1 done; F2 32/36):** F1
+(`arbiter-fixtures/src/harness.rs`) is implemented and tested — shared
+scaffolding (`ProviderRegistry`/`BudgetLedger`/`ResponseCache`/a
+`RecordingSink` `EventSink`/a `StageContext` constructor/a minimal
+`PromptTemplate` builder) built directly against `arbiter-kernel`'s public
+API, since `arbiter-fixtures` cannot depend on `arbiter-cli` and so cannot
+reuse `orchestrator::run_pipeline` (X2's own dependency-rule test). It is a
+toolkit a fixture assembles the handful of stages it needs from, not a
+second copy of the full pipeline — most of the 36 fixtures need only
+`arbiter-core`'s pure functions or one or two kernel stages, not all
+thirteen. F2 has written and passing tests for 32 of the 36 fixtures; the
+remaining 4 (`serve_localhost_only`, `serve_rejects_foreign_origin`:
+U1; `panel_without_keys`: U2; `cites_defeated_claim`: Build Studio,
+ARCHITECTURE §13, out of 1.0 scope) are genuinely blocked on tasks/systems
+that do not exist yet, not skipped. See D47 for the full accounting,
+including three real spec/reality gaps the fixtures themselves surfaced
+while being built: `EventType::PremiseCycleDetected` is declared but never
+emitted anywhere in this workspace; `judge_failure`'s "retry" wording has
+no literal counterpart in `judge.evaluate` (one call per judge, no retry
+loop); and `decision_override`'s "provenance carries UserOverride" is
+unreachable from this crate for two independent, already-logged reasons
+(no `Provenance` type exists at all, D45; and `accept`'s own validation
+lives in `arbiter-cli`, unreachable per the dependency rule).
+
 ---
 
 ## 9. Milestones and gates
@@ -1572,8 +1596,8 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | L2 | ✅ | (this commit) | D43 — see PLAN_DEVIATIONS.md; new artifact-read path, `claim_standings`, `defeat_chain_for`, `history.db` writes added to `run_command` |
 | L3 | ✅ | (this commit) | D44 — see PLAN_DEVIATIONS.md; `cache_entries` was never written to before this task, fixed for `run` too; `--repolicy`/`--repack` deferred |
 | L4 | ✅ (partial) | (this commit) | D45 — see PLAN_DEVIATIONS.md; `accept`/`doctor`/`reindex`/`export` built for real; fixed a real RunHandle event-id collision and a `doctor` false positive. `keys`/`providers` since upgraded to real P3-backed implementations (D46); `keys test`/`providers test` still need P4 |
-| F1 | ☐ | | |
-| F2 | ☐ | | |
+| F1 | ✅ | (this commit) | D47 — see PLAN_DEVIATIONS.md; toolkit, not a wrapper around `arbiter-cli::orchestrator` (dependency rule) |
+| F2 | ✅ (32/36) | (this commit) | D47 — see PLAN_DEVIATIONS.md; 4 fixtures genuinely blocked (`serve_localhost_only`, `serve_rejects_foreign_origin`: U1; `panel_without_keys`: U2; `cites_defeated_claim`: Build Studio, out of scope) |
 | U1 | ☐ | | |
 | U2 | ☐ | | |
 | U3 | ☐ | | |
