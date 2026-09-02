@@ -733,3 +733,58 @@ The liveness check `is_run_lease_live`/`gc_run` use is not a new predicate:
 private to `lease.rs`) so `blob.rs` asks the *exact* question §8.2 requires —
 "the same liveness predicate `reopen` uses" — rather than a second,
 independently-written one that could drift from it.
+
+## D28 — G1's prompt pack manifest schema, template front-matter, and `Hash` rename
+
+INTERFACES §23 gives `PromptPack { name, version, hash }`, `PromptTemplate {
+stage, body, variables }`, and `pub fn prompt_hash(t, rendered) -> Hash`, but
+defines `manifest.toml`'s own fields, how a template "declares its variable
+schema," and `VariableSchema`/`Hash`/`PackHash`'s concrete shapes nowhere in
+either spec file — the same category of gap as D19/D24/D25.
+
+Resolved in `arbiter-kernel/src/prompt.rs`:
+
+- `manifest.toml` carries only pack identity (`name`, `version`). The stage
+  name for each template comes from its filename
+  (`positions.generate.md` → stage `positions.generate`) rather than being
+  listed a second time in the manifest — one source of truth for which
+  templates exist, so the manifest and the directory can never disagree about
+  the file list.
+- Each `<stage>.md` file declares its own variable schema in a leading TOML
+  front-matter block (`---` ... `---`), since INTERFACES §23 places `variables`
+  on `PromptTemplate` (the per-file type), not on the pack-level manifest.
+  Missing front-matter is a load error, not a silently empty schema — an
+  omitted declaration is exactly the "silently malformed prompt" INTERFACES
+  §23 says schema validation exists to prevent.
+- `render()` requires an **exact match** between declared variables and both
+  the supplied variable map and the placeholders actually present in the
+  body — not a superset in either direction. A stray `{{...}}` the schema
+  doesn't declare, a declared variable nothing supplies, or a supplied
+  variable nothing declares are all treated as the schema and the template
+  having drifted apart, per the conservative-reading default (§0.4).
+- `prompt_hash` concatenates `rendered ‖ canonical_schema` with a single NUL
+  byte separator (`serde_json`'s canonical array form of the sorted
+  `BTreeSet<String>` schema) so no rendered-text/schema split is ambiguous;
+  INTERFACES §23's `‖` notation doesn't specify one.
+- INTERFACES §23 names the per-call hash type `Hash` — kept as `PromptHash`
+  here instead, because `Hash` is also `std::hash::Hash`, already brought into
+  scope unqualified by `#[derive(... Hash ...)]` elsewhere in this workspace
+  (e.g. `arbiter-kernel::ids`'s `id_type!` macro); a type named `Hash` would
+  collide with that the moment both are imported into the same module.
+  `PackHash` (the whole-pack identity) needed no such rename.
+- `verify_pack_hash` implements "replay refuses a differing `pack_hash`":
+  detects a mismatch and returns an error, the same detect-never-repair
+  posture `arbiter-store`'s hash-chain verification (S3) already takes. Minting
+  a new run id under `--repack` is CLI-scoped (L3), out of G1's own reach.
+
+Adds the `toml` crate (workspace dependency, `arbiter-kernel` only) to parse
+`manifest.toml` and each template's front-matter — no TOML parser existed
+anywhere in the workspace yet, and hand-rolling one risks a subtly wrong
+implementation for a format ARCHITECTURE §15 names explicitly.
+
+G1's own scope is the pack-loading/rendering/hashing machinery only, proven
+against pack fixtures built in its own tests — not the actual prompt text for
+any of the 15 pipeline stages. Authoring each stage's real `.md` template is
+each `G2`–`G9` task's own job as it implements that stage, matching the task
+table's "one task per stage group" division; a `prompts/` directory with real
+production content is not part of this commit.

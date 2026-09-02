@@ -889,6 +889,18 @@ cargo test -p arbiter-kernel stages::tests::round_one_positions_never_see_each_o
 cargo test -p arbiter-kernel stages::tests::judge_sees_no_model_identity
 ```
 
+**Scope note (G1 done; G2–G9 pending):** G1 (`arbiter-kernel/src/prompt.rs`) is
+implemented and tested — `PromptPack::load` (manifest + per-stage `.md` files,
+each declaring its variable schema in TOML front-matter), `PromptTemplate::render`
+(exact-match variable validation), `PromptTemplate::prompt_hash` (`blake3(rendered
+‖ schema)`), and `PromptPack::verify_pack_hash` (replay's pack-mismatch refusal).
+See D28 for the manifest/front-matter schema this task had to invent and the
+`Hash` → `PromptHash` rename. G1's own scope is the loading/rendering/hashing
+machinery, proven against fixtures built in its own test module — **not** the
+actual prompt text for any of the 15 pipeline stages. Each `G2`–`G9` task writes
+its own stage's real `.md` template(s) as it implements that stage; no
+`prompts/` directory with production content exists yet.
+
 ---
 
 ## 6. Tasks — CLI
@@ -1235,7 +1247,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | P2 | ✅ | (this commit) | D26 — see PLAN_DEVIATIONS.md |
 | P3 | ☐ | deferred as own pass — security-sensitive (OS keychain, redaction) | |
 | P4 | ☐ | deferred as own pass — needs real HTTP adapters against live provider APIs, no CI-testable acceptance criterion | |
-| G1 | ☐ | | |
+| G1 | ✅ | (this commit) | D28 — see PLAN_DEVIATIONS.md; pack machinery only, no production prompt content — see plan text above |
 | G2 | ☐ | | |
 | G3 | ☐ | | |
 | G4 | ☐ | | |
