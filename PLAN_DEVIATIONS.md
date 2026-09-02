@@ -2258,3 +2258,93 @@ the real source before writing the call). Full workspace: `cargo test
 --workspace` green (all pre-existing suites unchanged), `cargo fmt --all --
 --check` clean, `cargo clippy --workspace --all-targets --all-features --
 -D warnings` clean.
+
+## D48 — U1: `arbiter serve` — an endpoint-count mismatch, a `Sec-Fetch-Site` reading, an invented SSE envelope, and the HTTP crate choice
+
+New `arbiter-cli/src/serve/` (ARCHITECTURE §17.1, INTERFACES §24): the
+loopback-only HTTP server, its five-step admission gate, and the eight
+endpoints IMPLEMENTATION_PLAN.md's own U1 table names.
+
+- **The plan's own U1 table lists eight endpoints; ARCHITECTURE §17.1's own
+  prose says "one embedded HTML page and five endpoints."** The plan's
+  table is the more detailed, concrete, and directly testable of the two
+  (it names every method/path/response this task's own acceptance
+  commands exercise), so it is what got built — `GET /`, `POST /api/runs`,
+  `GET /api/runs`, `GET /api/runs/:id`, `GET /api/runs/:id/events`, `POST
+  /api/runs/:id/accept`, `GET /api/providers`, `POST
+  /api/providers/:p/test`. Read as the plan's own elaboration of an
+  imprecise summary count in the higher-ranked spec document, not as a
+  conflict the plan loses under §0.1's authority order — nothing in
+  ARCHITECTURE names a *different* five endpoints this task should have
+  built instead, only a smaller number than the plan's own detailed table.
+- **`Sec-Fetch-Site` admission does not reject the literal ARCHITECTURE
+  §17.1 wording ("absent, or same-origin").** A real browser's Fetch
+  Metadata header carries `none` on any direct, user-initiated navigation
+  — exactly what happens the instant `--open`'s own printed URL is
+  followed, or a bookmark is used. Rejecting anything but "absent or
+  same-origin" literally would 403 that very first page load. Implemented
+  instead: refuse only `cross-site` (the drive-by-form-post case this
+  requirement exists to stop), matching the documented Fetch Metadata
+  mitigation this table is otherwise quoting almost verbatim
+  (`admission::sec_fetch_site_is_acceptable`). No acceptance test in the
+  plan's own 9-command list constrains this value directly, so this is the
+  conservative-in-the-sense-of-still-functioning reading, not a guess with
+  no fallback.
+- **The SSE envelope has no existing `--stream` output to match "byte-for-byte"
+  against.** ARCHITECTURE §17.1 says the stream is "byte-identical to
+  `--stream`," but `--stream` itself does not emit anything yet — L1's own
+  scope note (D42) left it printing a one-line notice instead, since the
+  event log is durably recorded and readable from the store either way.
+  `GET /api/runs/:id/events` instead emits each event as the same JSON
+  shape `arbiter show --transcript --json` already produces
+  (`serde_json::to_value(&Event)`) — a real, already-existing, already-
+  serde'd shape, not an invented one — with the event's own `sequence` as
+  the SSE `id:` field, which is what makes `Last-Event-ID` resume correct
+  regardless of what the eventual `--stream` implementation ends up
+  choosing to look like.
+- **The HTTP server crate is `axum` (0.8), a decision neither spec file
+  pins.** ARCHITECTURE §17.1's "no build step, no npm, no bundler, no
+  framework, no CDN" is about the embedded page's own JS/CSS (U2-U7's own
+  scope), not the Rust process serving it — nothing rules out a normal Rust
+  web crate for the backend, and hand-rolling HTTP/1.1 framing, routing and
+  SSE chunked-encoding from raw `tokio::net::TcpListener` would be
+  exactly the kind of unrequested, error-prone reinvention this project's
+  own discipline avoids. `axum` was picked over the alternatives already
+  in this dependency graph's orbit (`hyper` directly, `tiny_http`) for the
+  same reason `reqwest` was already chosen for the kernel's own provider
+  calls: it is the standard, widely-audited choice for exactly this job,
+  already pulls in nothing this workspace didn't already trust
+  transitively (`hyper`, `tower`), and its own SSE response type
+  (`axum::response::sse::Sse`) is what makes the resumable stream
+  genuinely simple rather than hand-rolled chunked framing.
+- **Three small, justified touches outside `arbiter-cli/src/serve/` itself:**
+  `arbiter-store::catalog::RunSummary` gained an `orphaned_cost: f64`
+  field (and `list_runs`'s own `SELECT` gained the column) because U5's
+  own plan text explicitly requires showing it "when non-zero" and no
+  existing reader exposed it — the column already existed in the schema,
+  only the read path was missing it. `accept.rs`'s private
+  `AcceptanceArtifact` became `pub(crate)` so `POST /api/runs/:id/accept`
+  persists through the *exact* same `Artifact` impl `arbiter accept`
+  uses, rather than a second, drift-prone copy of the same one-purpose
+  wrapper. `maintenance.rs`'s `known_providers`/`credential_sources`
+  became `pub(crate)` for the same reason, for `GET /api/providers`. All
+  three are minimal visibility/field additions to already-shipped,
+  already-tested code, not behavioral changes to it.
+- **The admission token is minted with `getrandom` directly, not the `rand`
+  crate.** One 16-byte OS-random fill, once per process — `rand`'s own
+  generator/distribution machinery has no caller here, so pulling in the
+  smaller, purpose-built crate (already a common transitive dependency in
+  this exact ecosystem) matches the precedent `zeroize` alone (not a
+  larger crypto crate) already set for `SecretString`.
+
+Verified: `cargo test -p arbiter-cli serve::` — 9/9 tests passing,
+including all 9 IMPLEMENTATION_PLAN.md acceptance command names plus
+`token_absent_from_store_and_log`. A manual smoke test against a live
+`cargo run -- serve`: `GET /`, `GET /api/providers`, `POST /api/runs`
+(a real synthetic run to completion), `GET /api/runs/:id` (matching the
+CLI's own `explain --json` byte-for-byte), `GET /api/runs` (history),
+admission rejection on a wrong `Host`/missing token, and the absence of
+any `Access-Control-*` response header — all confirmed by hand against
+the running process, not only the automated suite. Full workspace: `cargo
+test --workspace` green, `cargo fmt --all -- --check` clean, `cargo
+clippy --workspace --all-targets --all-features -- -D warnings` clean.

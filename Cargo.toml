@@ -30,8 +30,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # std has no calendar formatting, and every store row genuinely needs a real one.
 time = { version = "0.3", features = ["formatting"] }
 
-# kernel: async runtime + HTTPS + SSE parsing for provider streaming
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs"] }
+# kernel: async runtime + HTTPS + SSE parsing for provider streaming. "net" is
+# `arbiter serve`'s own addition (U1) -- the loopback-only TCP listener.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "net"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 eventsource-stream = "0.2"
 # kernel: manifest.toml for prompt packs (ARCHITECTURE §15, INTERFACES §23)
@@ -64,6 +65,13 @@ keyring = { version = "4", default-features = false, features = [
 # cli
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+
+# cli: arbiter serve (U1, ARCHITECTURE §17.1) -- the loopback-only HTTP server
+# and its SSE stream. `getrandom` alone (not the full `rand` crate) mints the
+# per-process 128-bit admission token: one OS-random fill, nothing else here
+# needs a general-purpose RNG.
+axum = { version = "0.8", default-features = false, features = ["json", "query", "tokio", "http1"] }
+getrandom = "0.2"
 
 # plugin host: wasmtime, added when the 1.5 WASM-host task starts (out of
 # this plan's scope, ARCHITECTURE.md §19 / IMPLEMENTATION_PLAN.md §9) —

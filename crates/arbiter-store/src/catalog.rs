@@ -108,6 +108,12 @@ pub struct RunSummary {
     pub confidence: Option<f64>,
     pub margin: Option<f64>,
     pub cost: f64,
+    /// Money already spent on calls this run's own crash-recovery path
+    /// left `Orphaned` — never reconciled back to `committed` or refunded
+    /// to `reserved` (ARCHITECTURE §8.4). `arbiter history`/screen 4 (U5)
+    /// show it when non-zero precisely because it's money the catalogue
+    /// alone can't say whether was ever actually billed.
+    pub orphaned_cost: f64,
     pub model_count: Option<i64>,
     pub depth: Option<String>,
     pub policy_version: String,
@@ -132,7 +138,7 @@ pub fn list_runs(
     filter: &HistoryFilter,
 ) -> Result<Vec<RunSummary>, CatalogError> {
     let mut sql = "SELECT run_id, status, question, outcome, confidence, margin, cost, \
-                    model_count, depth, policy_version, started_at, completed_at \
+                    orphaned_cost, model_count, depth, policy_version, started_at, completed_at \
                     FROM run_catalog WHERE 1=1"
         .to_string();
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -162,11 +168,12 @@ pub fn list_runs(
                 confidence: r.get(4)?,
                 margin: r.get(5)?,
                 cost: r.get(6)?,
-                model_count: r.get(7)?,
-                depth: r.get(8)?,
-                policy_version: r.get(9)?,
-                started_at: r.get(10)?,
-                completed_at: r.get(11)?,
+                orphaned_cost: r.get(7)?,
+                model_count: r.get(8)?,
+                depth: r.get(9)?,
+                policy_version: r.get(10)?,
+                started_at: r.get(11)?,
+                completed_at: r.get(12)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

@@ -7,6 +7,7 @@ mod orchestrator;
 mod render;
 mod resume_replay;
 mod run_handle;
+mod serve;
 mod synthetic;
 
 use arbiter_core::{ModelId, Policy, ProviderId, RunId};
@@ -160,6 +161,22 @@ enum Command {
     Providers {
         #[command(subcommand)]
         action: ProvidersAction,
+    },
+    /// The minimal loopback UI: one embedded page, bound to 127.0.0.1 only
+    /// (ARCHITECTURE §17.1).
+    Serve {
+        /// Refused if given anything other than `127.0.0.1` — binding any
+        /// other address is a hard error, never a warning.
+        #[arg(long)]
+        bind: Option<String>,
+        /// `0` (the default) asks the OS for any free loopback port.
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+        #[arg(long, default_value = ".arbiter/runs")]
+        store: PathBuf,
+        /// Best-effort: opens the printed URL in the default browser.
+        #[arg(long)]
+        open: bool,
     },
     /// List past runs from the history catalogue.
     History {
@@ -354,6 +371,12 @@ async fn main() -> anyhow::Result<()> {
             ProvidersAction::List => maintenance::providers_list_command(),
             ProvidersAction::Test { .. } => maintenance::providers_test_unimplemented(),
         },
+        Command::Serve {
+            bind,
+            port,
+            store,
+            open,
+        } => serve::serve_command(bind, port, store, open).await,
         Command::History {
             outcome,
             since,
@@ -849,8 +872,8 @@ fn history_command(
                 serde_json::json!({
                     "run_id": r.run_id, "status": r.status, "question": r.question,
                     "outcome": r.outcome, "confidence": r.confidence, "margin": r.margin,
-                    "cost": r.cost, "model_count": r.model_count, "depth": r.depth,
-                    "policy_version": r.policy_version, "started_at": r.started_at,
+                    "cost": r.cost, "orphaned_cost": r.orphaned_cost, "model_count": r.model_count,
+                    "depth": r.depth, "policy_version": r.policy_version, "started_at": r.started_at,
                     "completed_at": r.completed_at,
                 })
             })

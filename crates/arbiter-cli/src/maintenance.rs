@@ -324,11 +324,14 @@ fn render_markdown(record: &arbiter_core::DecisionRecord) -> String {
 /// can ever select, needs no key) and `anthropic` (ARCHITECTURE §11.1's own
 /// worked example -- its credential *state* is real and reportable even
 /// though no adapter can spend it yet, P4, PLAN_DEVIATIONS.md D46).
-fn known_providers() -> Vec<ProviderId> {
+/// `pub(crate)`: `serve`'s own `GET /api/providers` (U1) reports the same
+/// roster this command does, so the CLI and the loopback UI never name a
+/// different set of providers.
+pub(crate) fn known_providers() -> Vec<ProviderId> {
     vec![ProviderId::new("mock"), ProviderId::new("anthropic")]
 }
 
-fn credential_sources() -> (EnvCredentialSource, KeychainCredentialSource) {
+pub(crate) fn credential_sources() -> (EnvCredentialSource, KeychainCredentialSource) {
     (EnvCredentialSource, KeychainCredentialSource)
 }
 

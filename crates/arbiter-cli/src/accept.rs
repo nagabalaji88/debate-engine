@@ -14,8 +14,12 @@ use std::path::PathBuf;
 
 use crate::run_handle::RunHandle;
 
+/// `pub(crate)`, not private: `serve`'s own `POST /api/runs/:id/accept`
+/// (U1) persists an acceptance record through the exact same `Artifact`
+/// impl this command uses, so the CLI and the server never drift on what
+/// `decision_acceptance.v1` looks like on disk.
 #[derive(Debug)]
-struct AcceptanceArtifact(DecisionAcceptance);
+pub(crate) struct AcceptanceArtifact(pub(crate) DecisionAcceptance);
 
 impl Artifact for AcceptanceArtifact {
     fn artifact_type(&self) -> &'static str {

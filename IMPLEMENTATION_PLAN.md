@@ -1598,7 +1598,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | L4 | ✅ (partial) | (this commit) | D45 — see PLAN_DEVIATIONS.md; `accept`/`doctor`/`reindex`/`export` built for real; fixed a real RunHandle event-id collision and a `doctor` false positive. `keys`/`providers` since upgraded to real P3-backed implementations (D46); `keys test`/`providers test` still need P4 |
 | F1 | ✅ | (this commit) | D47 — see PLAN_DEVIATIONS.md; toolkit, not a wrapper around `arbiter-cli::orchestrator` (dependency rule) |
 | F2 | ✅ (32/36) | (this commit) | D47 — see PLAN_DEVIATIONS.md; 4 fixtures genuinely blocked (`serve_localhost_only`, `serve_rejects_foreign_origin`: U1; `panel_without_keys`: U2; `cites_defeated_claim`: Build Studio, out of scope) |
-| U1 | ☐ | | |
+| U1 | ✅ | (this commit) | D48 — see PLAN_DEVIATIONS.md; 8-endpoint table (not ARCHITECTURE's summary "5"), `Sec-Fetch-Site` Fetch Metadata reading, invented SSE envelope (no `--stream` to match), `axum` as the HTTP crate |
 | U2 | ☐ | | |
 | U3 | ☐ | | |
 | U4 | ☐ | | |

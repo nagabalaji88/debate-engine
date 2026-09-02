@@ -24,6 +24,12 @@ rusqlite = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+axum = { workspace = true }
+getrandom = { workspace = true }
+futures-util = { workspace = true }
+
+[dev-dependencies]
+reqwest = { workspace = true }
 
 [lints.rust]
 missing_debug_implementations = "warn"
