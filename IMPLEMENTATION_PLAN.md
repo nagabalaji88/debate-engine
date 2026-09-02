@@ -501,6 +501,10 @@ not only the ones that flip the winner.
 
 C8: `DecisionRecord` carrying `policy_version`, and the `explain --json` payload of
 INTERFACES §22 — **including `dispersion`**, whose absence was a v2.9 finding.
+Omits `model_agreement`, `dissent`, `assumptions`, `acceptance` and `completeness`
+(D18) — none has a formula or fully-specified type this crate has been given; they
+land in `G9 decision.synthesize`, which is why the task graph has `G9` depend on
+`C8` rather than the reverse.
 
 **Acceptance**
 ```bash
@@ -1106,7 +1110,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | C5 | ✅ | (this commit) | D12, D13 — see PLAN_DEVIATIONS.md |
 | C6 | ✅ | (this commit) | D14, D15 — see PLAN_DEVIATIONS.md |
 | C7 | ✅ | (this commit) | D16, D17 — see PLAN_DEVIATIONS.md |
-| C8 | ☐ | | |
+| C8 | ✅ | (this commit) | D18 — see PLAN_DEVIATIONS.md |
 | K0 | ☐ | | |
 | S1 | ☐ | | |
 | S2 | ☐ | | |

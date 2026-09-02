@@ -364,3 +364,38 @@ lean* — standing ≥ 0.5 is tested `IfFalse` (pinned to 0.0), standing < 0.5 i
 `IfTrue` (pinned to 1.0). If a future spec revision wants both directions probed
 per claim, `counterfactual_flips` is the one function to change — it would return two
 entries per candidate instead of one.
+
+## D18 — `DecisionRecord` (C8) omits fields this crate has no rule to compute
+
+ARCHITECTURE §6.9's full `DecisionRecord` JSON also includes `model_agreement`,
+`dissent`, `assumptions`, `acceptance` and `completeness`. None of these has a
+formula or a fully-specified type this pure decision core has been given:
+
+- `model_agreement: {aligned, total}` needs the raw per-model vote tally — a
+  reporting-only field explicitly "never an input" (§6.9), so it is produced by
+  whatever stage tallies model positions, not derived from claim/option state.
+- `dissent` needs each entry's `risk_awareness`, a per-claim judge assessment
+  joined against the dissenting claim — no rule anywhere ties a judge's rubric
+  score to a specific claim; `Scorecard` scores a whole debate submission, not
+  individual claims.
+- `assumptions` needs a `decision_impact: "high"|"medium"|"low"` classification —
+  no threshold or formula for this exists in either spec file.
+- `completeness` needs `Completeness::Truncated{reason: StopReason, missing_stages:
+  Vec<StageName>}` — already deferred at D12; C5/C6 took a plain `truncated: bool`
+  instead, and C8 does the same rather than inventing `StopReason`/`StageName` now.
+- `acceptance` is `null` until `arbiter accept` runs (§6.9's own comment) — a later
+  CLI command (L4), not a field this crate ever populates.
+
+Inventing shapes for any of these to make C8 "complete" would be exactly the kind
+of guess §0.2 rule 1 forbids — none of them can be tested against a spec-given
+worked example, unlike every other field `DecisionRecord` carries.
+
+**Resolved:** `DecisionRecord` ships the fields the spec gives a concrete formula
+or type for: `schema_version`, `run_id`, `policy_version`, `question`, `outcome`
+(C5), `recommendation` (derived from `options`), `confidence` (C6, via
+`explain_confidence`), `options` (C4), `claims` counts and `unresolved_claims`
+(C3's classifications, counted), `change_triggers` (C7, triggering flips only),
+plus `engine_version`/`inputs_hash` as opaque caller-supplied strings. The five
+omitted fields wait for `G9 decision.synthesize` — the kernel stage that actually
+has model tallies, judge-to-claim joins, and `Completeness` in hand — which is why
+the task graph has `G9` depend on `C8` rather than the reverse.

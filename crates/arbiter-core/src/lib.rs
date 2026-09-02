@@ -3,8 +3,10 @@
 //! Nothing in this crate performs IO, awaits, or calls a model. The kernel feeds it
 //! recorded artifacts; it returns a decision that is a pure function of them.
 //!
-//! Work in progress: `DecisionRecord` and the `explain --json` payload land next, on
-//! top of these types (IMPLEMENTATION_PLAN.md task C8).
+//! `arbiter-core`'s v2.9 scope (IMPLEMENTATION_PLAN.md tasks X1–C8) is complete:
+//! everything from claim ingestion through the `explain --json` payload is a pure
+//! function of recorded artifacts. `arbiter-store`, `arbiter-kernel` and the rest
+//! of the workspace consume this crate; it consumes nothing internal.
 #![forbid(unsafe_code)]
 
 pub mod claim;
@@ -24,6 +26,10 @@ pub use decision::attachment::{AttachSource, Attachment, AttachmentMatrix, Polar
 pub use decision::confidence::{ConfidenceBreakdown, PenaltyInputs};
 pub use decision::fixpoint::FixpointResult;
 pub use decision::outcome::{Outcome, OutcomeInputs};
+pub use decision::record::{
+    ChangeTriggerEntry, ClaimCounts, ConfidenceExplain, DecisionRecord, DimensionEntry,
+    PenaltyEntry, Recommendation, SCHEMA_VERSION, explain_confidence,
+};
 pub use decision::triggers::{CounterfactualFlip, FlipDirection};
 pub use ids::{
     ClaimId, GroupId, ModelId, OptionId, OptionVersion, PolicyVersion, PositionId, ProviderId,
