@@ -15,6 +15,12 @@ pub const DEFAULT_BUDGET_HEADROOM: f64 = 0.05;
 /// an earlier "per run" misreading).
 pub const DEFAULT_REPAIR_BUDGET_FRACTION: f64 = 0.15;
 
+/// `controller.decide`'s own three constants (§5.5, IMPLEMENTATION_PLAN.md
+/// §0.6 D5: explicitly "kernel controller", not `arbiter-core`'s to own).
+pub const DEFAULT_CONVERGED_MARGIN_FACTOR: f64 = 1.5;
+pub const DEFAULT_MIN_NEW_CLAIMS: usize = 2;
+pub const DEFAULT_MIN_STANDING_DELTA: f64 = 0.05;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Depth {
     Standard,
@@ -98,6 +104,13 @@ mod tests {
             "expected {expected}, got {}",
             actual.0
         );
+    }
+
+    #[test]
+    fn controller_constants_match_the_spec() {
+        assert_eq!(DEFAULT_CONVERGED_MARGIN_FACTOR, 1.5);
+        assert_eq!(DEFAULT_MIN_NEW_CLAIMS, 2);
+        assert_eq!(DEFAULT_MIN_STANDING_DELTA, 0.05);
     }
 
     #[test]

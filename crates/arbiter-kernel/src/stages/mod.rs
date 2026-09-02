@@ -7,6 +7,7 @@ pub mod challenge_plan;
 pub mod challenge_run;
 pub mod claims_extract;
 pub mod claims_normalize;
+pub mod controller_decide;
 pub mod disputes_rank;
 pub mod options_cluster;
 pub mod positions_generate;

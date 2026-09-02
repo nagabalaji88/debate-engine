@@ -1055,6 +1055,26 @@ text is never rewritten on `Modify`, and why `standing`/the propagated
 matrix are deliberately dropped rather than carried stale into the next
 round.
 
+**G7** (`arbiter-core/src/decision/controller.rs` +
+`arbiter-kernel/src/stages/controller_decide.rs`) is implemented and tested.
+`controller.decide` re-resolves the argument graph over each round's
+post-rebuttal claims by calling the same `resolve_and_rank` function
+`disputes.rank` itself now exposes (extracted from it for exactly this
+reuse), evaluates `NoNewInformation` and `Converged` unconditionally every
+round, then picks a `StopReason` in hard-bounds-first precedence
+(`Cancelled → Deadline → RoundLimit → BudgetExhausted → Converged →
+NoNewInformation → Continue`) — which is what makes "`RoundLimit`, by
+construction" at standard depth literally true regardless of whether the
+computed predicates also hold. `converged_margin_factor`/`min_new_claims`/
+`min_standing_delta` land in `arbiter-kernel/src/bounds.rs`, per D5's
+explicit "kernel controller" ownership. See D39 for the round-subgraph
+reading (why `disputes.rank` is not re-invoked as a stage), the stop-
+precedence order, and a small already-shipped-G5 arithmetic duplication
+(`challenge_plan.rs`) fixed in passing by switching it to `bounds.rs`'s own
+`round_budget`/`challenge_budget` functions. **Building the actual round-loop
+executor is out of this task's scope** — no `StageGraph` runner exists
+anywhere in this codebase yet to loop within; that is L1–L4/CLI's job.
+
 ---
 
 ## 6. Tasks — CLI
@@ -1407,7 +1427,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | G4 | ✅ | (this commit) | D35 — see PLAN_DEVIATIONS.md; shared `similarity.rs`, T2 polarity sweep literal reading |
 | G5 | ✅ | (this commit) | D36, D37 — see PLAN_DEVIATIONS.md; Step 3 propagation runs in disputes.rank |
 | G6 | ✅ | (this commit) | D38 — see PLAN_DEVIATIONS.md; rebuttal.run's output reuses disputes.rank's own input shape |
-| G7 | ☐ | | |
+| G7 | ✅ | (this commit) | D39 — see PLAN_DEVIATIONS.md; round-loop executor itself out of scope, no StageGraph runner exists yet |
 | G8 | ☐ | | |
 | G9 | ☐ | | |
 | L1 | ☐ | | |

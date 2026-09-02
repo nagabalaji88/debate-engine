@@ -19,8 +19,154 @@ use crate::stage::{
 use crate::store::{Artifact, Cost};
 use arbiter_core::config::{AttachmentParams, DisputeWeights, GraphParams, Thresholds, Weights};
 use arbiter_core::decision::{attachment, dispute, evidence, fixpoint, standing, triggers};
-use arbiter_core::{AttachmentMatrix, ClaimId, ClaimStanding, ModelId, Scorecard};
+use arbiter_core::{
+    AttachmentMatrix, CanonicalClaim, ClaimId, ClaimStanding, ModelId, Relation, Scorecard,
+};
 use std::collections::BTreeMap;
+
+/// The tuning constants `resolve_and_rank` needs, bundled so both this
+/// stage's own `run()` and `controller.decide` (which must resolve the
+/// graph a second time each round, over the post-rebuttal claims — see
+/// PLAN_DEVIATIONS.md D39) can call it identically.
+pub(crate) struct ResolveParams<'a> {
+    pub weights: &'a Weights,
+    pub graph: &'a GraphParams,
+    pub thresholds: &'a Thresholds,
+    pub attachment_params: &'a AttachmentParams,
+    pub dispute_weights: &'a DisputeWeights,
+}
+
+/// Everything `resolve_and_rank` computes, event emission stripped out (the
+/// caller decides what to emit and when — `disputes.rank`'s own `run()`
+/// emits on every field below; `controller.decide` only emits what it
+/// itself needs, D39).
+pub(crate) struct Resolved {
+    pub standing: BTreeMap<ClaimId, f64>,
+    pub propagated_matrix: AttachmentMatrix,
+    pub ranked: Vec<DisputeRank>,
+    pub fixpoint_converged: bool,
+    pub fixpoint_max_delta: f64,
+    pub fixpoint_iterations: u32,
+    /// Every live claim's standing classification (C3) — `controller.decide`
+    /// needs this to isolate the `Unresolved` subset for its own "no
+    /// unresolved claim is a change trigger" predicate (D39).
+    pub classified: BTreeMap<ClaimId, arbiter_core::ClaimStanding>,
+    /// The counterfactual flip computed for every `Disputed`/`Unresolved`
+    /// candidate (same set `ranked` is built from) — `controller.decide`
+    /// reads `.is_trigger` off these rather than recomputing them.
+    pub flips: Vec<arbiter_core::CounterfactualFlip>,
+}
+
+/// The pure "resolve the argument graph and rank its disputes" computation
+/// — INTERFACES §21 / ARCHITECTURE §5.5, D36's own writeup covers every
+/// step here. No IO, no events: `claims`/`relations` are this round's
+/// (possibly post-rebuttal) state, `resolution_cost` is the one component
+/// D36 established `arbiter-core::decision::dispute` cannot compute itself
+/// (it needs a real `BudgetLedger`), so the caller passes it in already
+/// computed.
+pub(crate) fn resolve_and_rank(
+    claims: &[CanonicalClaim],
+    relations: &[Relation],
+    options: &ClusteredOptions,
+    resolution_cost: f64,
+    p: &ResolveParams<'_>,
+) -> Resolved {
+    let claim_ids: Vec<ClaimId> = claims.iter().map(|c| c.id.clone()).collect();
+
+    // No judge has run yet at this point in the pipeline (`judge.evaluate`
+    // is stage 13, after this one) -- `judge_factor` degrades gracefully to
+    // 1.0 for every claim with an empty score map (evidence.rs).
+    let scores: BTreeMap<ModelId, Scorecard> = BTreeMap::new();
+    let evidence_map = evidence::evidence_map(claims, &scores, p.weights);
+
+    let fx = fixpoint::solve(&claim_ids, &evidence_map, relations, p.graph);
+    let claim_standing = fx.standing;
+
+    // Step 3, deferred by `options.cluster` (D34) for exactly this reason:
+    // propagation needs `relations`, which now exist.
+    let propagated_matrix = attachment::propagate(
+        &options.direct_matrix,
+        relations,
+        p.attachment_params,
+        p.graph.qualify_gain,
+    );
+
+    let classified = standing::classify_all(claims, &claim_standing, relations, p.thresholds);
+    let candidates: Vec<ClaimId> = claims
+        .iter()
+        .filter(|c| {
+            matches!(
+                classified.get(&c.id),
+                Some(ClaimStanding::Disputed) | Some(ClaimStanding::Unresolved)
+            )
+        })
+        .map(|c| c.id.clone())
+        .collect();
+
+    let live_options: Vec<_> = options
+        .options
+        .iter()
+        .filter(|o| !o.retired)
+        .cloned()
+        .collect();
+
+    let flips = triggers::counterfactual_flips(
+        &claim_ids,
+        &evidence_map,
+        relations,
+        p.graph,
+        &candidates,
+        &live_options,
+        &propagated_matrix,
+    );
+    let leverage_by_claim: BTreeMap<ClaimId, f64> = flips
+        .iter()
+        .map(|f| (f.claim_id.clone(), f.leverage()))
+        .collect();
+
+    let mut ranked: Vec<DisputeRank> = candidates
+        .iter()
+        .map(|id| {
+            let e = evidence_map.get(id).copied().unwrap_or(0.0);
+            let contested_mass = dispute::contested_mass(id, &claim_standing, relations);
+            let decision_leverage = leverage_by_claim.get(id).copied().unwrap_or(0.0);
+            let gap = dispute::evidence_gap(e);
+            let priority = dispute::dispute_priority(
+                contested_mass,
+                decision_leverage,
+                gap,
+                resolution_cost,
+                p.dispute_weights,
+            );
+            DisputeRank {
+                claim_id: id.clone(),
+                priority,
+                contested_mass,
+                decision_leverage,
+                evidence_gap: gap,
+                resolution_cost,
+            }
+        })
+        .collect();
+
+    ranked.sort_by(|a, b| {
+        b.priority
+            .partial_cmp(&a.priority)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.claim_id.cmp(&b.claim_id))
+    });
+
+    Resolved {
+        standing: claim_standing,
+        propagated_matrix,
+        ranked,
+        fixpoint_converged: fx.converged,
+        fixpoint_max_delta: fx.max_delta,
+        fixpoint_iterations: fx.iterations,
+        classified,
+        flips,
+    }
+}
 
 /// Combined input, the same reasoning as `options.cluster`'s `ClusterInput`
 /// and `relations.analyze`'s `AnalyzeInput` (D34, D35): this stage is the
@@ -216,67 +362,6 @@ impl Stage for DisputesRank {
 
         let claims = &input.claims.0;
         let relations = &input.relations.0;
-        let claim_ids: Vec<ClaimId> = claims.iter().map(|c| c.id.clone()).collect();
-
-        // No judge has run yet at this point in the pipeline (`judge.evaluate`
-        // is stage 13, after this one) -- `judge_factor` degrades gracefully
-        // to 1.0 for every claim with an empty score map (evidence.rs).
-        let scores: BTreeMap<ModelId, Scorecard> = BTreeMap::new();
-        let evidence_map = evidence::evidence_map(claims, &scores, &self.weights);
-
-        let fx = fixpoint::solve(&claim_ids, &evidence_map, relations, &self.graph);
-        if !fx.converged {
-            ctx.events.emit(
-                EventType::FixpointNotConverged,
-                &stage_name,
-                serde_json::json!({"max_delta": fx.max_delta, "iterations": fx.iterations}),
-            );
-        }
-        let claim_standing = fx.standing;
-
-        // Step 3, deferred by `options.cluster` (D34) for exactly this
-        // reason: propagation needs `relations`, which now exist.
-        let propagated_matrix = attachment::propagate(
-            &input.options.direct_matrix,
-            relations,
-            &self.attachment_params,
-            self.graph.qualify_gain,
-        );
-
-        let classified =
-            standing::classify_all(claims, &claim_standing, relations, &self.thresholds);
-        let candidates: Vec<ClaimId> = claims
-            .iter()
-            .filter(|c| {
-                matches!(
-                    classified.get(&c.id),
-                    Some(ClaimStanding::Disputed) | Some(ClaimStanding::Unresolved)
-                )
-            })
-            .map(|c| c.id.clone())
-            .collect();
-
-        let live_options: Vec<_> = input
-            .options
-            .options
-            .iter()
-            .filter(|o| !o.retired)
-            .cloned()
-            .collect();
-
-        let flips = triggers::counterfactual_flips(
-            &claim_ids,
-            &evidence_map,
-            relations,
-            &self.graph,
-            &candidates,
-            &live_options,
-            &propagated_matrix,
-        );
-        let leverage_by_claim: BTreeMap<ClaimId, f64> = flips
-            .into_iter()
-            .map(|f| (f.claim_id.clone(), f.leverage()))
-            .collect();
 
         // "estimated tokens for the exchange ÷ remaining budget" (INTERFACES
         // §21) -- read as dollar cost ÷ dollar budget, the only pair of
@@ -294,37 +379,29 @@ impl Stage for DisputesRank {
             Some(_) => 1.0,
         };
 
-        let mut ranked: Vec<DisputeRank> = candidates
-            .iter()
-            .map(|id| {
-                let e = evidence_map.get(id).copied().unwrap_or(0.0);
-                let contested_mass = dispute::contested_mass(id, &claim_standing, relations);
-                let decision_leverage = leverage_by_claim.get(id).copied().unwrap_or(0.0);
-                let gap = dispute::evidence_gap(e);
-                let priority = dispute::dispute_priority(
-                    contested_mass,
-                    decision_leverage,
-                    gap,
-                    resolution_cost,
-                    &self.dispute_weights,
-                );
-                DisputeRank {
-                    claim_id: id.clone(),
-                    priority,
-                    contested_mass,
-                    decision_leverage,
-                    evidence_gap: gap,
-                    resolution_cost,
-                }
-            })
-            .collect();
+        let params = ResolveParams {
+            weights: &self.weights,
+            graph: &self.graph,
+            thresholds: &self.thresholds,
+            attachment_params: &self.attachment_params,
+            dispute_weights: &self.dispute_weights,
+        };
+        let resolved =
+            resolve_and_rank(claims, relations, &input.options, resolution_cost, &params);
+        let claim_standing = resolved.standing;
+        let propagated_matrix = resolved.propagated_matrix;
+        let ranked = resolved.ranked;
 
-        ranked.sort_by(|a, b| {
-            b.priority
-                .partial_cmp(&a.priority)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.claim_id.cmp(&b.claim_id))
-        });
+        if !resolved.fixpoint_converged {
+            ctx.events.emit(
+                EventType::FixpointNotConverged,
+                &stage_name,
+                serde_json::json!({
+                    "max_delta": resolved.fixpoint_max_delta,
+                    "iterations": resolved.fixpoint_iterations,
+                }),
+            );
+        }
 
         for r in &ranked {
             ctx.events.emit(

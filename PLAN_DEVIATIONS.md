@@ -1446,3 +1446,86 @@ mechanics — the least-specified G-task pair since G1. What was authored, in
   exist, at the same "one event per completed item" granularity D36's
   `RelationshipFound` fix established as this workspace's consistent
   reading.
+
+## D39 — `controller.decide`: re-resolving the graph, the stop-predicate precedence, and the executor gap
+
+ARCHITECTURE §5.5 gives both stop predicates as literal formulas and the
+three tuning constants they need (`converged_margin_factor` 1.5,
+`min_new_claims` 2, `min_standing_delta` 0.05) are already named in
+IMPLEMENTATION_PLAN.md §0.6 as "kernel controller" constants (D5) — the most
+concrete task since G5. What required a decision, in
+`arbiter-core/src/decision/controller.rs` and
+`arbiter-kernel/src/stages/controller_decide.rs`:
+
+- **The round subgraph, taken at its word.** INTERFACES §11 / this crate's
+  own `ControlFlow` doc comment (K3) describe the controlled loop as exactly
+  `challenge.plan → challenge.run → rebuttal.run → controller.decide` —
+  `disputes.rank` is not in that list, even though `challenge.plan`'s own
+  input type is `disputes.rank`'s output (`RankedDisputes`) and the claims
+  have changed since `rebuttal.run` ran. Resolved by **not** re-invoking
+  `disputes.rank` as a stage a second time, but by extracting its own pure
+  "resolve the graph and rank disputes" computation
+  (fixpoint → Step 3 propagation → standing classification → counterfactual
+  flips → `dispute_priority` ranking) into a shared function,
+  `disputes_rank::resolve_and_rank`, that both `DisputesRank::run()` (once,
+  before the loop) and `ControllerDecide::run()` (every iteration, on the
+  post-rebuttal claims) call identically. The subgraph's four *stages* stay
+  exactly as named; the *logic* `disputes.rank` owns is reused, not
+  reinvented, inside the fourth one. `disputes_rank.rs`'s own tests were
+  re-run unmodified after this extraction to confirm it changed nothing
+  about that stage's own behavior.
+- **No executor exists to build "the round loop" into.** INTERFACES §11's
+  "the executor re-instantiates the round subgraph" describes something that
+  actually drives repeated stage invocation — no `StageGraph` runner exists
+  anywhere in this codebase yet (every stage so far is exercised by
+  constructing and calling it directly in tests; wiring one together is
+  L1–L4/CLI's job). This task's scope is therefore the decision itself:
+  given one round's artifacts, produce a correct `ControlFlow` and a
+  `resolved` graph a future executor would feed into the next iteration —
+  not the loop that would act on it.
+- **Stop-predicate precedence.** Neither spec file states an evaluation
+  order across `StopReason`'s eight variants. Read as: the four *hard*
+  bounds first, in the order a real process would actually hit them
+  (`Cancelled` — the token was flipped externally — before `Deadline`
+  before `RoundLimit` before `BudgetExhausted`), then the two *computed*
+  predicates (`Converged`, `NoNewInformation`). This is what makes
+  §5.5's "at standard depth the controller exits on `RoundLimit`, by
+  construction" literally true: `RoundLimit` is checked (and wins) before
+  `Converged`/`NoNewInformation` are ever consulted for control flow, even
+  though both are still computed unconditionally every round and recorded
+  on the output (`converged`/`no_new_information` fields) — "evaluated for
+  the record... but they do not gate anything," exactly as stated.
+- **`has_live_dissent_against` reads the *propagated* matrix's `Opposes`
+  cells, not the raw relation graph a second time.** "no live attacker ≥
+  τ_dissent against the top option" could mean re-deriving attackers from
+  `Contradicts` relations against the option's supporting claims — but Step
+  3 (`attachment::propagate`) already performs exactly that translation
+  ("a claim contradicting a supporter of O counts against O, through the
+  relation graph", ARCHITECTURE §5.3): an `Opposes` cell on the propagated
+  matrix *is* a live attacker against that option once Step 3 has run.
+  Reusing it is not a shortcut, it is the same computation surfaced through
+  the API method Step 3 already exists to produce.
+- **`no_new_information` is generically a set-difference of claim ids
+  between rounds**, not hardcoded. Under this pipeline's current stage set —
+  `rebuttal.run` never introduces a brand-new `CanonicalClaim`, only
+  transitions/appends members to existing ones (D38) — `new_claim_count` is
+  always `0` in practice, which correctly satisfies the predicate's first
+  half rather than being a special case. If a later stage ever does
+  introduce genuinely new claims inside the round loop (ARCHITECTURE §5.3's
+  own allowance for "claims first stated in a rebuttal"), this function
+  needs no change.
+- **`converged_margin_factor` / `min_new_claims` / `min_standing_delta` live
+  in `arbiter-kernel/src/bounds.rs`** (`DEFAULT_CONVERGED_MARGIN_FACTOR`,
+  `DEFAULT_MIN_NEW_CLAIMS`, `DEFAULT_MIN_STANDING_DELTA`), not
+  `arbiter-core`, per D5's explicit assignment — the pure predicate
+  functions in `arbiter-core::decision::controller` take them as plain
+  parameters rather than reading a core-owned config struct, so ownership
+  and computation stay cleanly separated exactly as D5 intended.
+- **Refactor of already-shipped G5 code, caught in passing.**
+  `challenge_plan.rs` had hand-rolled `remaining_budget / remaining_rounds`
+  and `(round_budget - judge_share).max(0.0)` arithmetic inline — duplicate
+  logic K1/K2/K4 had already built, tested, and shipped as
+  `bounds::round_budget`/`bounds::challenge_budget` before G5 was written,
+  simply not discovered at the time. Replaced with calls to those functions;
+  `challenge_plan.rs`'s own 5 tests were re-run unmodified and still pass,
+  confirming the arithmetic is identical.

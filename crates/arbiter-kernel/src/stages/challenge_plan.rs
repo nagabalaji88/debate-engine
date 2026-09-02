@@ -14,6 +14,7 @@
 //! ```
 
 use super::disputes_rank::RankedDisputes;
+use crate::bounds;
 use crate::event::EventType;
 use crate::ids::StageName;
 use crate::stage::{
@@ -172,10 +173,14 @@ impl Stage for ChallengePlan {
             serde_json::json!({"candidates": input.ranked.len()}),
         );
 
-        let remaining_budget = ctx.budget.remaining().map(|c| c.0).unwrap_or(f64::INFINITY);
-        let remaining_rounds = (self.max_rounds.saturating_sub(ctx.round) + 1).max(1) as f64;
-        let round_budget = remaining_budget / remaining_rounds;
-        let challenge_budget = (round_budget - self.judge_reservation_estimate.0).max(0.0);
+        // Money-derived sizing (ARCHITECTURE §5.5), via the same
+        // `bounds::round_budget`/`bounds::challenge_budget` K1/K2/K4 already
+        // built and tested rather than a second copy of the same arithmetic.
+        let remaining_budget = ctx.budget.remaining().unwrap_or(Cost(f64::INFINITY));
+        let remaining_rounds = self.max_rounds.saturating_sub(ctx.round) + 1;
+        let round_budget = bounds::round_budget(remaining_budget, remaining_rounds);
+        let challenge_budget =
+            bounds::challenge_budget(round_budget, self.judge_reservation_estimate);
 
         let claims_by_id: BTreeMap<ClaimId, &arbiter_core::CanonicalClaim> =
             input.claims.0.iter().map(|c| (c.id.clone(), c)).collect();
@@ -185,7 +190,7 @@ impl Stage for ChallengePlan {
         let mut pairs = Vec::new();
 
         for rank in &input.ranked {
-            if spent + self.estimated_cost_per_exchange.0 > challenge_budget {
+            if spent + self.estimated_cost_per_exchange.0 > challenge_budget.0 {
                 break;
             }
             let Some(claim) = claims_by_id.get(&rank.claim_id) else {
@@ -255,7 +260,7 @@ impl Stage for ChallengePlan {
             &stage_name,
             serde_json::json!({
                 "planned": pairs.len(),
-                "challenge_budget": challenge_budget,
+                "challenge_budget": challenge_budget.0,
                 "spent": spent,
             }),
         );
