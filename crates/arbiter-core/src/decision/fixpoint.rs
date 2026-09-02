@@ -110,6 +110,11 @@ pub fn solve(
             let attack_raw = weighted_sum(&attacks, id, &prev);
             let qualify_raw = weighted_sum(&qualifies, id, &prev);
 
+            // Strict `>`, not `>=`: `min(raw, cap)` only actually clips when raw
+            // exceeds the cap. At raw == cap exactly, the min is a no-op — the
+            // natural value already equals the cap, nothing was cut down to
+            // reach it — so marking that claim "saturated" would report a
+            // clipping that didn't happen.
             if support_raw > p.support_cap || attack_raw > p.attack_cap {
                 saturated.insert(id.clone());
             }

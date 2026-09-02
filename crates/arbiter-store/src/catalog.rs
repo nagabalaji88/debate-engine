@@ -15,6 +15,8 @@ pub enum CatalogError {
     Sqlite(#[from] rusqlite::Error),
     #[error(transparent)]
     Schema(#[from] crate::schema::SchemaError),
+    #[error("reading runs directory: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// Opens (creating if needed) `history.db` at `path`, in WAL mode with the
@@ -111,7 +113,14 @@ pub fn reindex(history_conn: &Connection, runs_root: &Path) -> Result<usize, Cat
     let mut count = 0;
     let entries = match std::fs::read_dir(runs_root) {
         Ok(e) => e,
-        Err(_) => return Ok(0), // no runs directory yet is not an error
+        // A runs directory that simply doesn't exist yet (a fresh project, no
+        // run has ever been started) is not an error -- reindex has nothing to
+        // do. Any other failure (permissions, a path that exists but isn't a
+        // directory, ...) is a real problem and must not be swallowed the same
+        // way, or a misconfigured `runs_root` would silently report "0 runs
+        // indexed" instead of surfacing why.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(CatalogError::Io(e)),
     };
     for entry in entries.flatten() {
         let run_dir = entry.path();
@@ -322,6 +331,39 @@ mod tests {
         assert_eq!(count_again, 2);
 
         let _ = std::fs::remove_dir_all(&runs_root);
+        let _ = std::fs::remove_file(&history_path);
+    }
+
+    #[test]
+    fn reindex_treats_a_missing_runs_directory_as_zero_runs_not_an_error() {
+        let history_path = temp_path("reindex_missing_dir");
+        let history_conn = open_history_db(&history_path, "0.1.0", &crate::now_rfc3339()).unwrap();
+        let never_created = temp_path("reindex_never_created_dir");
+
+        let n = reindex(&history_conn, &never_created).unwrap();
+        assert_eq!(n, 0);
+
+        let _ = std::fs::remove_file(&history_path);
+    }
+
+    #[test]
+    fn reindex_surfaces_a_real_io_error_instead_of_silently_reporting_zero() {
+        let history_path = temp_path("reindex_real_error");
+        let history_conn = open_history_db(&history_path, "0.1.0", &crate::now_rfc3339()).unwrap();
+
+        // A path that exists but is a file, not a directory: read_dir fails
+        // with something other than NotFound, which must propagate as an
+        // error rather than being swallowed into "0 runs indexed".
+        let not_a_directory = temp_path("reindex_not_a_directory");
+        std::fs::write(&not_a_directory, b"not a directory").unwrap();
+
+        let result = reindex(&history_conn, &not_a_directory);
+        assert!(
+            matches!(result, Err(CatalogError::Io(_))),
+            "expected an Io error, got {result:?}"
+        );
+
+        let _ = std::fs::remove_file(&not_a_directory);
         let _ = std::fs::remove_file(&history_path);
     }
 }

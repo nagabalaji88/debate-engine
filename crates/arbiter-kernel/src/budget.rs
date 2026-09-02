@@ -12,6 +12,16 @@
 //! `budget: &'a BudgetLedger` as a shared reference, because concurrent stages
 //! (`Parallelism::PerItem`) reserve against the same ledger at once — interior
 //! mutability (a `Mutex`) is what makes that sound without `unsafe`.
+//!
+//! `std::sync::Mutex`, not `tokio::sync::Mutex`, is a deliberate choice, not an
+//! oversight: every critical section here is a bounded, synchronous `BTreeMap`
+//! read or write with no `.await` inside it, so the lock is held for O(log n)
+//! and released before control ever returns to the caller — the case
+//! `tokio::sync::Mutex` exists for (a lock held *across* an await point,
+//! blocking the executor thread on I/O or another task) never arises. Switching
+//! to the async variant would only add poll-based lock acquisition overhead to
+//! every reservation for no behavioural benefit; it would not fix anything,
+//! because there is nothing here to fix.
 
 use crate::ids::ReservationId;
 use crate::provider::CallState;
@@ -240,6 +250,14 @@ mod tests {
     /// in (ARCHITECTURE §8.4's table) — at every point, `reserved()` must equal
     /// the sum of `reserved_amount` over exactly `RESERVED | SENT | ACKNOWLEDGED
     /// | ORPHANED`, never drifting regardless of how far the call got.
+    ///
+    /// TEST ONLY: `std::mem::forget` below is how this test stands in for a
+    /// process dying mid-call without unwinding — it is not a pattern to copy
+    /// into real stage/provider code. A real process death is simulated
+    /// faithfully this way (the guard's `Drop` genuinely never runs, exactly as
+    /// it wouldn't after a crash); a real leaked guard in production code would
+    /// instead be a bug this same `Drop`-releases-the-remainder design exists to
+    /// prevent.
     #[test]
     fn ledger_invariant_holds_after_kill_at_each_state() {
         let ledger = BudgetLedger::unbounded();

@@ -4,7 +4,11 @@
 //!
 //! `&self` throughout, like [`crate::budget::BudgetLedger`]: `StageContext`
 //! holds `cache: &'a ResponseCache` as a shared reference, since concurrent
-//! stages read and populate the same cache at once.
+//! stages read and populate the same cache at once. Same reasoning for
+//! `std::sync::Mutex` over `tokio::sync::Mutex` as that module: every critical
+//! section is a synchronous `BTreeMap` lookup or insert with no `.await` inside
+//! it, so there is no lock-held-across-await hazard for the async variant to
+//! solve.
 
 use crate::store::{CacheKey, CachedResponse};
 use std::collections::BTreeMap;

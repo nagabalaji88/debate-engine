@@ -8,7 +8,7 @@ macro_rules! id_type {
         $(#[$m])*
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(transparent)]
-        pub struct $name(pub String);
+        pub struct $name(String);
 
         impl $name {
             pub fn new(s: impl Into<String>) -> Self { Self(s.into()) }

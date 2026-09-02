@@ -3,11 +3,30 @@
 //! decides whether a steal is *permitted*; a monotonic `lease_epoch` decides who
 //! *wins*."
 //!
-//! Linux-only for now (`/proc/sys/kernel/random/boot_id`, `/proc/<pid>`) — neither
-//! spec file discusses any other platform, and this workspace's CI runs on
+//! Linux-only (`/proc/sys/kernel/random/boot_id`, `/proc/<pid>`) — neither spec
+//! file discusses any other platform, and this workspace's CI runs on
 //! `ubuntu-latest`. `#![forbid(unsafe_code)]` rules out the traditional
 //! `kill(pid, 0)` liveness check, so `/proc/<pid>` existence is the safe
 //! equivalent already available without a new dependency.
+//!
+//! This is a hard compile-time gate, not a comment, because the failure mode of
+//! skipping it is silent and actively unsafe rather than merely broken: off
+//! Linux, `/proc/<pid>` never exists, so [`pid_is_alive`] would always return
+//! `false` and [`owner_is_gone`] would then report *every* lease as abandoned —
+//! including one held by a live process on the same machine and boot. A second
+//! `reopen` would then successfully steal it via the epoch CAS, and two
+//! processes would both believe they own the run: exactly the failure INTERFACES
+//! §1's epoch design exists to prevent, reintroduced through an OS-specific
+//! precondition quietly returning the wrong answer instead of refusing to build.
+
+#[cfg(not(target_os = "linux"))]
+compile_error!(
+    "arbiter_store::lease is Linux-only: pid_is_alive()'s /proc/<pid> check always \
+     returns false on other platforms, which makes every lease look abandoned and \
+     stealable regardless of whether its owner is still running — silently unsafe, \
+     not just unsupported. Porting this module to another OS means implementing a \
+     real liveness check for that OS, not removing this gate."
+);
 
 use rusqlite::{Connection, OptionalExtension};
 

@@ -27,6 +27,15 @@ use serde::Serialize;
 /// [`RawEventRow`]). `payload` is the exact `TEXT` as stored (`Event::payload`
 /// serialized once via `.to_string()` at write time), not re-canonicalized on
 /// read, so verification only ever needs to match write-time bytes.
+///
+/// The field *declaration order* below is itself part of the on-disk hash
+/// contract — `serde_json::to_string` on a struct serializes named fields in
+/// declaration order, and every `content_hash` ever written depends on this
+/// exact order producing this exact JSON text. Reordering, renaming, adding or
+/// removing a field here changes what every future `verify_chain` recomputes,
+/// making it disagree with hashes already committed by an older binary. That is
+/// a `db_schema_version` bump (ARCHITECTURE §8.7), not a routine refactor —
+/// treat this struct as frozen outside of one.
 #[derive(Serialize)]
 struct HashableContent<'a> {
     schema_version: u32,

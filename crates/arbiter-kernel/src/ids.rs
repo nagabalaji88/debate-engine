@@ -15,7 +15,7 @@ macro_rules! id_type {
         $(#[$m])*
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(transparent)]
-        pub struct $name(pub String);
+        pub struct $name(String);
 
         impl $name {
             pub fn new(s: impl Into<String>) -> Self { Self(s.into()) }
@@ -65,11 +65,15 @@ id_type!(/// A pipeline stage's name (`"claims.extract"`, ARCHITECTURE §9's `Ev
 /// carries the same value once committed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Sequence(pub u64);
+pub struct Sequence(u64);
 
 impl Sequence {
     pub fn new(n: u64) -> Self {
         Self(n)
+    }
+
+    pub fn value(self) -> u64 {
+        self.0
     }
 }
 
