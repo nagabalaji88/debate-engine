@@ -366,16 +366,28 @@ iteration order does not change the result (BTreeMap, not HashMap)
 
 ### C3 · Standing classification
 
-**Files:** `decision/standing.rs` · **Spec:** §6.4
+**Files:** `decision/standing.rs` · **Spec:** §6.4 · two gaps resolved per
+`PLAN_DEVIATIONS.md` D8
 
 `Defeated` (< 0.15 or Withdrawn/Rejected) · `Disputed` (≥1 live attacker ≥ 0.30) ·
 `Unresolved` (Unverified/Unsupported, never resolved) · `Agreed` (≥ 0.50, no live attacker).
+Evaluated **in that order**, first match wins — same convention as §6.6's outcome
+classification.
 
 `Defeated` is **terminal per version**; there is no `Revived`. A later version of the same
-claim is a new version, and the gate resolves final standing (INTERFACES §14).
+claim is a new version, and the gate resolves final standing (INTERFACES §18, Provenance
+chains — not §14, which is the confidence formula; corrected here after the plan cited
+the wrong section).
 
-**Acceptance** `cargo test -p arbiter-core standing::` — one test per class plus a test
-that the four are evaluated in the spec's order.
+Two things §6.4's prose leaves genuinely underspecified, resolved conservatively (D8):
+what "resolved by challenge" means (taken as lifecycle `Defended`/`Modified` — a challenge
+that concluded with an outcome), and what a claim with no live attacker, non-`Unverified`
+kind, and standing short of `agreed` classifies as (the four rules are not jointly
+exhaustive; falls to `Unresolved` rather than silently `Agreed`).
+
+**Acceptance** `cargo test -p arbiter-core decision::standing::` — one test per class,
+one per D8 resolution, plus `has_live_attacker` and `classify_all` each getting their
+own test rather than only being exercised incidentally through `classify`.
 
 ---
 
@@ -1044,7 +1056,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | X2 | ✅ | (this commit) | none |
 | C1 | ✅ | (this commit) | D3, D4, D5, D6 — see PLAN_DEVIATIONS.md |
 | C2 | ✅ | (this commit) | D7 — see PLAN_DEVIATIONS.md |
-| C3 | ☐ | | |
+| C3 | ✅ | (this commit) | D8 — see PLAN_DEVIATIONS.md |
 | C4 | ☐ | | |
 | C5 | ☐ | | |
 | C6 | ☐ | | |

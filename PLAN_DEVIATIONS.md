@@ -156,3 +156,34 @@ or codebase. The actual signature takes `claim_ids: &[ClaimId]` and `relations:
 constants, not the policy's other threshold groups. `FixpointResult` also gained a
 `max_delta: f64` field the sketch omitted, needed for the `FIXPOINT_NOT_CONVERGED{
 max_delta, iterations }` event payload §6.3 names.
+
+---
+
+## D8 — C3: two gaps in §6.4's standing rules, resolved conservatively
+
+**Gap 1 — "never resolved by challenge" is not defined further anywhere in either
+spec file** (checked both; only the one line in §6.4 mentions it). Taken as: a claim's
+`ClaimLifecycle` represents a challenge having concluded with an outcome only when it
+is `Defended` or `Modified{_}` — both are the product of surviving cross-examination,
+one unchanged, one revised. `Proposed`, `Verified` and `Challenged` are all "not yet":
+never tested, or tested but no outcome recorded yet. `Withdrawn`/`Rejected` never reach
+this check — `Defeated` is evaluated first and claims them.
+
+**Gap 2 — the four listed rules are not jointly exhaustive**, though `ClaimStanding` is
+a closed four-variant enum that must classify every claim. A claim with standing in
+`[0.15, 0.50)`, no live attacker, and a kind other than the effective `Unverified`
+(e.g. a middling `Assumption` nobody has contradicted) matches **none** of the four
+literal conditions: not below the Defeated floor, no live attacker so not Disputed,
+not Unverified so not Unresolved by the letter of the rule, below 0.50 so not Agreed.
+
+Resolved conservatively, per §0.4 ("the reading that … refuses rather than proceeds"):
+this residual band classifies as **Unresolved**. The alternative — silently promoting
+it to `Agreed` — would overstate settledness for a claim that never cleared the 0.50
+bar, which is a strictly worse failure than an honest "not yet resolved." Reusing
+`Disputed` was considered and rejected: that variant specifically means an identified
+opponent exists at live-attacker strength, and labelling a claim with **no** attacker
+as Disputed in `explain` output would misrepresent it.
+
+Both choices are implemented in `decision/standing.rs` and covered by dedicated tests
+(`resolved_by_challenge_requires_defended_or_modified`,
+`the_residual_band_falls_to_unresolved_not_agreed_or_disputed`).
