@@ -732,6 +732,17 @@ K4 — `budget_headroom` (5%) is reserved from every planner and released **in t
 round only**. Challenge budget is `remaining_budget ÷ remaining_rounds`, judge share
 reserved first. `repair_budget_fraction` is **per round**, not per run.
 
+Scope note: `BudgetLedger`/`ReservationGuard` (K1) and `classify_on_resume`/
+`decide_retry`/`validate_transition` (K2) are pure decision logic operating only
+through K0's own trait seam — no dependency on `arbiter-store`, so their tests use
+an in-memory `BTreeMap`-backed ledger, not real SQLite. Actually persisting a
+reservation/call-state change (`Tx::commit_budget`/`set_call_state` in
+`arbiter-store`, currently the D21-deferred stub) is separate wiring work for
+whichever task first drives a real debate end-to-end (a G-task), not required by
+K1/K2/K4's own acceptance tests. `BudgetExhausted`'s mapping to
+`StopReason::BudgetExhausted` is left to the controller (G7), which is what
+actually constructs `StopReason`.
+
 **Acceptance**
 ```bash
 cargo test -p arbiter-kernel budget::tests::ledger_invariant_holds_after_kill_at_each_state
@@ -1168,10 +1179,10 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | S4 | ☐ | blocked on K3 | |
 | S5 | ☐ | blocked on K2 | |
 | S6 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
-| K1 | ☐ | | |
-| K2 | ☐ | | |
+| K1 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
+| K2 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K3 | ☐ | | |
-| K4 | ☐ | | |
+| K4 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K5 | ☐ | | |
 | P1 | ☐ | | |
 | P2 | ☐ | | |
