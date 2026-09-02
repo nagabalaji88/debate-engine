@@ -1529,3 +1529,59 @@ concrete task since G5. What required a decision, in
   simply not discovered at the time. Replaced with calls to those functions;
   `challenge_plan.rs`'s own 5 tests were re-run unmodified and still pass,
   confirming the arithmetic is identical.
+
+## D40 — `judge.evaluate`: dossier assembly, one shuffle for every judge, and where `Scorecard` aggregation actually happens
+
+ARCHITECTURE §5.6 and INTERFACES §4 together give the dossier's contents and
+the 9-metric rubric precisely, but neither gives an algorithm for
+anonymisation mechanics, surface normalisation, or how multiple judges'
+scores combine into the single `Scorecard` `decision::evidence::evidence_map`
+already consumes. Authored in
+`arbiter-kernel/src/stages/judge_evaluate.rs`:
+
+- **One shuffle, shared by every judge in the round.** The pipeline diagram
+  (§5.6) shows "shuffle" as a single step before "9-metric rubric", not one
+  per judge. A fresh shuffle per judge call would be marginally more
+  resistant to a hypothetical cross-judge identity-triangulation attack, but
+  nothing in either spec file asks for that, and it would mean the same
+  position appears at a different pseudonym in each judge's own dossier —
+  purely a bookkeeping cost for a property not requested. One
+  `DeterministicRng`-seeded Fisher-Yates shuffle (reproducible from the
+  manifest seed like every other randomised choice this kernel makes) is
+  computed once and reused for every judge's dossier this round.
+- **`normalize_surface_form` is a reasonable subset, not a markdown
+  parser.** "tables flattened, headings stripped, bullets unified" names
+  three properties, not a grammar. Implemented line-by-line: a pipe-table's
+  separator row (`|---|---|`, pure punctuation) is dropped entirely rather
+  than rendered as noise; a content row's `|` delimiters become `, `;
+  heading markers (`#`+) and the three common bullet glyphs (`-`, `*`, `+`)
+  are stripped from line starts. "Length not truncated" is honoured by
+  construction — nothing here shortens text, only reformats it.
+- **Where `Scorecard` aggregation happens, and why two shapes survive.**
+  `decision::evidence::evidence_map` (already wired into every
+  `resolve_and_rank` call, D36/D39) needs exactly one `Scorecard` per model —
+  `scores_by_model`, the mean of every judge's scorecard for that model,
+  field by field. But `decision::confidence`'s `judge_dispersion` needs the
+  *spread* across judges for one fixed dossier — averaging first would
+  destroy exactly the signal it measures. So this stage's own output keeps
+  both: `scores_by_model` (mean, ready for `evidence_map`) and
+  `per_judge_scores: BTreeMap<ModelId, Vec<Scorecard>>` (every judge's own
+  scorecard, undestroyed, for whichever position(s) `decision.synthesize`
+  (G9) ultimately needs dispersion for). Neither `arbiter-core` function's
+  own signature had to change — `confidence()` already takes `judges: &[Scorecard]`
+  and this is exactly what it expects, once G9 selects which model's
+  entry to hand it.
+- **`FailurePolicy::DegradeWithEvent`, not `Fatal`.** Unlike `disputes.rank`/
+  `challenge.plan`/`controller.decide` (pure computation, `Fatal`), this
+  stage makes real provider calls — a judge's call failing or its response
+  failing to parse must not fail the whole decision (a debate that can't get
+  a second cross-vendor judge at `--depth deep` should still be scored by
+  the first, not abort). A judge that contributes nothing simply leaves
+  every position's `per_judge_scores` one entry shorter.
+- **The dossier's "claims" section includes claim text, not just id and
+  kind.** INTERFACES §4's own worked example elides it (`C-011 fact ·
+  C-018 inference · …`), but a judge scoring Factual Correctness or Logical
+  Reasoning needs to read the actual claim, not just its identifier and
+  evidence kind — the elision reads as the doc's own brevity, not an
+  instruction to withhold content the judge structurally needs to do its
+  job.

@@ -1075,6 +1075,24 @@ precedence order, and a small already-shipped-G5 arithmetic duplication
 executor is out of this task's scope** — no `StageGraph` runner exists
 anywhere in this codebase yet to loop within; that is L1–L4/CLI's job.
 
+**G8** (`arbiter-kernel/src/stages/judge_evaluate.rs`) is implemented and
+tested. Anonymises every position (one `DeterministicRng`-seeded Fisher-Yates
+shuffle, shared by every judge this round), applies a conservative surface-
+normalisation pass (heading/bullet stripping, pipe-table flattening — a
+reasonable subset of §5.6's three named properties, not a markdown parser),
+renders one dossier per position (recommendation, claims with text, and
+every challenge/rebuttal exchange with its resulting lifecycle), and calls
+each configured judge once over the whole anonymised set. Real identity is
+restored from the shuffle mapping after parsing; a judge's own 9-metric
+scorecard is clamped and kept per-judge (`per_judge_scores`, for
+`decision::confidence`'s dispersion calc downstream) as well as averaged per
+model (`scores_by_model`, the exact shape `decision::evidence::evidence_map`
+already consumes). `FailurePolicy::DegradeWithEvent`, not `Fatal` — the only
+provider-calling stage since G6, so a judge's call failing degrades rather
+than aborting the decision. See D40 for the one-shuffle-for-every-judge
+reading, the normalisation subset, and why two `Scorecard` shapes
+(mean and per-judge) both survive into the next stage.
+
 ---
 
 ## 6. Tasks — CLI
@@ -1428,7 +1446,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | G5 | ✅ | (this commit) | D36, D37 — see PLAN_DEVIATIONS.md; Step 3 propagation runs in disputes.rank |
 | G6 | ✅ | (this commit) | D38 — see PLAN_DEVIATIONS.md; rebuttal.run's output reuses disputes.rank's own input shape |
 | G7 | ✅ | (this commit) | D39 — see PLAN_DEVIATIONS.md; round-loop executor itself out of scope, no StageGraph runner exists yet |
-| G8 | ☐ | | |
+| G8 | ✅ | (this commit) | D40 — see PLAN_DEVIATIONS.md; mean + per-judge Scorecard shapes both carried forward |
 | G9 | ☐ | | |
 | L1 | ☐ | | |
 | L2 | ☐ | | |
