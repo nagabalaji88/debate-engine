@@ -48,7 +48,7 @@ impl Owner {
     }
 }
 
-fn boot_id() -> String {
+pub(crate) fn boot_id() -> String {
     std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
@@ -68,8 +68,14 @@ fn pid_is_alive(pid: u32) -> bool {
 
 /// INTERFACES §1's precondition table: gone when the boot differs (the recorded
 /// pid refers to a previous boot and means nothing), or the boot matches and the
-/// pid is not alive.
-fn owner_is_gone(recorded_boot_id: &str, recorded_pid: u32, current_boot_id: &str) -> bool {
+/// pid is not alive. `pub(crate)`: `blob::gc` (§8.2) must ask this exact same
+/// question, not a simpler one — "`doctor` is a reader and cannot take a lease to
+/// find out, so it must apply the *same* liveness predicate `reopen` uses."
+pub(crate) fn owner_is_gone(
+    recorded_boot_id: &str,
+    recorded_pid: u32,
+    current_boot_id: &str,
+) -> bool {
     recorded_boot_id != current_boot_id || !pid_is_alive(recorded_pid)
 }
 

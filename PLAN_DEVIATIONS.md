@@ -708,3 +708,28 @@ guarantee, not a behavioural one: `MockProvider`'s struct has no `reqwest`
 client field, no socket, nothing in its fields or dependency graph capable of
 reaching the network, so fully scripting and exhausting a multi-call scenario
 and getting back only the exact scripted answers is the observable proof.
+
+## D27 — S5's `gc_one_run`/`gc_run` referenced-set injection, and `blob_threshold`'s home
+
+D5 already assigned `blob_threshold` to "the blob store"; no prior task had
+actually defined it, so `arbiter-store/src/blob.rs` adds
+`DEFAULT_BLOB_THRESHOLD_BYTES: usize = 128 * 1024` (§8.2's stated default) as
+the concrete constant D5 promised.
+
+ARCHITECTURE §8.2 describes `doctor --gc` as deleting "blobs not named by any
+committed `cache_entries` or `artifacts` row" — but `run.db` does not have
+those tables yet (D21: today it only has `events`/`run`/`schema_metadata`;
+S4 adds the projection tables that would make `cache_entries`/`artifacts`
+queryable). Rather than block S5 on S4 (the plan lists S5's only dependencies
+as S3 and K2, not S4), `gc_one_run`/`gc_run` take the referenced-hash set as a
+parameter the caller supplies, the same pattern S6's `reindex` used for the
+same reason (D21's own precedent: honest about a real limitation rather than
+querying tables that don't exist). Once S4 lands, its caller (a future
+`doctor` implementation, L-task-scoped) queries `cache_entries`/`artifacts` for
+the real referenced set and passes it in — `blob.rs` itself does not change.
+
+The liveness check `is_run_lease_live`/`gc_run` use is not a new predicate:
+`lease::owner_is_gone` and `lease::boot_id` were made `pub(crate)` (previously
+private to `lease.rs`) so `blob.rs` asks the *exact* question §8.2 requires —
+"the same liveness predicate `reopen` uses" — rather than a second,
+independently-written one that could drift from it.

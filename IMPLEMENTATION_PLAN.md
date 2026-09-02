@@ -654,6 +654,17 @@ export is deferred to whichever CLI task (`L2`/`L4`) actually implements `arbite
 run --export`, since S6's own acceptance test doesn't exercise it and nothing else
 in the workspace calls it yet.
 
+**Scope note (S5 done; S4 still pending):** S5 (`src/blob.rs`) is implemented and
+tested — content-addressed write (`write_blob`, fsync-before-return, idempotent
+on identical content), read, the fixed `blobs/b3/<hash>` layout, and lazy GC
+(`gc_one_run`/`gc_run`, lease-checked via `lease::owner_is_gone`/`boot_id` made
+`pub(crate)` for exactly this reuse). `DEFAULT_BLOB_THRESHOLD_BYTES` (128 KB) is
+defined here per D5's ownership assignment. GC's referenced-hash set is
+caller-supplied rather than queried from `cache_entries`/`artifacts` — those
+tables don't exist in `run.db` until S4 — following S6's own D21 precedent; see
+D27. S4 itself remains its own pass: real per-stage event-payload schemas need
+designing before a `project.rs` rebuild can be written against them.
+
 **Acceptance**
 ```bash
 cargo test -p arbiter-store project::tests::rebuild_equals_original
@@ -1213,7 +1224,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | S2 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | S3 | ✅ | (this commit) | D22 — see PLAN_DEVIATIONS.md |
 | S4 | ☐ | unblocked (K3, C8 done); not started | |
-| S5 | ☐ | unblocked (K2 done); not started | |
+| S5 | ✅ | (this commit) | D27 — see PLAN_DEVIATIONS.md |
 | S6 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K1 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K2 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
