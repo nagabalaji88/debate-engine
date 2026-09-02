@@ -36,6 +36,11 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 eventsource-stream = "0.2"
 # kernel: manifest.toml for prompt packs (ARCHITECTURE §15, INTERFACES §23)
 toml = "0.8"
+# kernel: bounded concurrent fan-out inside a stage (INTERFACES §6: "concurrency
+# lives inside stages, not across them" -- positions.generate/claims.extract/
+# challenge.run each need this). Just the stream combinators, not the full
+# `futures` metapackage.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 # cross-cutting
 thiserror = "2"

@@ -134,6 +134,7 @@ version = "0.1.0"
 dependencies = [
  "arbiter-core",
  "blake3",
+ "futures-util",
  "serde",
  "serde_json",
  "thiserror",

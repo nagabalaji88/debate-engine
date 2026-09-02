@@ -900,3 +900,66 @@ grounding/repair, Kahn cycle detection, three-tier similarity matching) that
 attempting all of G2 in one pass risks exactly the kind of rushed, under-tested
 work this project's own §0.2/§0.4 discipline exists to prevent. Each will be
 picked up as its own follow-on pass, in pipeline order.
+
+## D31 — `positions.generate`: `Question`/`Position`/`Positions`, the missing per-provider semaphore, and the first real prompt
+
+ARCHITECTURE §5.1's only description of a position is "position text"; no spec
+file gives `Position` (or the input `Question`, or the stage's `Vec`-of-them
+output) a struct anywhere — same D19 category. Authored in
+`arbiter-kernel/src/stages/positions_generate.rs`:
+
+- `Question { text }`, `Position { model, provider, text }`, `Positions(Vec<Position>)`
+  — all `Artifact` impls. `Positions::content_hash` sorts its members by
+  `(provider, model)` before hashing, since concurrent completion order is not
+  deterministic and a stage's idempotency key (derived from its output's
+  content hash by whatever consumes it next) must not depend on it.
+- **Cache-then-reserve-then-call-then-commit**, matching INTERFACES §5's
+  crash-recovery write order and §7's "provider stages consult the cache
+  first": a `CacheKey` lookup runs before any reservation; only an *inline*
+  cache hit is usable (a blob-backed one needs `arbiter-store` to read it
+  back, D1, so it falls through to a real call — a documented, narrow gap,
+  not a correctness bug, since the response is still obtained, just not from
+  cache). `BUDGET_RESERVED`/`CALL_STARTED`/`CALL_REQUEST_ID`/`CALL_COMPLETED`/
+  `BUDGET_COMMITTED` are all emitted through `ctx.events`, in the same order
+  S4's `project.rs` replay already expects (D29) — nothing about that replay
+  logic changes.
+- **`FailurePolicy::SkipItem`** (INTERFACES §6, stated for this exact stage)
+  covers every per-item failure mode: a scripted/real provider error, an
+  unregistered provider, and `BudgetExhausted` are all "skip this position,"
+  never fatal to the stage. A `ReservationGuard` that is dropped without
+  `commit()`/`mark_orphaned()` releases itself (K1's own `Drop` guarantee) —
+  no manual release code is needed on any of these paths.
+- **No per-provider semaphore.** INTERFACES §6 asks for "a bounded join set
+  and a per-provider semaphore"; this pass implements only the bounded join
+  set (`futures_util::stream::buffer_unordered(max_parallelism)`, one global
+  bound across the whole panel). A true per-provider `tokio::sync::Semaphore`
+  matters for real rate-limited HTTP providers, which don't exist yet (P4);
+  against `MockProvider`-shaped testing it has no observable effect, so
+  adding it now would be unverifiable. Revisit when P4 lands.
+- **No real per-token pricing.** `estimated_cost_per_call: Cost` is a flat,
+  caller-supplied amount charged as both the reservation estimate and the
+  commit's `actual_cost` — no pricing table exists anywhere in this workspace
+  (P4's job). This never under-charges the ledger relative to what was
+  reserved, which is the property the budget invariant (§8.3) actually needs;
+  it is not real cost accounting.
+
+Adds `futures-util` (workspace dependency, `arbiter-kernel` only) for
+`buffer_unordered` — the minimal stream-combinator subset, not the full
+`futures` metapackage, since nothing else here needs channels, executors, or
+I/O traits from it.
+
+**Test provider, not `arbiter-providers::mock::MockProvider`.** This module's
+tests use a small local `ScriptedProvider` rather than P2's `MockProvider`:
+`arbiter-kernel` cannot depend on `arbiter-providers` (D1) — that crate already
+depends on `arbiter-kernel`, so the reverse would be a cycle. `ScriptedProvider`
+is the same scripted-`VecDeque` shape, just local to this test module, the same
+way `provider.rs`'s own `EchoProvider` is local to its tests rather than reused
+from elsewhere.
+
+**First real prompt content.** `prompts/default/v1/manifest.toml` and
+`prompts/default/v1/positions.generate.md` are the first production template
+G1 deferred (D28) — a real, functional prompt asking one panelist for
+reasoning plus a concrete recommendation, with no cross-talk. Exact wording is
+implementation detail no spec file mandates; a test loads this exact shipped
+file (not an in-memory fixture) through `PromptPack::load` to prove it parses
+and renders correctly.

@@ -18,4 +18,5 @@ pub mod init;
 pub mod prompt;
 pub mod provider;
 pub mod stage;
+pub mod stages;
 pub mod store;
