@@ -1,7 +1,19 @@
 //! Provider-facing capability declaration and call-state machine, INTERFACES §5 /
 //! ARCHITECTURE §8.4.
+//!
+//! `Provider` itself, and `ProviderRequest`/`ProviderResponse`/`ProviderError`,
+//! have no definition anywhere in either spec file — a P1-scoped instance of
+//! D19/D24's category of gap. Authored here as the trait seam
+//! `arbiter-providers`' concrete adapters (Mock, Anthropic, OpenAI-compatible)
+//! implement, matching the `RunStore` pattern (D1): this crate defines the
+//! interface, `arbiter-providers` — which already depends on this crate — writes
+//! the bodies.
 
+use crate::ids::ReservationId;
+use arbiter_core::{ModelId, ProviderId};
 use serde::{Deserialize, Serialize};
+use std::future::Future;
+use std::pin::Pin;
 
 /// INTERFACES §5, copied verbatim. Capability-gated, not assumed: each adapter
 /// declares its own support from that provider's documentation.
@@ -75,6 +87,56 @@ impl CallState {
     }
 }
 
+/// What a stage sends. `prompt` is the fully-rendered template text (G1's
+/// prompt-pack rendering happens before this point — this trait only ever sees
+/// the finished string, never a template plus variables to fill in itself).
+/// `params` is the call's canonical serialized parameters (temperature,
+/// max_tokens, ...) — matching [`crate::store::CacheKey`]'s own `params: String`
+/// convention, since the two must agree byte-for-byte for a cache lookup to hit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderRequest {
+    pub model: ModelId,
+    pub prompt: String,
+    pub params: String,
+    /// `Some` only when [`ProviderCapabilities::idempotency`] is `Some` and this
+    /// is a retry — `blake3(prompt_hash ‖ reservation_id)` (INTERFACES §5).
+    pub idempotency_key: Option<String>,
+    pub reservation: ReservationId,
+}
+
+/// What a provider returns. `request_id` is the provider's own identifier from
+/// its response headers — "appended the moment they arrive, before the body
+/// finishes" (INTERFACES §5), so an orphaned call is reconcilable against a
+/// usage export afterwards. `None` for a provider/response that never carries
+/// one (not every provider issues one, and a mock never does).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderResponse {
+    pub text: String,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub request_id: Option<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProviderError {
+    #[error("{0}")]
+    Other(String),
+}
+
+/// The provider seam. `call`'s boxed-future return (rather than an `async fn`,
+/// which `Stage::run` uses, per D24) is deliberate: unlike `Stage`, this trait
+/// needs `dyn` dispatch *now* — `ProviderRegistry` genuinely holds a
+/// heterogeneous set of providers (mock, Anthropic, OpenAI-compatible) behind
+/// one type today, not once some future executor exists to need it.
+pub trait Provider: std::fmt::Debug + Send + Sync {
+    fn id(&self) -> ProviderId;
+    fn capabilities(&self) -> ProviderCapabilities;
+    fn call(
+        &self,
+        request: ProviderRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse, ProviderError>> + Send + '_>>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +185,65 @@ mod tests {
             idempotency: None,
         };
         assert_eq!(caps.idempotency, None);
+    }
+
+    // A minimal concrete `Provider`, proving the trait is actually
+    // dyn-dispatchable -- `crate::stage::ProviderRegistry` needs `Box<dyn
+    // Provider>` to work today, not once some future adapter exists to prove it.
+
+    #[derive(Debug)]
+    struct EchoProvider;
+    impl Provider for EchoProvider {
+        fn id(&self) -> ProviderId {
+            ProviderId::new("echo")
+        }
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities {
+                structured_output: false,
+                streaming: false,
+                idempotency: None,
+            }
+        }
+        fn call(
+            &self,
+            request: ProviderRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse, ProviderError>> + Send + '_>>
+        {
+            Box::pin(async move {
+                Ok(ProviderResponse {
+                    text: request.prompt,
+                    prompt_tokens: 1,
+                    completion_tokens: 1,
+                    request_id: None,
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_provider_is_dyn_dispatchable_through_the_registry() {
+        let mut registry = crate::stage::ProviderRegistry::new();
+        registry.register(Box::new(EchoProvider));
+        assert_eq!(registry.len(), 1);
+
+        let provider = registry.get(&ProviderId::new("echo")).unwrap();
+        let response = provider
+            .call(ProviderRequest {
+                model: ModelId::new("echo-1"),
+                prompt: "hello".to_string(),
+                params: "{}".to_string(),
+                idempotency_key: None,
+                reservation: ReservationId::new("r1"),
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.text, "hello");
+    }
+
+    #[test]
+    fn an_unregistered_provider_id_is_not_found() {
+        let registry = crate::stage::ProviderRegistry::new();
+        assert!(registry.get(&ProviderId::new("nobody")).is_none());
+        assert!(registry.is_empty());
     }
 }

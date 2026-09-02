@@ -8,8 +8,9 @@
 //! `DeterministicRng`/`CancellationToken` fields) have no concrete definition
 //! anywhere in either spec file. Each is authored here from whatever prose was
 //! available; see each type's own doc comment for its anchor. `ProviderRegistry`
-//! specifically stays a near-empty placeholder — it cannot be more than that
-//! before P1 defines the `Provider` trait it would hold.
+//! now holds real `Box<dyn Provider>` entries (P1's `Provider` trait, in
+//! `provider.rs`) — a lookup table, populated by whatever resolves credentials
+//! (P3) and constructs adapters (P2/P4), not built or torn down here.
 
 use crate::budget::BudgetLedger;
 use crate::cache::ResponseCache;
@@ -220,14 +221,37 @@ pub trait EventSink: std::fmt::Debug + Send + Sync {
     fn emit(&self, event_type: EventType, stage: &StageName, payload: serde_json::Value);
 }
 
-/// Placeholder until P1 defines the `Provider` trait this would hold a
-/// registry of — there is nothing meaningful to put in this type before that
-/// exists. Kept as a distinct, named type now rather than deferred entirely,
-/// so `StageContext`'s shape matches INTERFACES §6 today; P1 fills in its
-/// fields and lookup methods without changing `StageContext` itself.
+/// Holds every provider a run has access to, keyed by [`ProviderId`]. Built by
+/// P3's credential resolution (a provider with no resolvable key is never
+/// registered, per ARCHITECTURE §11.1 — "the model stays listed and is
+/// disabled" is a CLI/UI concern above this type, not a reason to register a
+/// provider that cannot be called).
 #[derive(Debug, Default)]
 pub struct ProviderRegistry {
-    _private: (),
+    providers:
+        std::collections::BTreeMap<arbiter_core::ProviderId, Box<dyn crate::provider::Provider>>,
+}
+
+impl ProviderRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn register(&mut self, provider: Box<dyn crate::provider::Provider>) {
+        self.providers.insert(provider.id(), provider);
+    }
+
+    pub fn get(&self, id: &arbiter_core::ProviderId) -> Option<&dyn crate::provider::Provider> {
+        self.providers.get(id).map(|p| p.as_ref())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.providers.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.providers.len()
+    }
 }
 
 /// INTERFACES §6, copied field-for-field.

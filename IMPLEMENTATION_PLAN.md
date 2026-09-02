@@ -821,6 +821,21 @@ P3 — credentials, §11.1:
 
 P4 — Anthropic ships `idempotency: None`; several OpenAI-compatible gateways accept a key.
 
+**Scope note (P1, P2 done; P3, P4 deferred to their own pass):** P1 (`Provider`
+trait, `ProviderRequest`/`ProviderResponse`/`ProviderError` in
+`arbiter-kernel/src/provider.rs`) and P2 (`MockProvider` in
+`arbiter-providers/src/mock.rs`, scripted, structurally socket-free) are
+implemented and tested — see D25/D26 in PLAN_DEVIATIONS.md for the types
+neither spec file defines and the dyn-dispatch design choice. `ProviderRegistry`
+(`arbiter-kernel/src/stage.rs`, K3/D24) is filled in against the real `Provider`
+trait. P3 and P4 are deliberately left for a dedicated pass rather than folded
+in here: P3 is security-sensitive credential handling (OS keychain integration,
+write-path redaction, secret zeroization) that deserves focused attention and
+its own review rather than being rushed alongside P1/P2; P4 requires real
+`reqwest`/`eventsource-stream` wiring against live Anthropic/OpenAI-compatible
+APIs, which has no CI-testable acceptance criterion and depends on P3's
+credential resolution existing first.
+
 **Acceptance**
 ```bash
 cargo test -p arbiter-providers keys::tests::config_file_key_fails_and_names_the_file
@@ -1197,18 +1212,18 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | S1 | ✅ | (this commit) | D21 — see PLAN_DEVIATIONS.md |
 | S2 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | S3 | ✅ | (this commit) | D22 — see PLAN_DEVIATIONS.md |
-| S4 | ☐ | blocked on K3 | |
-| S5 | ☐ | blocked on K2 | |
+| S4 | ☐ | unblocked (K3, C8 done); not started | |
+| S5 | ☐ | unblocked (K2 done); not started | |
 | S6 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K1 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K2 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K3 | ✅ | (this commit) | D23, D24 — see PLAN_DEVIATIONS.md; concurrency/rate-limits/circuit-breakers deferred, see plan text above |
 | K4 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K5 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
-| P1 | ☐ | | |
-| P2 | ☐ | | |
-| P3 | ☐ | | |
-| P4 | ☐ | | |
+| P1 | ✅ | (this commit) | D25 — see PLAN_DEVIATIONS.md |
+| P2 | ✅ | (this commit) | D26 — see PLAN_DEVIATIONS.md |
+| P3 | ☐ | deferred as own pass — security-sensitive (OS keychain, redaction) | |
+| P4 | ☐ | deferred as own pass — needs real HTTP adapters against live provider APIs, no CI-testable acceptance criterion | |
 | G1 | ☐ | | |
 | G2 | ☐ | | |
 | G3 | ☐ | | |

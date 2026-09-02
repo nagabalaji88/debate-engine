@@ -657,3 +657,54 @@ needs `Box<dyn Stage>` yet (no executor exists to hold one), this was left as
 plain `-> impl Future<Output = ...> + Send` (RPITIT) rather than pre-emptively
 solving a dyn-safety problem no caller has yet — if a future G-task's executor
 needs `Box<dyn Stage<...>>`, that is the point to revisit this, not now.
+
+## D25 — P1's `Provider`/`ProviderRequest`/`ProviderResponse`/`ProviderError`
+
+Same category of gap as D19/D24: INTERFACES §5 and ARCHITECTURE §8.4 pin
+`ProviderCapabilities`, `IdempotencyStyle`, and the `CallState` diagram exactly
+(carried over from K0 unchanged), but neither spec file gives a code block for
+the trait itself or its request/response/error types. Authored in
+`arbiter-kernel/src/provider.rs`:
+
+- `ProviderRequest` — `model`, `prompt` (fully-rendered text; template rendering
+  is G1's job, this trait never sees a template), `params` (canonical serialized
+  call parameters, matching [`crate::store::CacheKey`]'s own `params: String` so
+  the two agree byte-for-byte on a cache lookup), `idempotency_key: Option<String>`
+  (`Some` only when [`ProviderCapabilities::idempotency`] is `Some` and this is a
+  retry — INTERFACES §5's `blake3(prompt_hash ‖ reservation_id)` formula), and
+  `reservation: ReservationId`.
+- `ProviderResponse` — `text`, `prompt_tokens`, `completion_tokens`, and
+  `request_id: Option<String>` (the provider's own identifier, appended the
+  moment it arrives per INTERFACES §5, so an orphaned call is reconcilable
+  against a usage export; `None` for providers/responses that never issue one,
+  including the mock).
+- `ProviderError` — a single `Other(String)` variant, matching `StoreError`'s
+  D19 precedent: no real adapter has exercised a failure taxonomy yet, so none
+  is invented.
+
+`Provider::call`'s signature deliberately diverges from `Stage::run`'s D24
+choice: it returns `Pin<Box<dyn Future<Output = ...> + Send + '_>>` rather than
+RPITIT, because unlike `Stage`, this trait needs `dyn` dispatch *now* —
+`ProviderRegistry` (`arbiter-kernel/src/stage.rs`) genuinely holds a
+heterogeneous `BTreeMap<ProviderId, Box<dyn Provider>>` today (mock, and
+eventually Anthropic and OpenAI-compatible, behind one type), not once some
+future executor exists to need it. This also completes D24's placeholder note
+on `ProviderRegistry`: it is no longer near-empty — `register`/`get`/`is_empty`/
+`len` are implemented against the now-real `Provider` trait.
+
+## D26 — P2's `MockProvider`
+
+No spec gap beyond D25's: `MockProvider` (`arbiter-providers/src/mock.rs`)
+implements `Provider` per ARCHITECTURE §11.1 / IMPLEMENTATION_PLAN.md's own
+description ("the mock is not a stub: it scripts the whole CI fixture suite and
+opens no socket"). Scripted via a `Mutex<VecDeque<Result<ProviderResponse,
+ProviderError>>>` consumed in FIFO order; an unscripted call returns
+`ProviderError::Other` rather than panicking or blocking, so an under-scripted
+fixture fails its assertion instead of hanging CI. Every received request is
+logged to a `Mutex<Vec<ProviderRequest>>` for fixtures to assert against
+(prompts, call count, ordering) without the mock itself interpreting them.
+`mock_opens_no_socket` — the plan's own named acceptance test — is a structural
+guarantee, not a behavioural one: `MockProvider`'s struct has no `reqwest`
+client field, no socket, nothing in its fields or dependency graph capable of
+reaching the network, so fully scripting and exhausting a multi-call scenario
+and getting back only the exact scripted answers is the observable proof.
