@@ -1159,3 +1159,69 @@ reasoning plus a concrete recommendation, with no cross-talk. Exact wording is
 implementation detail no spec file mandates; a test loads this exact shipped
 file (not an in-memory fixture) through `PromptPack::load` to prove it parses
 and renders correctly.
+
+## D35 — `relations.analyze`: shared `similarity.rs`, the T2 polarity sweep, and direction resolution
+
+ARCHITECTURE §5.4 ("Relationship detection") and INTERFACES §3 give this
+stage's shape — T1 lexical candidates plus a "T2" pass, batched pairwise LLM
+classification into `RelationKind` — but, as with D33's `claims.normalize`,
+neither spec file gives T1 its own copy of the algorithm here; it is the same
+"cheap similarity" machinery INTERFACES §3 already describes once, textually
+anchored under this stage's own ARCHITECTURE section.
+
+- **`similarity.rs` extraction.** `claims.normalize` (D33) and this stage both
+  need identical T1 candidate generation (`UnionFind`, `top_k`, trigram-IDF
+  cosine, `top_k_pairs`, `partition_into_batches`). Rather than a second copy
+  — which D33 had accepted as the lesser evil at the time, since only one
+  consumer existed — a third consumer made the duplication cost outweigh the
+  module-boundary cost, so the shared logic (with its own pure-function
+  tests) now lives once in `arbiter-kernel/src/stages/similarity.rs`
+  (`pub(crate)`), imported by both stage modules. `claims_normalize.rs` lost
+  its local copies and their four duplicate tests; nothing about its own
+  behavior changed, confirmed by its 7 remaining tests still passing
+  unmodified.
+- **T2, "the polarity sweep."** ARCHITECTURE §5.4 gives this exactly one
+  sentence: every cross-model pair attached to opposing options is a T2
+  candidate. No spec file expands this into a formula. The literal,
+  non-inventive reading, implemented in `polarity_pairs`: for each clustered
+  option, collect the claims with a `Supports` cell and the claims with an
+  `Opposes` cell on that option (from `ClusteredOptions.direct_matrix`, D34's
+  output), form the cross-product, and keep a pair only if at least one
+  `Supports`-side/`Opposes`-side attachment combination involves two
+  different `model` fields (the "cross-model" qualifier). "Opposing options"
+  is read as "opposing polarity on the same option," since options
+  themselves don't carry a polarity — attachments do (INTERFACES §20's own
+  `Polarity` enum lives on `Attachment`, not on `DecisionOption`).
+- **`AnalyzeInput`, reusing D34's combining-wrapper pattern.** This stage
+  needs both `NormalizedClaims` and `ClusteredOptions` — the same
+  multi-artifact-input gap D34 hit first (K3's `Stage` trait has exactly one
+  associated `In` type). Resolved identically: a small `Artifact` wrapper
+  (`AnalyzeInput { claims, options }`, content-hashed over both) rather than
+  reshaping `Stage` itself.
+  `#[derive(Debug, Clone, PartialEq)]` only (no `Eq`) on `AnalyzeInput` and
+  `AnalyzedRelations`, matching `ClusteredOptions`'s own existing precedent —
+  both transitively contain `f64` fields (`Cost`, `confidence`), which don't
+  implement `Eq`.
+- **Direction (`from`/`to`) resolution.** `Relation` (`arbiter-core`) already
+  has a directed `from`/`to: ClaimId` shape; this stage's prompt
+  (`prompts/default/v1/relations.classify.md`) asks the model for a
+  same-shaped `"from": "A"|"B", "to": "A"|"B"` per pair, using the pair's own
+  local `"A"`/`"B"` labels (not real claim IDs, to keep the prompt short),
+  which the stage then resolves back to the real `ClaimId`s it substituted
+  into that pair's block. For the two direction-insensitive kinds
+  (`Unrelated`, `Uncertain`) the prompt asks for a fixed `"from": "A", "to":
+  "B"` rather than leaving the field ambiguous, so parsing never special-cases
+  those two kinds.
+- **Batch size (30 pairs) and omitted-pair handling.** No spec file gives a
+  numeric batch size for this call; 30 is chosen for the same token-budget
+  reasoning D34 used for its own batched calls (kept well under typical
+  context limits even with two claim texts quoted per pair). A pair the
+  model's response omits, or whose `pair`/`kind` field fails to parse,
+  produces no `Relation` for that pair rather than a stage failure — matching
+  `FailurePolicy::DegradeWithEvent`'s intent of degrading gracefully rather
+  than discarding the whole batch over one bad element.
+- **Fewer than two claims.** With 0 or 1 claims there is no possible pair, so
+  `run()` short-circuits to an empty `AnalyzedRelations` without making any
+  provider call at all (asserted directly by
+  `fewer_than_two_claims_never_calls_the_provider`) — consistent with every
+  other stage's "don't spend budget on work with no possible output."

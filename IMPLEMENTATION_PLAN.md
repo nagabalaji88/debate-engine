@@ -1001,6 +1001,21 @@ the multi-artifact `Stage::In` gap this task had to close (a `ClusterInput`
 wrapper combining positions and claims — the first stage needing more than
 one upstream artifact) and the cluster/attach prompt contracts.
 
+**G4** (`arbiter-kernel/src/stages/relations_analyze.rs`) is implemented and
+tested — T1 (the same lexical candidate generation `claims.normalize` uses,
+now factored out into a shared `stages/similarity.rs` module rather than
+duplicated a third time) unioned with T2 (the polarity sweep deferred out of
+G3's scope above: cross-model claim pairs with opposing polarity cells on the
+same clustered option, per `ClusteredOptions.direct_matrix`), then one batched
+pairwise LLM call per candidate batch classifying each pair into
+`RelationKind` (`Supports`/`Contradicts`/`Qualifies`/`Unrelated`/`Uncertain`)
+with an explicit `from`/`to` direction and confidence. Output is a flat
+`Vec<Relation>` (`AnalyzedRelations`), already the exact shape
+`arbiter_core::decision::fixpoint::solve` and `decision::attachment::propagate`
+expect — no adapter needed when a later stage wires them together. See D35 for
+the `similarity.rs` extraction, the T2 literal reading, and the direction/
+batch-size choices.
+
 ---
 
 ## 6. Tasks — CLI
@@ -1350,7 +1365,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | G1 | ✅ | (this commit) | D28 — see PLAN_DEVIATIONS.md; pack machinery only, no production prompt content — see plan text above |
 | G2 | ☐ (partial: `init` + `positions.generate` + `claims.extract` + `claims.normalize`; `panel.resolve` deferred) | (this commit) | D30, D31, D32, D33 — see PLAN_DEVIATIONS.md; see plan text above |
 | G3 | ✅ | (this commit) | D34 — see PLAN_DEVIATIONS.md; propagate/score_options already built by C4, see plan text above |
-| G4 | ☐ | | |
+| G4 | ✅ | (this commit) | D35 — see PLAN_DEVIATIONS.md; shared `similarity.rs`, T2 polarity sweep literal reading |
 | G5 | ☐ | | |
 | G6 | ☐ | | |
 | G7 | ☐ | | |

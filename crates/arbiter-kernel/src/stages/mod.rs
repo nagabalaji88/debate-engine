@@ -7,3 +7,5 @@ pub mod claims_extract;
 pub mod claims_normalize;
 pub mod options_cluster;
 pub mod positions_generate;
+pub mod relations_analyze;
+pub(crate) mod similarity;
