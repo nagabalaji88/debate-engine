@@ -581,6 +581,19 @@ cargo test -p arbiter-store lease::tests::stale_boot_id_is_stealable
 ```
 The race test must spawn two threads that read the same epoch and both attempt the steal.
 
+`lease.rs` is Linux-only (`/proc/sys/kernel/random/boot_id`, `/proc/<pid>` for the
+liveness check — `#![forbid(unsafe_code)]` rules out `kill(pid, 0)`), matching CI's
+`ubuntu-latest`; neither spec file discusses any other platform.
+
+`sqlite_store.rs` implements `RunStore::create`/`reopen`/`reader`,
+`RunWriter::transact` and `Tx::append_event` (mechanical persistence: assign `seq`,
+store whatever `content_hash`/`previous_event_hash` the caller already computed —
+computing those correctly is S3's job, sitting above this layer) and
+`RunReader::events`. `Tx::put_artifact`/`put_cache`/`commit_budget`/`set_call_state`
+and `RunReader::verify_chain` return an explicit "not yet implemented, see &lt;task&gt;"
+error rather than a silently-wrong implementation — their tables (D21) or their
+logic (verify_chain's hash recomputation) belong to S3/S4/K1/K2/K5.
+
 ---
 
 ### S3 · Events and the hash chain
@@ -1131,7 +1144,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | C8 | ✅ | (this commit) | D18 — see PLAN_DEVIATIONS.md |
 | K0 | ✅ | (this commit) | D19, D20 — see PLAN_DEVIATIONS.md |
 | S1 | ✅ | (this commit) | D21 — see PLAN_DEVIATIONS.md |
-| S2 | ☐ | | |
+| S2 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | S3 | ☐ | | |
 | S4 | ☐ | | |
 | S5 | ☐ | | |

@@ -7,4 +7,15 @@
 //! so the orchestration engine never has to know SQLite exists.
 #![forbid(unsafe_code)]
 
+pub mod lease;
 pub mod schema;
+pub mod sqlite_store;
+
+/// The current instant, RFC3339 (`2026-08-31T12:04:11.221Z`) — the format
+/// ARCHITECTURE §9's `Event` envelope and every `run`/`schema_metadata` timestamp
+/// column use.
+pub fn now_rfc3339() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("RFC3339 formatting of the current time cannot fail")
+}
