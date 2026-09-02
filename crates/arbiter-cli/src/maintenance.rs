@@ -195,6 +195,118 @@ pub fn doctor_command(gc: bool, store_root: PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `arbiter export <run_id> --format json|markdown|ndjson` (ARCHITECTURE
+/// §12, §8.8). Writes to `<run_dir>/exports/`, matching the directory tree's
+/// own comment ("exports/ -- anything the operator asked for", §8's own
+/// layout). Not the `VACUUM INTO` whole-run copy §8.6 separately describes
+/// under "Copying a run" -- that copies the run's own storage files
+/// (`run.db`, `blobs/`) for backup/transport, a filesystem operation with
+/// no format choice; this renders the run's *content* into one of three
+/// interchange shapes, matching the `--format` flag §12's own CLI listing
+/// gives it (PLAN_DEVIATIONS.md D45).
+pub fn export_command(run_id: RunId, format: String, store_root: PathBuf) -> anyhow::Result<()> {
+    let reader = crate::render::open_reader(&store_root, &run_id)?;
+    let exports_dir = store_root.join(run_id.as_str()).join("exports");
+    std::fs::create_dir_all(&exports_dir)?;
+
+    let (filename, content) = match format.as_str() {
+        "json" => {
+            let record = crate::render::read_decision_record(reader.as_ref())?;
+            (
+                "export.json".to_string(),
+                serde_json::to_string_pretty(&record)?,
+            )
+        }
+        "markdown" => {
+            let record = crate::render::read_decision_record(reader.as_ref())?;
+            ("export.md".to_string(), render_markdown(&record))
+        }
+        "ndjson" => {
+            let events: Vec<String> = reader
+                .events()
+                .map_err(|e| anyhow::anyhow!("reading events: {e}"))?
+                .map(|e| serde_json::to_string(&e))
+                .collect::<Result<_, _>>()?;
+            ("export.ndjson".to_string(), events.join("\n"))
+        }
+        other => anyhow::bail!("unknown --format '{other}' -- expected json, markdown, or ndjson"),
+    };
+
+    let path = exports_dir.join(filename);
+    std::fs::write(&path, content)?;
+    println!("Wrote {}", path.display());
+    Ok(())
+}
+
+fn render_markdown(record: &arbiter_core::DecisionRecord) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("# Decision: {}\n\n", record.run_id.as_str()));
+    out.push_str(&format!("**Question:** {}\n\n", record.question));
+    out.push_str(&format!("**Outcome:** {:?}\n\n", record.outcome));
+    match &record.recommendation {
+        Some(r) => out.push_str(&format!(
+            "**Recommendation:** {} (`{}`)\n\n",
+            r.label,
+            r.option_id.as_str()
+        )),
+        None => out.push_str("**Recommendation:** none\n\n"),
+    }
+    out.push_str(&format!(
+        "**Confidence:** {:.2} (base {:.2})\n\n",
+        record.confidence.total, record.confidence.base
+    ));
+    out.push_str("## Confidence breakdown\n\n");
+    out.push_str("| Term | Value | Weight | Contribution |\n|---|---|---|---|\n");
+    for d in &record.confidence.dimensions {
+        out.push_str(&format!(
+            "| {} | {:.2} | {:.2} | {:+.4} |\n",
+            d.name, d.value, d.weight, d.contribution
+        ));
+    }
+    for p in &record.confidence.penalties {
+        out.push_str(&format!(
+            "| {} (penalty) | {} | {:.2} | {:+.4} |\n",
+            p.name,
+            p.input
+                .map(|v| format!("{v:.2}"))
+                .unwrap_or_else(|| "-".to_string()),
+            p.rate,
+            p.contribution
+        ));
+    }
+    out.push_str(&format!(
+        "\n## Claims\n\n{} agreed, {} disputed, {} unresolved, {} defeated\n\n",
+        record.claims.agreed,
+        record.claims.disputed,
+        record.claims.unresolved,
+        record.claims.defeated
+    ));
+    if !record.options.is_empty() {
+        out.push_str("## Options\n\n| Option | Share |\n|---|---|\n");
+        for o in &record.options {
+            out.push_str(&format!(
+                "| {} (`{}`) | {:.2} |\n",
+                o.label,
+                o.id.as_str(),
+                o.share
+            ));
+        }
+        out.push('\n');
+    }
+    if !record.change_triggers.is_empty() {
+        out.push_str("## Change triggers\n\n");
+        for t in &record.change_triggers {
+            out.push_str(&format!("- `{}` {:?}\n", t.claim_id.as_str(), t.direction));
+        }
+        out.push('\n');
+    }
+    out.push_str(&format!(
+        "---\nengine_version: {}  \ninputs_hash: {}\n",
+        record.engine_version, record.inputs_hash
+    ));
+    out
+}
+
 pub fn keys_list_command() -> anyhow::Result<()> {
     println!(
         "No credential sources are resolved in this build -- P3 (ARCHITECTURE §11.1: \

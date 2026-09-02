@@ -1217,10 +1217,12 @@ the ledger invariant, orphaned spend, and orphaned blobs.
 scope note above ("security-sensitive... deserves focused attention"), P4
 (real adapters) deferred alongside it. Rather than block the whole task on a
 dependency the plan itself already chose to defer, this splits along that
-same line: `accept`, `doctor`, `reindex` need nothing from P3/P4 and are
-built for real; `keys`/`providers` are the two subcommands that genuinely
-cannot exist without it, and get honest stubs naming the gap rather than
-fabricated credential state. New: `arbiter-core::acceptance`
+same line: `accept`, `doctor`, `reindex`, `export` need nothing from P3/P4
+and are built for real (`export --format json|markdown|ndjson`, added on a
+second pass after re-checking the plan's own detailed L4 command table
+against what had shipped); `keys`/`providers` are the two subcommands that
+genuinely cannot exist without it, and get honest stubs naming the gap
+rather than fabricated credential state. New: `arbiter-core::acceptance`
 (`DecisionAcceptance`/`DecisionOverride`, INTERFACES §17) — `from` is always
 `null` since there is no Build Studio document to read a prior value from
 (Build Studio does not exist, ARCHITECTURE §13). Running `accept` for real
@@ -1563,7 +1565,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | L1 | ✅ | (this commit) | D42 — see PLAN_DEVIATIONS.md; first StageGraph executor, `--panel mock` only, content_hash collision fixed across G4–G9 |
 | L2 | ✅ | (this commit) | D43 — see PLAN_DEVIATIONS.md; new artifact-read path, `claim_standings`, `defeat_chain_for`, `history.db` writes added to `run_command` |
 | L3 | ✅ | (this commit) | D44 — see PLAN_DEVIATIONS.md; `cache_entries` was never written to before this task, fixed for `run` too; `--repolicy`/`--repack` deferred |
-| L4 | ✅ (partial) | (this commit) | D45 — see PLAN_DEVIATIONS.md; `accept`/`doctor`/`reindex` built for real, `keys`/`providers` are honest P3/P4-deferred stubs; fixed a real RunHandle event-id collision and a `doctor` false positive |
+| L4 | ✅ (partial) | (this commit) | D45 — see PLAN_DEVIATIONS.md; `accept`/`doctor`/`reindex`/`export` built for real, `keys`/`providers` are honest P3/P4-deferred stubs; fixed a real RunHandle event-id collision and a `doctor` false positive |
 | F1 | ☐ | | |
 | F2 | ☐ | | |
 | U1 | ☐ | | |

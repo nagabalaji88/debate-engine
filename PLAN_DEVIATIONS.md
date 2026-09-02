@@ -1948,7 +1948,7 @@ other crates' counts unchanged), `cargo fmt --all -- --check` clean,
 `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 clean.
 
-## D45 — L4: `accept`/`doctor`/`reindex`/`keys`/`providers` — a real event-id collision, a real `doctor` false positive, and P3/P4's own honest stub
+## D45 — L4: `accept`/`doctor`/`reindex`/`export`/`keys`/`providers` — a real event-id collision, a real `doctor` false positive, and P3/P4's own honest stub
 
 L4's own dependency line in IMPLEMENTATION_PLAN.md names `L2, P3` — and P3
 (credential resolution: OS keychain, write-path redaction, secret
@@ -1958,10 +1958,26 @@ own review rather than being rushed alongside P1/P2"), with P4 (real HTTP
 adapters) deferred alongside it for the same reason. Rather than block this
 entire task on a dependency the plan itself already chose to defer, L4 is
 split along the line the plan's own scope note draws: `accept`, `doctor`,
-`reindex` need nothing from P3/P4 and are built for real; `keys`/`providers`
-are the two subcommands that genuinely cannot exist without it, and get
-honest stubs that name the gap rather than fabricate credential state or a
-provider roster that doesn't exist.
+`reindex`, `export` need nothing from P3/P4 and are built for real;
+`keys`/`providers` are the two subcommands that genuinely cannot exist
+without it, and get honest stubs that name the gap rather than fabricate
+credential state or a provider roster that doesn't exist.
+
+- **`arbiter export <run_id> --format json|markdown|ndjson`**, initially
+  missed on this task's first pass — its full command line appears only in
+  IMPLEMENTATION_PLAN.md's own detailed L4 command table (`accept
+  [--override...], keys ..., providers ..., doctor [--gc], reindex,
+  export --format`), not in the short summary row this task's scope note
+  was first read from. Added once re-checking the plan against what had
+  actually shipped surfaced the gap. Writes to `<run_dir>/exports/`,
+  matching the directory tree's own comment (§8's layout: "exports/ --
+  anything the operator asked for"). Distinct from §8.6's own "Copying a
+  run" (`VACUUM INTO` + a recursive blob copy) — that section describes a
+  filesystem-level backup/transport operation with no format choice, not
+  this command's own `--format` rendering; `json` is the stored
+  `DecisionRecord` (matching `show --json`), `markdown` a human-readable
+  report of the same, `ndjson` the run's own event log, one envelope per
+  line (§8.8: "NDJSON... remains the interchange format").
 
 - **`DecisionAcceptance`/`DecisionOverride`** (INTERFACES §17), new in
   `arbiter-core::acceptance` — pure recorded data, not computed, the same
@@ -2027,8 +2043,10 @@ provider roster that doesn't exist.
 Verified end to end: `reindex` against a real store; `doctor` against a
 real completed run (no false "stuck" report after the fix) and a
 simulated interrupted one; `accept` with and without `--override`, and its
-rejection of an unexplained override; `keys`/`providers` list and their
-refusals. Full workspace: build clean, `cargo test --workspace` green (all
+rejection of an unexplained override; `export` in all three formats
+(content checked, not just exit status) plus its rejection of an unknown
+`--format`; `keys`/`providers` list and their refusals. Full workspace:
+build clean, `cargo test --workspace` green (all
 counts unchanged — this task added no new unit tests, verified instead by
 the CLI-level regressions above, the same split this session has used
 throughout for CLI-only code), `cargo fmt --all -- --check` clean, `cargo

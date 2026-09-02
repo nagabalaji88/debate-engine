@@ -143,6 +143,14 @@ enum Command {
         #[arg(long, default_value = ".arbiter/runs")]
         store: PathBuf,
     },
+    /// Render a run's decision into `<run_dir>/exports/`.
+    Export {
+        run_id: String,
+        #[arg(long)]
+        format: String,
+        #[arg(long, default_value = ".arbiter/runs")]
+        store: PathBuf,
+    },
     /// Credential sources -- P3 is not implemented in this build.
     Keys {
         #[command(subcommand)]
@@ -331,6 +339,11 @@ async fn main() -> anyhow::Result<()> {
         } => accept::accept_command(RunId::new(run_id), overrides, reason, json, store),
         Command::Doctor { gc, store } => maintenance::doctor_command(gc, store),
         Command::Reindex { store } => maintenance::reindex_command(store),
+        Command::Export {
+            run_id,
+            format,
+            store,
+        } => maintenance::export_command(RunId::new(run_id), format, store),
         Command::Keys { action } => match action {
             KeysAction::List => maintenance::keys_list_command(),
             KeysAction::Set { .. } => maintenance::keys_unimplemented("set"),
