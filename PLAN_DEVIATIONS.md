@@ -788,3 +788,71 @@ any of the 15 pipeline stages. Authoring each stage's real `.md` template is
 each `G2`–`G9` task's own job as it implements that stage, matching the task
 table's "one task per stage group" division; a `prompts/` directory with real
 production content is not part of this commit.
+
+## D29 — S4's scope, the `Artifact`/`Tx` trait gap, and the four tables this pass adds
+
+ARCHITECTURE §8.1's projection table names 15 tables by name only; S1 (D21)
+deferred all of them. This pass adds four — `budget`, `provider_calls`,
+`cache_entries`, `artifacts` — the ones INTERFACES §5's crash-recovery write
+order and ARCHITECTURE §8.3's own SQL examples specify precisely enough to
+implement without inventing a shape no real stage has exercised yet. `stages`
+and the ten claim-graph/decision projections (`positions`, `claims`,
+`claim_relations`, `disputes`, `challenges`, `rebuttals`, `judge_evaluations`,
+`decision`, `decision_triggers`, `provenance`) stay deferred to `G2`–`G9`,
+whose own stage implementations are what will pin their real payload shapes —
+designing those columns now, before any stage exists to need them, risks
+building against a shape the real stage code then has to work around, the
+same reasoning D27 already applied to `cache_entries`/`artifacts` full replay.
+
+**Two trait extensions, both required to make persistence actually
+implementable, not stylistic:**
+
+- `Artifact` (INTERFACES §6: "content-addressed, `serde`-typed, and
+  versioned") had `artifact_type()`/`content_hash()` but no way to get its
+  actual bytes onto disk — `to_json(&self) -> serde_json::Value` is added so
+  `Tx::put_artifact` has something to persist. A conforming implementation
+  must keep `content_hash()` in agreement with `to_json()`'s output (the hash
+  of that value). Both existing `impl Artifact` blocks in the workspace
+  (`arbiter-kernel::store`'s `TestArtifact`, `arbiter-kernel::stage`'s
+  `Question`/`WordCount`) gained the method; a third was added to
+  `arbiter-store::sqlite_store`'s own tests.
+- `Tx::reserve_call(call_id, reservation_id, reserved_amount)` — not in
+  INTERFACES §1's literal `Tx` trait. INTERFACES §5 step 0 requires, in one
+  transaction: `BUDGET_RESERVED{reservation_id, estimate}`, an INSERT into
+  `provider_calls` with `state RESERVED` and `reserved_amount`, and
+  `budget.reserved += estimate`. `set_call_state(call_id, state)` alone has
+  nowhere to carry `reserved_amount` or create the row in the first place —
+  it can only transition a row that already exists. Rather than silently
+  widen `set_call_state`'s meaning to "create if absent, using undocumented
+  side data," this pass adds the one method the write-order sequence proves
+  is missing.
+
+**`provider_calls` is keyed by `call_id`, not `reservation_id`** —
+`arbiter_kernel::ids::CallId`'s own doc comment already said this is "the key
+... the `provider_calls` table [is] keyed on." `reservation_id` is a column: a
+retry against an idempotent provider (INTERFACES §5: "the reservation stays
+HELD across the retry — never released and re-reserved") shares one
+`reservation_id` across more than one `call_id`, so `commit_budget` looks up
+the reservation's held amount from the most recent `provider_calls` row for
+that `reservation_id` rather than assuming exactly one row per reservation.
+
+**`arbiter-store/src/project.rs`** (the plan's own named file) rebuilds
+`budget`/`provider_calls` by replaying `events` — clears both tables and
+re-derives them from `BUDGET_RESERVED`, `CALL_STARTED`, `CALL_REQUEST_ID`, and
+`CALL_COMPLETED` events in `seq` order. Payload field names
+(`{reservation_id, estimate}`, `{call_id, prompt_hash, reservation_id,
+estimate}`, `{call_id, request_id}`, `{call_id, response_hash, actual_cost}`)
+are copied directly from INTERFACES §5's own brace notation — nothing invented
+beyond giving that notation a concrete JSON key spelling. Only the happy path
+is reconstructed; `CALL_RETRYING`/`CALL_ORPHANED`/`CALL_RECOVERED` and
+`BUDGET_RELEASED`/`BUDGET_EXHAUSTED` are not replayed here (their full
+crash-recovery branch logic, INTERFACES §5's own table, belongs to K2/L3's
+resume implementation, not this projection rebuild). A `BUDGET_RESERVED` with
+no matching `CALL_STARTED` is, correctly, never applied to either table —
+INTERFACES §5 states that exact case "resumes as FAILED with the reservation
+released," i.e. nets to zero held, which is what not applying it produces by
+construction. `cache_entries`/`artifacts` are written directly by
+`put_cache`/`put_artifact` at write time and are not replayed by
+`rebuild_operational_projections` — no per-stage event payload contract for
+cache/artifact content exists yet to replay from (the same gap D27 already
+named for blob GC's referenced-set).

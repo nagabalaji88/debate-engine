@@ -392,6 +392,9 @@ mod tests {
         fn content_hash(&self) -> String {
             format!("blake3:{}", blake3::hash(self.0.as_bytes()).to_hex())
         }
+        fn to_json(&self) -> serde_json::Value {
+            serde_json::json!({"question": self.0})
+        }
     }
 
     #[derive(Debug)]
@@ -402,6 +405,9 @@ mod tests {
         }
         fn content_hash(&self) -> String {
             format!("blake3:{}", blake3::hash(&self.0.to_le_bytes()).to_hex())
+        }
+        fn to_json(&self) -> serde_json::Value {
+            serde_json::json!({"word_count": self.0})
         }
     }
 

@@ -9,8 +9,9 @@ use rusqlite::Connection;
 /// migration file.
 pub const CURRENT_DB_SCHEMA_VERSION: i64 = 1;
 
-/// `run.db`'s only migration so far — `events`, `run`, `schema_metadata`
-/// (PLAN_DEVIATIONS.md D21 explains why the other ~15 projection tables
+/// `run.db`'s only migration so far — `events`, `run`, `schema_metadata`,
+/// `budget`, `provider_calls`, `cache_entries`, `artifacts` (PLAN_DEVIATIONS.md
+/// D21/D29 explain why `stages` and the ten claim-graph/decision projections
 /// ARCHITECTURE §8.1 names are not here yet).
 const RUN_DB_MIGRATION_0001: &str = include_str!("../migrations/0001_initial.sql");
 

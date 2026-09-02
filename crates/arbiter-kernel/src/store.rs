@@ -107,6 +107,15 @@ pub trait Artifact: std::fmt::Debug + Send + Sync {
     /// `blake3` (or equivalent) of the artifact's canonical serialized form —
     /// what makes it content-addressed.
     fn content_hash(&self) -> String;
+    /// The artifact's own canonical serialized form — what [`Tx::put_artifact`]
+    /// actually persists into the `artifacts` table (S4). Not in INTERFACES
+    /// §1's literal `&Artifact` signature, which never says how a trait object
+    /// gets its bytes onto disk; added because "content-addressed, `serde`-typed"
+    /// (INTERFACES §6) is meaningless without one (PLAN_DEVIATIONS.md D29). A
+    /// conforming implementation must keep this and [`Self::content_hash`] in
+    /// agreement — the hash of this value, by whatever hasher `content_hash`
+    /// uses.
+    fn to_json(&self) -> serde_json::Value;
 }
 
 /// INTERFACES §1, copied verbatim except `manifest`/`run_id` types resolve to
@@ -138,6 +147,22 @@ pub trait RunWriter: Send {
 
 pub trait Tx {
     fn append_event(&mut self, e: &Event) -> Result<Sequence, StoreError>;
+    /// Not in INTERFACES §1's literal `Tx` trait. INTERFACES §5's own write-order
+    /// (step 0: `BUDGET_RESERVED{reservation_id, estimate}` + "INSERT
+    /// provider_calls (state RESERVED, reserved_amount)" + "budget.reserved +=
+    /// estimate", all one transaction) names data — `reserved_amount`, and the
+    /// `call_id` [`Tx::set_call_state`] later transitions by — that
+    /// `set_call_state(call_id, state)` alone has nowhere to carry at the moment
+    /// the row is first created, before any call has been dispatched to have a
+    /// `state` transition applied to. Added to close that gap
+    /// (PLAN_DEVIATIONS.md D29) rather than silently widening
+    /// `set_call_state`'s meaning to include "create if absent."
+    fn reserve_call(
+        &mut self,
+        call_id: &CallId,
+        reservation_id: &ReservationId,
+        reserved_amount: Cost,
+    ) -> Result<(), StoreError>;
     fn put_artifact(&mut self, a: &dyn Artifact) -> Result<ArtifactId, StoreError>;
     fn put_cache(&mut self, k: &CacheKey, r: &CachedResponse) -> Result<(), StoreError>;
     fn commit_budget(&mut self, r: &ReservationId, actual: Cost) -> Result<(), StoreError>;
@@ -166,6 +191,9 @@ mod tests {
         }
         fn content_hash(&self) -> String {
             "blake3:test".to_string()
+        }
+        fn to_json(&self) -> serde_json::Value {
+            serde_json::json!({"kind": "test"})
         }
     }
 
@@ -206,6 +234,14 @@ mod tests {
             stored.sequence = Some(seq);
             events.push(stored);
             Ok(seq)
+        }
+        fn reserve_call(
+            &mut self,
+            _call_id: &CallId,
+            _reservation_id: &ReservationId,
+            _reserved_amount: Cost,
+        ) -> Result<(), StoreError> {
+            Ok(())
         }
         fn put_artifact(&mut self, a: &dyn Artifact) -> Result<ArtifactId, StoreError> {
             Ok(ArtifactId::new(a.content_hash()))

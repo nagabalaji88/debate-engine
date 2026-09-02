@@ -654,16 +654,33 @@ export is deferred to whichever CLI task (`L2`/`L4`) actually implements `arbite
 run --export`, since S6's own acceptance test doesn't exercise it and nothing else
 in the workspace calls it yet.
 
-**Scope note (S5 done; S4 still pending):** S5 (`src/blob.rs`) is implemented and
-tested — content-addressed write (`write_blob`, fsync-before-return, idempotent
-on identical content), read, the fixed `blobs/b3/<hash>` layout, and lazy GC
-(`gc_one_run`/`gc_run`, lease-checked via `lease::owner_is_gone`/`boot_id` made
-`pub(crate)` for exactly this reuse). `DEFAULT_BLOB_THRESHOLD_BYTES` (128 KB) is
-defined here per D5's ownership assignment. GC's referenced-hash set is
-caller-supplied rather than queried from `cache_entries`/`artifacts` — those
-tables don't exist in `run.db` until S4 — following S6's own D21 precedent; see
-D27. S4 itself remains its own pass: real per-stage event-payload schemas need
-designing before a `project.rs` rebuild can be written against them.
+**Scope note (S5 done; S4 done for 4 of ~15 tables):** S5 (`src/blob.rs`) is
+implemented and tested — content-addressed write (`write_blob`,
+fsync-before-return, idempotent on identical content), read, the fixed
+`blobs/b3/<hash>` layout, and lazy GC (`gc_one_run`/`gc_run`, lease-checked via
+`lease::owner_is_gone`/`boot_id` made `pub(crate)` for exactly this reuse).
+`DEFAULT_BLOB_THRESHOLD_BYTES` (128 KB) is defined here per D5's ownership
+assignment. GC's referenced-hash set is caller-supplied rather than queried
+from `cache_entries`/`artifacts` (D27) — at the time S5 landed those tables
+didn't exist yet either; S4 (below) has since added them, but `gc`'s
+referenced-set injection stays as-is since it is still correct and a future
+`doctor` (L-task) is the natural place to wire the real query in.
+
+S4 (`src/project.rs`) adds `budget`, `provider_calls`, `cache_entries` and
+`artifacts` — the four projection tables INTERFACES §5's crash-recovery
+sequence and ARCHITECTURE §8.3's SQL examples specify precisely enough to
+implement now. `Tx::put_artifact`/`put_cache`/`commit_budget`/`set_call_state`
+(previously `StoreError::Other` stubs naming this task, D21) are real against
+these tables; a new `Tx::reserve_call` method and an `Artifact::to_json`
+method were added to close two gaps the literal INTERFACES §1/§6 trait
+signatures left — neither carried enough to actually persist a reservation or
+an artifact's bytes. `project.rs::rebuild_operational_projections` replays
+`events` to reconstruct `budget`/`provider_calls`'s happy path.
+`stages` and the ten claim-graph/decision projections remain deferred to
+`G2`–`G9`, whose real per-stage event payloads are what should pin their
+columns — see D29 for the full reasoning and the exact scope of what this
+pass's replay does and does not reconstruct (crash-recovery states other than
+the happy path are explicitly out of scope here, left to K2/L3).
 
 **Acceptance**
 ```bash
@@ -673,6 +690,12 @@ cargo test -p arbiter-store blob::tests::gc_skips_a_run_with_a_live_lease
 cargo test -p arbiter-store catalog::tests::concurrent_writers_do_not_block_readers
 cargo test -p arbiter-store catalog::tests::reindex_rebuilds_from_run_dbs
 ```
+`project::tests::rebuild_equals_original` names the fixture-driven, full-table
+version of this test — not yet meaningful until the claim-graph projections
+exist. `project.rs`'s own test module has this pass's real equivalent instead:
+`rebuild_reconstructs_the_happy_path`, `a_reservation_with_no_call_started_resumes_as_released`,
+`rebuild_is_idempotent_and_clears_stale_rows_first`, and
+`an_event_with_a_malformed_payload_is_skipped_not_fatal`.
 
 ---
 
@@ -1235,7 +1258,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | S1 | ✅ | (this commit) | D21 — see PLAN_DEVIATIONS.md |
 | S2 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | S3 | ✅ | (this commit) | D22 — see PLAN_DEVIATIONS.md |
-| S4 | ☐ | unblocked (K3, C8 done); not started | |
+| S4 | ✅ (partial) | (this commit) | D29 — see PLAN_DEVIATIONS.md; budget/provider_calls/cache_entries/artifacts only, see plan text above |
 | S5 | ✅ | (this commit) | D27 — see PLAN_DEVIATIONS.md |
 | S6 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K1 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |

@@ -6,11 +6,10 @@
 //! whatever `content_hash`/`previous_event_hash` the caller already computed) and
 //! `RunReader::events` are S2's own scope. `RunReader::verify_chain` and the real
 //! hash-chaining logic that feeds `append_event` correct hashes live in
-//! `events.rs` (S3). Four `Tx` methods (`put_artifact`/`put_cache`/
-//! `commit_budget`/`set_call_state`) still need tables S1 deliberately did not
-//! create (PLAN_DEVIATIONS.md D21: `artifacts`, `cache_entries`, `budget`,
-//! `provider_calls` wait for K1/K2/K5) and return `StoreError::Other` naming the
-//! task that lands them, rather than a silently-wrong implementation.
+//! `events.rs` (S3). `Tx::reserve_call`/`put_artifact`/`put_cache`/
+//! `commit_budget`/`set_call_state` — the four INTERFACES §1 names plus
+//! `reserve_call` (PLAN_DEVIATIONS.md D29) — are implemented here against the
+//! `budget`/`provider_calls`/`cache_entries`/`artifacts` tables S4 adds.
 
 use crate::lease::{self, LeaseError, Owner};
 use crate::{now_rfc3339, schema};
@@ -129,12 +128,6 @@ struct SqliteTx<'conn> {
     tx: rusqlite::Transaction<'conn>,
 }
 
-const NOT_YET_IMPLEMENTED_BUDGET: &str = "provider_calls/budget tables land in K1 (budget ledger) / K2 (call state machine) — PLAN_DEVIATIONS.md D21";
-const NOT_YET_IMPLEMENTED_CACHE: &str =
-    "cache_entries table lands in K5 (response cache) — PLAN_DEVIATIONS.md D21";
-const NOT_YET_IMPLEMENTED_ARTIFACTS: &str =
-    "artifacts table lands in S4 (projections) — PLAN_DEVIATIONS.md D21";
-
 impl Tx for SqliteTx<'_> {
     fn append_event(&mut self, e: &Event) -> Result<Sequence, KernelStoreError> {
         self.tx
@@ -158,28 +151,131 @@ impl Tx for SqliteTx<'_> {
         Ok(Sequence::new(self.tx.last_insert_rowid() as u64))
     }
 
-    fn put_artifact(&mut self, _a: &dyn Artifact) -> Result<ArtifactId, KernelStoreError> {
-        Err(KernelStoreError::Other(
-            NOT_YET_IMPLEMENTED_ARTIFACTS.to_string(),
-        ))
+    /// INTERFACES §5 step 0: `BUDGET_RESERVED{reservation_id, estimate}` +
+    /// "INSERT provider_calls (state RESERVED, reserved_amount)" +
+    /// "budget.reserved += estimate" — the row is created here, in `RESERVED`,
+    /// before any request has left the machine; [`Tx::set_call_state`] only ever
+    /// transitions it afterwards.
+    fn reserve_call(
+        &mut self,
+        call_id: &CallId,
+        reservation_id: &ReservationId,
+        reserved_amount: Cost,
+    ) -> Result<(), KernelStoreError> {
+        let state_json = serde_json::to_string(&CallState::Reserved)
+            .map_err(|e| KernelStoreError::Other(e.to_string()))?;
+        self.tx
+            .execute(
+                "INSERT INTO provider_calls (call_id, reservation_id, state, reserved_amount, actual_cost, request_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5)",
+                rusqlite::params![
+                    call_id.as_str(),
+                    reservation_id.as_str(),
+                    state_json,
+                    reserved_amount.0,
+                    now_rfc3339(),
+                ],
+            )
+            .map_err(sqlite_error_to_store_error)?;
+        self.tx
+            .execute(
+                "UPDATE budget SET reserved = reserved + ?1",
+                [reserved_amount.0],
+            )
+            .map_err(sqlite_error_to_store_error)?;
+        Ok(())
     }
 
-    fn put_cache(&mut self, _k: &CacheKey, _r: &CachedResponse) -> Result<(), KernelStoreError> {
-        Err(KernelStoreError::Other(
-            NOT_YET_IMPLEMENTED_CACHE.to_string(),
-        ))
+    /// Content-addressed and idempotent: a re-put of an artifact whose hash
+    /// already exists is a no-op, matching `blob.rs::write_blob`'s own stance —
+    /// identical content hashes identically, so there is nothing to overwrite.
+    fn put_artifact(&mut self, a: &dyn Artifact) -> Result<ArtifactId, KernelStoreError> {
+        let id = ArtifactId::new(a.content_hash());
+        self.tx
+            .execute(
+                "INSERT INTO artifacts (artifact_id, artifact_type, payload, created_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(artifact_id) DO NOTHING",
+                rusqlite::params![
+                    id.as_str(),
+                    a.artifact_type(),
+                    a.to_json().to_string(),
+                    now_rfc3339(),
+                ],
+            )
+            .map_err(sqlite_error_to_store_error)?;
+        Ok(id)
     }
 
-    fn commit_budget(&mut self, _r: &ReservationId, _actual: Cost) -> Result<(), KernelStoreError> {
-        Err(KernelStoreError::Other(
-            NOT_YET_IMPLEMENTED_BUDGET.to_string(),
-        ))
+    fn put_cache(&mut self, k: &CacheKey, r: &CachedResponse) -> Result<(), KernelStoreError> {
+        self.tx
+            .execute(
+                "INSERT INTO cache_entries (provider, model, params, prompt_hash, response_hash, size_bytes, inline)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(provider, model, params, prompt_hash) DO UPDATE SET
+                   response_hash = excluded.response_hash,
+                   size_bytes = excluded.size_bytes,
+                   inline = excluded.inline",
+                rusqlite::params![
+                    k.provider.as_str(),
+                    k.model.as_str(),
+                    k.params,
+                    k.prompt_hash,
+                    r.response_hash,
+                    r.size_bytes as i64,
+                    r.inline,
+                ],
+            )
+            .map_err(sqlite_error_to_store_error)?;
+        Ok(())
     }
 
-    fn set_call_state(&mut self, _c: &CallId, _s: CallState) -> Result<(), KernelStoreError> {
-        Err(KernelStoreError::Other(
-            NOT_YET_IMPLEMENTED_BUDGET.to_string(),
-        ))
+    /// INTERFACES §5 step 5: `budget: reserved -= estimate, committed += actual`
+    /// plus `UPDATE provider_calls SET state = COMPLETED`, one transaction.
+    ///
+    /// The reservation's held amount is read back from `provider_calls` (the
+    /// most recent row for this `reservation_id`, since a retry against an
+    /// idempotent provider can share one reservation across more than one
+    /// `call_id`, and every such row was reserved for the same amount) rather
+    /// than threaded through this call's own parameters, because `Cost` here is
+    /// `actual`, not the original estimate.
+    fn commit_budget(&mut self, r: &ReservationId, actual: Cost) -> Result<(), KernelStoreError> {
+        let reserved_amount: f64 = self
+            .tx
+            .query_row(
+                "SELECT reserved_amount FROM provider_calls
+                 WHERE reservation_id = ?1 ORDER BY created_at DESC LIMIT 1",
+                [r.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_error_to_store_error)?;
+        self.tx
+            .execute(
+                "UPDATE budget SET committed = committed + ?1, reserved = reserved - ?2",
+                rusqlite::params![actual.0, reserved_amount],
+            )
+            .map_err(sqlite_error_to_store_error)?;
+        let state_json = serde_json::to_string(&CallState::Completed)
+            .map_err(|e| KernelStoreError::Other(e.to_string()))?;
+        self.tx
+            .execute(
+                "UPDATE provider_calls SET state = ?1, actual_cost = ?2 WHERE reservation_id = ?3",
+                rusqlite::params![state_json, actual.0, r.as_str()],
+            )
+            .map_err(sqlite_error_to_store_error)?;
+        Ok(())
+    }
+
+    fn set_call_state(&mut self, c: &CallId, s: CallState) -> Result<(), KernelStoreError> {
+        let state_json =
+            serde_json::to_string(&s).map_err(|e| KernelStoreError::Other(e.to_string()))?;
+        self.tx
+            .execute(
+                "UPDATE provider_calls SET state = ?1 WHERE call_id = ?2",
+                rusqlite::params![state_json, c.as_str()],
+            )
+            .map_err(sqlite_error_to_store_error)?;
+        Ok(())
     }
 }
 
@@ -387,32 +483,167 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[derive(Debug)]
+    struct TestArtifact {
+        content: &'static str,
+    }
+    impl Artifact for TestArtifact {
+        fn artifact_type(&self) -> &'static str {
+            "test.v1"
+        }
+        fn content_hash(&self) -> String {
+            format!("blake3:{}", blake3::hash(self.content.as_bytes()).to_hex())
+        }
+        fn to_json(&self) -> serde_json::Value {
+            serde_json::json!({"content": self.content})
+        }
+    }
+
+    fn read_budget(conn: &Connection) -> (f64, f64) {
+        conn.query_row("SELECT reserved, committed FROM budget", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap()
+    }
+
     #[test]
-    fn budget_and_cache_methods_report_not_yet_implemented_rather_than_panic() {
+    fn put_cache_round_trips_through_a_real_table() {
         let root = temp_root();
         let store = SqliteRunStore::new(&root);
         let run_id = RunId::new("run_1");
         let mut writer = store.create(&run_id, &manifest()).unwrap();
 
+        let key = CacheKey {
+            provider: arbiter_core::ProviderId::new("anthropic"),
+            model: arbiter_core::ModelId::new("claude"),
+            params: "{}".to_string(),
+            prompt_hash: "blake3:p".to_string(),
+        };
+        let response = CachedResponse {
+            response_hash: "blake3:r".to_string(),
+            size_bytes: 10,
+            inline: Some("hi".to_string()),
+        };
+
+        writer
+            .transact(&mut |tx| tx.put_cache(&key, &response))
+            .unwrap();
+
+        // A second put of the same key overwrites rather than conflicting.
+        let updated = CachedResponse {
+            response_hash: "blake3:r2".to_string(),
+            size_bytes: 20,
+            inline: Some("bye".to_string()),
+        };
+        writer
+            .transact(&mut |tx| tx.put_cache(&key, &updated))
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn put_artifact_is_idempotent_on_identical_content() {
+        let root = temp_root();
+        let store = SqliteRunStore::new(&root);
+        let run_id = RunId::new("run_1");
+        let mut writer = store.create(&run_id, &manifest()).unwrap();
+
+        let artifact = TestArtifact { content: "hello" };
+        let id_a = writer
+            .transact(&mut |tx| tx.put_artifact(&artifact).map(|_| ()))
+            .map(|_| ArtifactId::new(artifact.content_hash()))
+            .unwrap();
+        // Re-putting identical content must not error (ON CONFLICT DO NOTHING).
+        writer
+            .transact(&mut |tx| tx.put_artifact(&artifact).map(|_| ()))
+            .unwrap();
+
+        assert_eq!(id_a.as_str(), artifact.content_hash());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reserve_call_then_commit_moves_money_from_reserved_to_committed() {
+        let root = temp_root();
+        let store = SqliteRunStore::new(&root);
+        let run_id = RunId::new("run_1");
+        let mut writer = store.create(&run_id, &manifest()).unwrap();
+
+        let call_id = CallId::new("call_1");
+        let reservation_id = ReservationId::new("res_1");
+
+        writer
+            .transact(&mut |tx| tx.reserve_call(&call_id, &reservation_id, Cost(0.50)))
+            .unwrap();
+
         writer
             .transact(&mut |tx| {
-                let cache_result = tx.put_cache(
-                    &CacheKey {
-                        provider: arbiter_core::ProviderId::new("anthropic"),
-                        model: arbiter_core::ModelId::new("claude"),
-                        params: "{}".to_string(),
-                        prompt_hash: "blake3:p".to_string(),
-                    },
-                    &CachedResponse {
-                        response_hash: "blake3:r".to_string(),
-                        size_bytes: 10,
-                        inline: Some("hi".to_string()),
-                    },
-                );
-                assert!(matches!(cache_result, Err(KernelStoreError::Other(_))));
+                tx.set_call_state(&call_id, CallState::Sent)?;
+                tx.set_call_state(&call_id, CallState::Acknowledged)?;
                 Ok(())
             })
             .unwrap();
+
+        writer
+            .transact(&mut |tx| tx.commit_budget(&reservation_id, Cost(0.30)))
+            .unwrap();
+
+        let conn = Connection::open(root.join("run_1").join("run.db")).unwrap();
+        let (reserved, committed) = read_budget(&conn);
+        assert!((reserved - 0.0).abs() < 1e-9, "reserved: {reserved}");
+        assert!((committed - 0.30).abs() < 1e-9, "committed: {committed}");
+
+        let state_json: String = conn
+            .query_row(
+                "SELECT state FROM provider_calls WHERE call_id = ?1",
+                [call_id.as_str()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            state_json,
+            serde_json::to_string(&CallState::Completed).unwrap()
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_retry_shares_one_reservation_across_two_call_ids() {
+        // INTERFACES §5: "the reservation stays HELD across the retry -- never
+        // released and re-reserved." Two provider_calls rows, same
+        // reservation_id, and commit_budget still finds the reserved_amount.
+        let root = temp_root();
+        let store = SqliteRunStore::new(&root);
+        let run_id = RunId::new("run_1");
+        let mut writer = store.create(&run_id, &manifest()).unwrap();
+
+        let reservation_id = ReservationId::new("res_1");
+        let first_attempt = CallId::new("call_1");
+        let retry = CallId::new("call_2");
+
+        writer
+            .transact(&mut |tx| tx.reserve_call(&first_attempt, &reservation_id, Cost(1.00)))
+            .unwrap();
+        writer
+            .transact(&mut |tx| tx.set_call_state(&first_attempt, CallState::Orphaned))
+            .unwrap();
+        // The retry is a *new* provider_calls row sharing the same
+        // reservation_id and the same reserved_amount -- the reservation
+        // itself was never released.
+        writer
+            .transact(&mut |tx| tx.reserve_call(&retry, &reservation_id, Cost(1.00)))
+            .unwrap();
+
+        writer
+            .transact(&mut |tx| tx.commit_budget(&reservation_id, Cost(0.80)))
+            .unwrap();
+
+        let conn = Connection::open(root.join("run_1").join("run.db")).unwrap();
+        let (_, committed) = read_budget(&conn);
+        assert!((committed - 0.80).abs() < 1e-9);
 
         let _ = std::fs::remove_dir_all(&root);
     }
