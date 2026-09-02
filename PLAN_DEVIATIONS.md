@@ -399,3 +399,111 @@ plus `engine_version`/`inputs_hash` as opaque caller-supplied strings. The five
 omitted fields wait for `G9 decision.synthesize` — the kernel stage that actually
 has model tallies, judge-to-claim joins, and `Completeness` in hand — which is why
 the task graph has `G9` depend on `C8` rather than the reverse.
+
+## D19 — K0's supporting types have no concrete Rust definition anywhere in either spec file
+
+INTERFACES §1's `RunStore`/`RunWriter`/`Tx`/`RunReader` block references thirteen
+names — `Event`, `Sequence`, `Manifest`, `StoreError`, `Artifact`, `ArtifactId`,
+`CacheKey`, `CachedResponse`, `ReservationId`, `Cost`, `CallId`, `CallState`,
+`ChainStatus` — and not one of them is given its own `struct`/`enum` code block in
+either ARCHITECTURE.md or INTERFACES.md. A full-file research pass (both files read
+in full) confirmed: every Rust type definition in the project lives in
+docs/INTERFACES.md, but these thirteen appear *only* as parameter/return types
+inside that one trait block. Their shapes exist only as JSON examples, SQL
+`INSERT`/`UPDATE` statements, prose, and (for `CallState`) a transition diagram —
+never as a `pub struct`/`pub enum`.
+
+K0's task file scope is "define the trait signatures only... copy `RunStore` /
+`RunWriter` / `Tx` / `RunReader` from INTERFACES §1 verbatim" — but verbatim
+signatures reference types that do not exist yet anywhere in the workspace. Writing
+`K0` without authoring these thirteen supporting types is not possible; leaving them
+unauthored is not "minimal scope", it is a crate that does not compile.
+
+**Resolved**, one per type, each anchored to the most specific spec text available
+rather than invented freely (full field-level detail in each type's own doc comment
+in `arbiter-kernel/src/{ids,event,provider,store}.rs`):
+
+- `Event` — ARCHITECTURE §9's JSON envelope example gives the complete field list
+  (`schema_version, event_id, run_id, sequence, timestamp, stage, event_type,
+  durable, payload, content_hash, previous_event_hash`); transcribed directly, no
+  invention needed beyond choosing Rust types for each JSON field.
+- `EventType` — INTERFACES §13 gives this **exactly**, copied verbatim, byte for
+  byte, down to each family's grouping comment.
+- `Sequence` — `seq INTEGER PRIMARY KEY` (ARCHITECTURE §8.1/§8.7) pins this to an
+  integer newtype; no invention.
+- `CallState` — ARCHITECTURE §8.4's transition diagram and table name the exact
+  8-variant set (`RESERVED, SENT, ACKNOWLEDGED, COMPLETED, RETRYABLE, FAILED,
+  ORPHANED, RECOVERED`) even though no code block exists; transcribed as an enum.
+- `ProviderCapabilities` / `IdempotencyStyle` — INTERFACES §5 gives these
+  **exactly**, copied verbatim (with one practicality substitution: `Header(&'static
+  str)` → `Header(String)`, since a borrowed `'static` field cannot derive
+  `Deserialize` in general and every adapter only ever constructs this from a string
+  literal regardless).
+- `ArtifactId`, `ReservationId`, `CallId`, `EventId` — no shape given at all beyond
+  "an identifier"; modelled as opaque string newtypes, matching the one convention
+  the rest of the workspace already has for exactly this (`arbiter-core::ids`'s
+  `id_type!` macro) rather than inventing a new pattern.
+- `StageName` — needed because `Event.stage` and `Stage::name`/`PromptTemplate::stage`
+  (INTERFACES §6, §23) all reference it with no definition; same opaque-string
+  treatment. The G-tasks that define the 15 concrete stages own the actual values.
+- `ChainStatus` — no enum given; inferred minimally (`Intact` / `Broken { at:
+  Sequence }`) from "a chain break... is not repairable... the event records
+  detection" (ARCHITECTURE §9) and the `ChainBreakDetected` event variant — the
+  smallest shape consistent with what `verify_chain` is described as detecting.
+- `Manifest` — no struct given; every field is individually named in prose across
+  ARCHITECTURE §7/§15 ("recorded in the manifest", "frozen by `init`") as
+  `policy_version`, `config_hash`, `pack_hash`, `correlation_table_version`, and an
+  `rng` seed — assembled into one struct for the first time here.
+- `StoreError` — only one variant is spec-named (`AlreadyOpen`); rather than invent
+  a full failure taxonomy no real implementation has exercised yet, this ships
+  `AlreadyOpen` plus a single `Other(String)` escape hatch, explicitly deferring the
+  rest to whichever `S`-task (S2+) first needs a specific new variant.
+- `Cost` — a bare `f64` newtype; the spec never states money's representation
+  beyond calling every ledger quantity a plain number.
+- `CacheKey` — the four-field tuple `(provider, model, params, prompt_hash)` is
+  given exactly in prose (INTERFACES §5); `params`' own type is never specified
+  anywhere in the workspace, so it holds the call parameters' canonical serialized
+  string rather than a structured type that does not exist yet.
+- `CachedResponse` — inferred minimally from ARCHITECTURE §8.2's blob-threshold
+  description (`response_hash`, `size_bytes`, `inline: Option<String>` — `None`
+  exactly when the payload lives in the blob store instead).
+- `Artifact` — INTERFACES §1 uses it as a concrete type (`&Artifact` in
+  `Tx::put_artifact`) while INTERFACES §6 uses it as a trait bound (`type In:
+  Artifact` on `Stage`) — an internal inconsistency between the two sections.
+  Resolved as a trait (`&dyn Artifact`, matching §6's usage and INTERFACES §6's own
+  prose: "content-addressed, `serde`-typed, and versioned"), because a `Tx` capable
+  of storing heterogeneous stage outputs behind one method needs a trait object,
+  not one concrete struct — and, separately, `Tx` is used as `&mut dyn Tx`
+  elsewhere in the same block, so every one of its methods must be object-safe
+  regardless.
+
+## D20 — `RunWriter::transact<T>` cannot compile as written: a generic method on a trait used as `Box<dyn RunWriter>`
+
+INTERFACES §1's `RunWriter` trait, copied verbatim:
+```rust
+pub trait RunWriter: Send {
+    fn transact<T>(
+        &mut self,
+        f: &mut dyn FnMut(&mut dyn Tx) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError>;
+}
+```
+is used exclusively as a trait object — every `RunStore` method that produces one
+returns `Box<dyn RunWriter>` (`create`, `reopen`). This is not implementable: Rust
+does not allow a trait with a generic method to be made into a trait object at all
+(the vtable has no slot for an unbounded number of monomorphizations), regardless of
+whether that method is ever actually called through the `dyn` reference. The spec's
+own two requirements — `RunWriter` is generic over `T`, and `RunWriter` is always
+handled as `Box<dyn RunWriter>` — are mutually exclusive in the language the rest of
+the spec is written in.
+
+**Resolved:** dropped the generic return. `transact` now returns `Result<(),
+StoreError>`, and a caller that needs a value out of the transaction captures it
+from inside the closure (a `let mut captured = None;` before the call, written
+inside the closure body, read after) rather than receiving it as the method's return
+value. This preserves the actual guarantee INTERFACES §1 cares about — "everything
+inside the closure commits, or none of it does" — while making the trait
+constructible as `Box<dyn RunWriter>` at all. A unit test in `store.rs`
+(`transact_lets_a_caller_extract_a_value_via_closure_capture`) proves the pattern
+works end to end against an in-memory `Tx`/`RunWriter` pair built purely from these
+trait definitions.

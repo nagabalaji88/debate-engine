@@ -639,6 +639,16 @@ verbatim, and `ProviderCapabilities` / the provider-facing trait from INTERFACES
 `arbiter-kernel`'s `Cargo.toml` must not gain a dependency on `arbiter-store` or
 `arbiter-providers` to do this — that is precisely the edge D1 exists to prevent.
 
+Neither spec file gives a concrete Rust definition for the 13 supporting types these
+4 traits reference (`Event`, `Sequence`, `Manifest`, `StoreError`, `Artifact`,
+`ArtifactId`, `CacheKey`, `CachedResponse`, `ReservationId`, `Cost`, `CallId`,
+`CallState`, `ChainStatus`) — each had to be authored from JSON examples, SQL
+statements, and prose scattered across both files (D19). Two required outright
+deviation from "verbatim": `Artifact` reads as both a concrete type (§1) and a trait
+bound (§6) — resolved as a trait, `&dyn Artifact` (D19) — and `RunWriter::transact<T>`
+cannot compile as a generic method on a trait always handled as `Box<dyn RunWriter>`
+— resolved by dropping the generic return in favour of closure-captured results (D20).
+
 **Acceptance**
 ```bash
 cargo build -p arbiter-kernel   # compiles with arbiter-core as its only internal dep
@@ -1111,7 +1121,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | C6 | ✅ | (this commit) | D14, D15 — see PLAN_DEVIATIONS.md |
 | C7 | ✅ | (this commit) | D16, D17 — see PLAN_DEVIATIONS.md |
 | C8 | ✅ | (this commit) | D18 — see PLAN_DEVIATIONS.md |
-| K0 | ☐ | | |
+| K0 | ✅ | (this commit) | D19, D20 — see PLAN_DEVIATIONS.md |
 | S1 | ☐ | | |
 | S2 | ☐ | | |
 | S3 | ☐ | | |
