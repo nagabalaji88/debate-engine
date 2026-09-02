@@ -7,6 +7,7 @@
 //! so the orchestration engine never has to know SQLite exists.
 #![forbid(unsafe_code)]
 
+pub mod catalog;
 pub mod events;
 pub mod lease;
 pub mod schema;

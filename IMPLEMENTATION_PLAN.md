@@ -644,6 +644,16 @@ update at completion. WAL + `busy_timeout` 5000 ms. `reindex` is now a scan and 
 no watermark, no delta pass, no lock choreography. `VACUUM INTO` for export, blobs copied
 **second**.
 
+Done ahead of S4/S5 (both blocked: S4 needs K3, not yet built; S5 needs K2, not yet
+built — S6 needs only S3). `reindex` is honest about a real limitation: `run.db`
+today only has `events`/`run`/`schema_metadata` (D21), so `question`/`outcome`/
+`confidence`/`margin`/`model_count`/`depth` aren't derivable from a run directory
+yet — `reindex` upserts `run_id`/`run_path`/`started_at` and leaves the rest until
+S4 gives `run.db` a `decision` projection to read them back from. `VACUUM INTO`
+export is deferred to whichever CLI task (`L2`/`L4`) actually implements `arbiter
+run --export`, since S6's own acceptance test doesn't exercise it and nothing else
+in the workspace calls it yet.
+
 **Acceptance**
 ```bash
 cargo test -p arbiter-store project::tests::rebuild_equals_original
@@ -1155,9 +1165,9 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | S1 | ✅ | (this commit) | D21 — see PLAN_DEVIATIONS.md |
 | S2 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | S3 | ✅ | (this commit) | D22 — see PLAN_DEVIATIONS.md |
-| S4 | ☐ | | |
-| S5 | ☐ | | |
-| S6 | ☐ | | |
+| S4 | ☐ | blocked on K3 | |
+| S5 | ☐ | blocked on K2 | |
+| S6 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K1 | ☐ | | |
 | K2 | ☐ | | |
 | K3 | ☐ | | |
