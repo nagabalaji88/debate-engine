@@ -3,4 +3,5 @@
 //! `StageContext`, the idempotency-key formula); this module tree is where each
 //! `G2`–`G9` task lands its own stage as it is implemented.
 
+pub mod claims_extract;
 pub mod positions_generate;

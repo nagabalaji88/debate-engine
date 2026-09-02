@@ -946,12 +946,27 @@ exhausted), and the first real prompt pack content
 and why it uses a local `ScriptedProvider` rather than P2's `MockProvider`
 (D1: `arbiter-kernel` cannot depend on `arbiter-providers`).
 
-`panel.resolve`/`claims.extract`/`claims.normalize` remain their own passes:
-`panel.resolve` needs `correlation.toml` (not yet shipped);
-`claims.extract`/`claims.normalize` carry the grounding/repair loop, Kahn
-cycle detection, and three-tier similarity matching (§5.1, §5.4) — each
-substantial enough on its own that bundling them into this pass risks
-under-testing every one of them.
+`claims.extract` (`arbiter-kernel/src/stages/claims_extract.rs`) is now also
+implemented and tested — the full INTERFACES §2 grounding pipeline per
+position: extractor call, exact match, fuzzy match (trigram Jaccard ≥ 0.85),
+derived-claim resolution over an acyclic premise graph (Kahn), one repair
+call per position covering both plain ungrounded claims and any detected
+premise cycle, and — if the cycle survives repair — the untangle-before-degrade
+cut-and-recheck step, so a claim whose derivation still traces to a real quote
+keeps its evidence kind and only a claim whose sole grounding was the cut edge
+falls to `Unsupported`. Reuses `arbiter-core`'s existing `CanonicalClaim`/
+`ClaimMember`/`Grounding`/`EvidenceKind` types directly (no parallel types
+invented) and `bounds::repair_budget` (K4) for the repair spend cap. See D32
+for the extractor/repair JSON shapes this task had to pin, the token-based
+exact/fuzzy matcher, and — the one deliberate scope narrowing — cycle-cutting
+uses only the greedy-by-ascending-confidence algorithm INTERFACES §2 names for
+large SCCs, not the exact brute-force variant it also names for |SCC| ≤ 12.
+
+`panel.resolve`/`claims.normalize` remain their own passes: `panel.resolve`
+needs `correlation.toml` (not yet shipped); `claims.normalize` carries the
+full three-tier similarity matching and cross-position clustering (§5.4) —
+substantial enough on its own, and the natural next consumer of
+`claims.extract`'s singleton-`CanonicalClaim` output.
 
 ---
 
@@ -1300,7 +1315,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | P3 | ☐ | deferred as own pass — security-sensitive (OS keychain, redaction) | |
 | P4 | ☐ | deferred as own pass — needs real HTTP adapters against live provider APIs, no CI-testable acceptance criterion | |
 | G1 | ✅ | (this commit) | D28 — see PLAN_DEVIATIONS.md; pack machinery only, no production prompt content — see plan text above |
-| G2 | ☐ (partial: `init` + `positions.generate`) | (this commit) | D30, D31 — see PLAN_DEVIATIONS.md; panel.resolve/claims.extract/claims.normalize remain, see plan text above |
+| G2 | ☐ (partial: `init` + `positions.generate` + `claims.extract`) | (this commit) | D30, D31, D32 — see PLAN_DEVIATIONS.md; panel.resolve/claims.normalize remain, see plan text above |
 | G3 | ☐ | | |
 | G4 | ☐ | | |
 | G5 | ☐ | | |

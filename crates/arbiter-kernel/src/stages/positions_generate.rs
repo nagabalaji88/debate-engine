@@ -48,9 +48,13 @@ impl Artifact for Question {
 /// no concrete struct exists anywhere (PLAN_DEVIATIONS.md D19-category gap,
 /// D31). Modelled with the model/provider identity plus the raw text, so a
 /// position is traceable to the call that produced it without re-deriving
-/// anything.
+/// anything. `id` is deterministic from `(provider, model)` — round 1 mints
+/// exactly one position per panel member, so this pairing is already a stable
+/// identity; `claims.extract`'s `ClaimMember::position` is what actually
+/// needs a [`PositionId`] to point at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Position {
+    pub id: arbiter_core::PositionId,
     pub model: ModelId,
     pub provider: ProviderId,
     pub text: String,
@@ -79,6 +83,7 @@ impl Artifact for Positions {
 
 fn position_json(p: &Position) -> serde_json::Value {
     serde_json::json!({
+        "id": p.id.as_str(),
         "model": p.model.as_str(),
         "provider": p.provider.as_str(),
         "text": p.text,
@@ -137,6 +142,12 @@ impl PositionsGenerate {
             serde_json::json!({"model": model.as_str(), "provider": provider_id.as_str()}),
         );
 
+        let position_id = arbiter_core::PositionId::new(format!(
+            "pos_{}_{}",
+            provider_id.as_str(),
+            model.as_str()
+        ));
+
         let cache_key = CacheKey {
             provider: provider_id.clone(),
             model: model.clone(),
@@ -157,6 +168,7 @@ impl PositionsGenerate {
                 serde_json::json!({"model": model.as_str(), "cache_hit": true}),
             );
             return Some(Position {
+                id: position_id,
                 model,
                 provider: provider_id,
                 text,
@@ -281,6 +293,7 @@ impl PositionsGenerate {
         );
 
         Some(Position {
+            id: position_id,
             model,
             provider: provider_id,
             text: response.text,

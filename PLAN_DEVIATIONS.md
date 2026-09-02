@@ -901,6 +901,70 @@ attempting all of G2 in one pass risks exactly the kind of rushed, under-tested
 work this project's own §0.2/§0.4 discipline exists to prevent. Each will be
 picked up as its own follow-on pass, in pipeline order.
 
+## D32 — `claims.extract`: grounding, the repair loop, and the cycle-cutting simplification
+
+INTERFACES §2 is unusually specific for a stage protocol — an exact validation
+order, a repair contract, and a three-step cycle-untangling procedure — but
+still leaves gaps this task had to fill, all D19-category:
+
+- **`RawCandidate`/`RawRepair`** (this module's own names for the extractor's
+  and repair model's JSON shapes) transcribe INTERFACES §2's two worked
+  examples (`{"text","kind":"fact","grounding":{"quote"}}` /
+  `{"kind":"inference","grounding":{"derived_from"}}`) directly, plus one
+  addition: an inference's `confidence` field. Neither example shows it, but
+  the cycle-cutting protocol names "ascending extractor confidence" as its
+  tie-break with nowhere else that value could come from — added as an
+  extractor-supplied `f64`, defaulting to a neutral 0.5 when omitted (a
+  scripted fixture, say).
+- **Exact/fuzzy matching** ("whitespace- and case-normalised substring
+  search"; "trigram Jaccard ≥ 0.85 over a sliding window the length of the
+  quote") is implemented token-based, not via a literal
+  normalize-then-substring-find: the latter needs a lossy index-mapping step
+  back to the original text's byte offsets once normalization changes the
+  string's length, which a whitespace-tokenized sliding window avoids
+  entirely while still matching the spec's stated intent.
+- **`claims.extract`'s own output shape**: one singleton `CanonicalClaim`
+  (one `ClaimMember`) per extracted claim, using `arbiter-core`'s existing
+  `CanonicalClaim`/`ClaimMember`/`Grounding`/`EvidenceKind` types verbatim
+  (C1-era, already spec-verified) rather than inventing parallel ones.
+  Multi-member canonical claims are `claims.normalize`'s job (§5.2: "Claude:
+  ... GPT: ... → CanonicalClaim{members:[...]}"), not this stage's — extract
+  only ever mints provisional, per-position claim identity
+  (`claim_<position_id>_<n>`); normalize is what merges equivalent members
+  from different positions under one surviving id.
+- **Repair budget enforcement** reuses `bounds::repair_budget`'s cap (K4,
+  already built) as a constructor parameter, tracked via a `Mutex<f64>`
+  cumulative counter checked before every repair call — "whichever binds
+  first stops repairs" (INTERFACES §2): the count bound (one repair call per
+  position, enforced structurally — there is only ever one repair call site
+  per position in this code) and the cost bound (this counter) are both
+  respected, and once the cap is hit, remaining failures are admitted as
+  `Unsupported` without attempting a call that would exceed it.
+
+**Cycle-cutting: greedy only, not the exact-for-|SCC|≤12 variant.** INTERFACES
+§2's step 2 reads: "remove the minimum set of derivation edges that restores
+acyclicity. Exact for |SCC| ≤ 12, otherwise greedy by ascending extractor
+confidence." This task implements only the greedy half, applied uniformly
+regardless of component size — repeatedly cutting the lowest-confidence edge
+still inside the (recomputed) cyclic set and re-checking with Kahn's algorithm
+until acyclic. A real minimum-feedback-arc-set solver for the small-graph case
+is a separate, nontrivial algorithm in its own right (brute-force search over
+edge subsets, even bounded to 12 edges, is still meaningfully more machinery
+than the rest of this stage), and the greedy fallback is not a corner cut of
+convenience — it is the spec's own stated algorithm for the general case, just
+not switched away from for small components. It always terminates (edges are
+finite) and always restores acyclicity correctly; it is simply not guaranteed
+to find the *globally* minimum cut on a small SCC the way the exact variant
+would. Revisit if a fixture ever demonstrates the difference matters
+(`premise_cycle_grounded_fact`, once F2 exists).
+
+Two tests (`a_premise_cycle_resolved_by_repair_leaves_no_claim_unsupported`,
+`an_unresolved_cycle_falls_back_to_cutting_the_weakest_edge`) exercise both
+untangle-before-degrade outcomes end to end, including the specific case
+INTERFACES §2 calls out by name: a claim whose derivation chain still traces
+back to a real, independently-grounded `DirectQuote` after the cut survives
+as `Derived`, never falls to `Unsupported`.
+
 ## D31 — `positions.generate`: `Question`/`Position`/`Positions`, the missing per-provider semaphore, and the first real prompt
 
 ARCHITECTURE §5.1's only description of a position is "position text"; no spec
