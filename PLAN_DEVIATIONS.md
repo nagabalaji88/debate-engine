@@ -553,3 +553,42 @@ users. The 9-table debate/decision projection group is deferred to S4
 ("Projections + rebuild-from-events"), which the task graph already has depending
 on C8 (done) and K3 (StageGraph, not yet built) — i.e. it was never meant to
 happen before the Rust types being projected exist to project from.
+
+## D22 — "content_hash = blake3(canonical payload)": whole-event content, not just the `payload` field
+
+ARCHITECTURE §9 writes `content_hash = blake3(canonical payload)`. `Event` (K0,
+D19) has a field literally named `payload: serde_json::Value` — read narrowly,
+"canonical payload" could mean "hash only that one field". That reading fails the
+stated purpose: ARCHITECTURE §9 also says a chain break is how "someone edited the
+database directly" is detected, and a hash that only covers the `payload` column
+would not notice `event_type`, `stage`, `durable`, `timestamp`, `run_id`, or
+`schema_version` being altered with the payload bytes left untouched — exactly the
+kind of tampering `verify_chain`/`ChainBreakDetected` exists to catch.
+
+**Resolved:** `content_hash` covers the event's whole content — every field except
+the two hash fields themselves (self-referential) and `sequence` (DB-assigned,
+not known until after the row is inserted, and not part of what "this event says"
+semantically). `previous_event_hash` is *not* mixed into the computation of this
+row's own `content_hash` — it is simply the prior row's `content_hash`, carried
+forward unchanged — so `content_hash` stays a pure function of one event and can
+be computed entirely before the store round-trip assigns `seq`.
+
+A second, purely mechanical pitfall surfaced while wiring this up and is worth
+naming for anyone touching `events.rs` later: the string hashed for `event_type`
+must be **exactly** the same string `Tx::append_event` writes into the column
+(`serde_json::to_string(&e.event_type)`, the quoted JSON form, e.g. `"CLAIM_
+EXTRACTED"` with its quotes) — an early draft hashed a trimmed/unquoted form at
+write time while `verify_chain` read the quoted form back from the column, so
+every freshly-appended event failed its own verification despite never having
+been tampered with. Fixed by hashing the identical stored string on both sides;
+`canonical_content_hash`'s doc comment now states this explicitly as the
+invariant to preserve.
+
+`verify_chain`'s own hash recomputation, and appending an event whose
+`event_type` this binary does not compile a variant for, both operate on
+[`arbiter-store/src/events.rs`]'s `RawEventRow` / `HashableContent` — raw strings,
+never the typed `EventType`/`serde_json::Value` — precisely so a row from a newer
+binary (an `event_type` this one has never heard of) is still hashable and
+chain-verifiable, matching INTERFACES §13's forward-compatibility promise:
+`RunReader::events()`'s typed view *skips* such a row, but `verify_chain` still
+accounts for it.

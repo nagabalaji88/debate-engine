@@ -1,22 +1,21 @@
 //! `arbiter_kernel::{RunStore, RunWriter, Tx, RunReader}` implemented against
 //! SQLite. K0 defined the seam; this crate writes the bodies (INTERFACES §1).
 //!
-//! Scope note: this task (S2) delivers `RunStore::create`/`reopen`/`reader`,
-//! `RunWriter::transact`, `Tx::append_event` (mechanical persistence — assigning
-//! `seq` and storing whatever `content_hash`/`previous_event_hash` the caller
-//! already computed) and `RunReader::events`. Four `Tx` methods
-//! (`put_artifact`/`put_cache`/`commit_budget`/`set_call_state`) need tables S1
-//! deliberately did not create (PLAN_DEVIATIONS.md D21: `artifacts`,
-//! `cache_entries`, `budget`, `provider_calls` wait for K1/K2/K5), and
-//! `RunReader::verify_chain` needs the hash-recomputation logic that is
-//! explicitly S3's stated scope ("`events.rs`... `verify_chain` recomputes and
-//! reports"). All five return `StoreError::Other` naming the task that lands
-//! them, rather than a silently-wrong implementation.
+//! Scope note: `RunStore::create`/`reopen`/`reader`, `RunWriter::transact`,
+//! `Tx::append_event` (mechanical persistence — assigning `seq` and storing
+//! whatever `content_hash`/`previous_event_hash` the caller already computed) and
+//! `RunReader::events` are S2's own scope. `RunReader::verify_chain` and the real
+//! hash-chaining logic that feeds `append_event` correct hashes live in
+//! `events.rs` (S3). Four `Tx` methods (`put_artifact`/`put_cache`/
+//! `commit_budget`/`set_call_state`) still need tables S1 deliberately did not
+//! create (PLAN_DEVIATIONS.md D21: `artifacts`, `cache_entries`, `budget`,
+//! `provider_calls` wait for K1/K2/K5) and return `StoreError::Other` naming the
+//! task that lands them, rather than a silently-wrong implementation.
 
 use crate::lease::{self, LeaseError, Owner};
 use crate::{now_rfc3339, schema};
 use arbiter_core::RunId;
-use arbiter_kernel::event::Event;
+use arbiter_kernel::event::{Event, EventType};
 use arbiter_kernel::ids::{ArtifactId, CallId, ReservationId, Sequence};
 use arbiter_kernel::provider::CallState;
 use arbiter_kernel::store::{
@@ -135,7 +134,6 @@ const NOT_YET_IMPLEMENTED_CACHE: &str =
     "cache_entries table lands in K5 (response cache) — PLAN_DEVIATIONS.md D21";
 const NOT_YET_IMPLEMENTED_ARTIFACTS: &str =
     "artifacts table lands in S4 (projections) — PLAN_DEVIATIONS.md D21";
-const NOT_YET_IMPLEMENTED_CHAIN: &str = "verify_chain's hash-recomputation logic is S3's scope";
 
 impl Tx for SqliteTx<'_> {
     fn append_event(&mut self, e: &Event) -> Result<Sequence, KernelStoreError> {
@@ -199,36 +197,88 @@ impl RunReader for SqliteRunReader {
                  FROM events ORDER BY seq",
             )
             .map_err(sqlite_error_to_store_error)?;
-        let rows: Vec<Event> = stmt
+        // `Option<Event>`, not `Event`: a row whose `event_type` this binary does
+        // not recognise is silently dropped from the typed view rather than
+        // erroring, per INTERFACES §13's forward-compatibility promise ("readers
+        // skip unknown event_type values but still include the line in the hash
+        // chain") — the "still chained" half is `raw_event_rows`/`verify_chain`'s
+        // job, which reads the same table without requiring `event_type` to parse.
+        let rows: Vec<Option<Event>> = stmt
             .query_map([], |row| {
+                let run_id: String = row.get(0)?;
+                let schema_version: u32 = row.get(1)?;
+                let event_id: String = row.get(2)?;
+                let seq: i64 = row.get(3)?;
+                let timestamp: String = row.get(4)?;
+                let stage: String = row.get(5)?;
                 let event_type_json: String = row.get(6)?;
+                let durable: bool = row.get(7)?;
                 let payload_json: String = row.get(8)?;
-                Ok(Event {
-                    run_id: RunId::new(row.get::<_, String>(0)?),
-                    schema_version: row.get(1)?,
-                    event_id: arbiter_kernel::ids::EventId::new(row.get::<_, String>(2)?),
-                    sequence: Some(Sequence::new(row.get::<_, i64>(3)? as u64)),
-                    timestamp: row.get(4)?,
-                    stage: arbiter_kernel::ids::StageName::new(row.get::<_, String>(5)?),
-                    event_type: serde_json::from_str(&event_type_json)
-                        .expect("event_type stored by append_event is always valid JSON"),
-                    durable: row.get(7)?,
-                    payload: serde_json::from_str(&payload_json)
-                        .expect("payload stored by append_event is always valid JSON"),
-                    content_hash: row.get(9)?,
-                    previous_event_hash: row.get(10)?,
-                })
+                let content_hash: String = row.get(9)?;
+                let previous_event_hash: Option<String> = row.get(10)?;
+
+                let event_type: Option<EventType> = serde_json::from_str(&event_type_json).ok();
+                let payload: serde_json::Value =
+                    serde_json::from_str(&payload_json).unwrap_or(serde_json::Value::Null);
+
+                Ok(event_type.map(|event_type| Event {
+                    run_id: RunId::new(run_id),
+                    schema_version,
+                    event_id: arbiter_kernel::ids::EventId::new(event_id),
+                    sequence: Some(Sequence::new(seq as u64)),
+                    timestamp,
+                    stage: arbiter_kernel::ids::StageName::new(stage),
+                    event_type,
+                    durable,
+                    payload,
+                    content_hash,
+                    previous_event_hash,
+                }))
             })
             .map_err(sqlite_error_to_store_error)?
             .collect::<Result<_, _>>()
             .map_err(sqlite_error_to_store_error)?;
-        Ok(Box::new(rows.into_iter()))
+        Ok(Box::new(rows.into_iter().flatten()))
     }
 
     fn verify_chain(&self) -> Result<ChainStatus, KernelStoreError> {
-        Err(KernelStoreError::Other(
-            NOT_YET_IMPLEMENTED_CHAIN.to_string(),
-        ))
+        crate::events::verify_chain(self)
+    }
+}
+
+impl SqliteRunReader {
+    /// Every `events` row, raw — `event_type` and `payload` as the exact `TEXT`
+    /// stored, not parsed into `EventType`/`serde_json::Value`. This is what lets
+    /// [`crate::events::verify_chain`] account for a row whose `event_type` this
+    /// binary cannot parse, which [`RunReader::events`]'s typed view must skip.
+    pub(crate) fn raw_event_rows(
+        &self,
+    ) -> Result<Vec<crate::events::RawEventRow>, KernelStoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT seq, run_id, schema_version, event_id, timestamp, stage, event_type, durable, payload, content_hash, previous_event_hash
+                 FROM events ORDER BY seq",
+            )
+            .map_err(sqlite_error_to_store_error)?;
+        stmt.query_map([], |row| {
+            Ok(crate::events::RawEventRow {
+                seq: row.get(0)?,
+                run_id: row.get(1)?,
+                schema_version: row.get(2)?,
+                event_id: row.get(3)?,
+                timestamp: row.get(4)?,
+                stage: row.get(5)?,
+                event_type: row.get(6)?,
+                durable: row.get(7)?,
+                payload: row.get(8)?,
+                content_hash: row.get(9)?,
+                previous_event_hash: row.get(10)?,
+            })
+        })
+        .map_err(sqlite_error_to_store_error)?
+        .collect::<Result<_, _>>()
+        .map_err(sqlite_error_to_store_error)
     }
 }
 

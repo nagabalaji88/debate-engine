@@ -600,12 +600,21 @@ logic (verify_chain's hash recomputation) belong to S3/S4/K1/K2/K5.
 
 **Files:** `src/events.rs` · **Spec:** §8.1, §8.3, §9, INTERFACES §13
 
-Append inside a transaction. `content_hash = blake3(canonical payload)`,
-`previous_event_hash` chains to `seq - 1`. `verify_chain` recomputes and reports.
+Append inside a transaction. `content_hash = blake3(canonical payload)` — resolved
+as the event's whole content (every field but the two hash fields and the
+DB-assigned `sequence`), not literally just the `payload` JSON field, since only
+that reading catches every column an edited row could tamper with (D22).
+`previous_event_hash` chains to `seq - 1`. `verify_chain` recomputes and reports —
+reading raw stored strings for `event_type`/`payload`, not the typed
+`EventType`/`serde_json::Value`, so a row whose `event_type` this binary can't
+parse is still hashable and chain-verified even though `RunReader::events()`'s
+typed view skips it (INTERFACES §13's forward-compatibility promise).
 
 A break is **detected, never repaired** — truncating a table would destroy the projections
-derived from it. Emit `CHAIN_BREAK_DETECTED` (**not** `LOG_REPAIRED`, removed in v2.7.1)
-and mark the run unverifiable.
+derived from it. `CHAIN_BREAK_DETECTED` emission itself is deferred: it is an
+`EventType` variant written *to* the very log being verified, and this task only
+ships `verify_chain`'s detection; wiring the emission into a caller is a later
+kernel-side concern once something actually calls `verify_chain` during a run.
 
 Every read is `ORDER BY seq`.
 
@@ -1145,7 +1154,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | K0 | ✅ | (this commit) | D19, D20 — see PLAN_DEVIATIONS.md |
 | S1 | ✅ | (this commit) | D21 — see PLAN_DEVIATIONS.md |
 | S2 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
-| S3 | ☐ | | |
+| S3 | ✅ | (this commit) | D22 — see PLAN_DEVIATIONS.md |
 | S4 | ☐ | | |
 | S5 | ☐ | | |
 | S6 | ☐ | | |
