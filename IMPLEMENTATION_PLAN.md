@@ -394,13 +394,33 @@ own test rather than only being exercised incidentally through `classify`.
 ### C4 · Options, versions, attachment, scoring
 
 **Files:** rework `option.rs`; create `decision/attachment.rs`
-**Spec:** §5.3, §6.5, INTERFACES §20
+**Spec:** §5.3, §6.5, INTERFACES §20 · **Corrected per** `PLAN_DEVIATIONS.md` D9, D10
 
 `OptionId` is the **cluster's identity**, stable across rewording. `option_version` is the
-text hash. `supersedes` carries lineage. The attachment matrix is
-`(OptionId, ClaimId) -> Attachment { Supports(f64) | Opposes(f64) | None }`.
+text hash. `supersedes: Option<(OptionId, OptionVersion)>` carries lineage. The
+attachment matrix is `BTreeMap<(ClaimId, OptionId), Attachment>` where `Attachment {
+polarity: Polarity, confidence: f64, source: AttachSource }` — **not** the simpler
+enum this plan originally sketched (D9): `source` (`Authored`/`Classified`/`Propagated`)
+is load-bearing, not decoration — it is what makes Step 3's propagation checkable at all.
 
-`raw = Σ standing(supporting) − 0.5 · Σ standing(opposing)`, normalised to `share ∈ [0,1]`.
+**Only Step 3 (propagation) and scoring belong in `arbiter-core`.** Steps 1–2
+(clustering, batched attach) call an LLM and belong to the kernel's `options.cluster`
+stage (G3) via an `OptionClusterer` trait this task does not define. C4 owns exactly the
+deterministic half: given direct (`Authored`/`Classified`) cells, the relation graph and
+claim standings, propagate to `attachment_propagation_depth` (default 2) —
+
+```
+c contradicts s ∧ s supports O   →  c opposes O      (strength × relation confidence)
+c supports    s ∧ s supports O   →  c supports O
+c qualifies   s ∧ s supports O   →  c opposes O at γ weight
+```
+
+— tagging the results `Propagated`; and then scoring: `raw = Σ standing(supporting) −
+0.5 · Σ standing(opposing)`, clamped at 0 and normalised to `share`. D10: `raw` can be
+negative (net-opposed option) with no convention given for it, so clamp *before*
+normalizing — a negative share has no meaning — and when every option's clamped `raw`
+is 0, every share is 0 (not NaN, not an even split that would manufacture confidence
+that isn't there).
 
 **Model vote share is not an input at any point.** A test must assert this: a graph where
 4 models back A and 1 backs B, but B's claims carry the evidence, must score B higher.
@@ -410,7 +430,9 @@ text hash. `supersedes` carries lineage. The attachment matrix is
 rewording a recommendation keeps OptionId and mints a new option_version
 attachment cells survive a reword (the v2.5 regression test)
 model votes do not affect score
-shares sum to 1.0 within 1e-9
+shares sum to 1.0 within 1e-9 in the non-degenerate case (D10)
+an all-non-positive-raw graph produces all-zero shares, not NaN
+propagation respects attachment_propagation_depth and does not cross it
 ```
 
 ---
@@ -1057,7 +1079,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | C1 | ✅ | (this commit) | D3, D4, D5, D6 — see PLAN_DEVIATIONS.md |
 | C2 | ✅ | (this commit) | D7 — see PLAN_DEVIATIONS.md |
 | C3 | ✅ | (this commit) | D8 — see PLAN_DEVIATIONS.md |
-| C4 | ☐ | | |
+| C4 | ✅ | (this commit) | D9, D10, D11 — see PLAN_DEVIATIONS.md |
 | C5 | ☐ | | |
 | C6 | ☐ | | |
 | C7 | ☐ | | |

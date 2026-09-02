@@ -187,3 +187,75 @@ as Disputed in `explain` output would misrepresent it.
 Both choices are implemented in `decision/standing.rs` and covered by dedicated tests
 (`resolved_by_challenge_requires_defended_or_modified`,
 `the_residual_band_falls_to_unresolved_not_agreed_or_disputed`).
+
+---
+
+## D9 — C4's plan sketch invented a simpler `Attachment` type than the spec's
+
+**What the plan said:** `(OptionId, ClaimId) -> Attachment { Supports(f64) | Opposes(f64)
+| None }` — an enum carrying just a polarity and a strength.
+
+**What INTERFACES §20 actually defines:**
+
+```rust
+pub struct Attachment { pub polarity: Polarity, pub confidence: f64, pub source: AttachSource }
+pub enum Polarity     { Supports, Opposes, Neutral }
+pub enum AttachSource { Authored, Classified, Propagated }
+```
+
+The plan's sketch drops `source` entirely — which loses exactly the distinction Step 2/3
+exist to record: whether a cell came from the position's own recommendation
+(`Authored`), the batched classifier call (`Classified`), or deterministic propagation
+through the relation graph (`Propagated`). An `explain` view that cannot say *why* a
+claim attaches to an option the way it does is missing the point of Step 3's design
+note: "the classifier only has to see direct attachment: the graph does the rest, and
+it does it identically on replay" — that guarantee is only checkable if `Propagated`
+cells are distinguishable from the others.
+
+**Fix:** implemented the real three-field `Attachment` / `Polarity` / `AttachSource`
+types verbatim, not the plan's simplified sketch.
+
+## D10 — option share normalization when `raw` can be negative
+
+`ARCHITECTURE.md §6.5` gives `raw = Σ standing(supporting) − 0.5·Σ standing(opposing)`
+and says it is "normalised to `share ∈ [0,1]`" — but doesn't say how, and `raw` can be
+negative (an option with more opposition than support). Neither spec file's worked
+JSON example shows more than one option's `raw`/`share` pair, so there's nothing to
+reverse-engineer a convention from.
+
+**Resolved:** clamp `raw` at 0 before normalizing — a net-opposed option contributing a
+*negative* probability mass to the others' shares has no dialectical meaning — then
+`share_i = max(raw_i, 0) / Σ max(raw_j, 0)`. When every option's clamped `raw` is 0 (no
+option has net-positive support at all), **every share is 0**, not NaN from a
+divide-by-zero and not an even split — an even split would manufacture confidence that
+doesn't exist. This correctly cascades into `option_floor` failing for every option,
+which is what routes the outcome to `INSUFFICIENT_EVIDENCE` in C5 rather than a false
+`SPLIT_DECISION`. Shares sum to 1.0 **only in the non-degenerate case**; the plan's own
+C4 acceptance criterion ("shares sum to 1.0 within 1e-9") is corrected to say so.
+
+## D11 — attachment propagation: no rule given for propagating from an `Opposes` cell
+
+INTERFACES §20 Step 3 gives exactly three rules, and all three have the same base case
+— `s supports O`:
+
+```
+c contradicts s ∧ s supports O   →  c opposes O
+c supports    s ∧ s supports O   →  c supports O
+c qualifies   s ∧ s supports O   →  c opposes O at γ weight
+```
+
+Nothing says what happens when `s opposes O` instead. A symmetric extension is easy to
+guess (flip the inferred polarity) but the spec does not state it, and guessing a
+bidirectional propagation rule the authors may have deliberately left narrower is
+exactly the kind of invention §0.2 rule 1 forbids.
+
+**Resolved conservatively:** propagation implemented for **exactly the three stated
+rules**, base case `s supports O` only. A claim related to a claim that *opposes* an
+option is left unattached by propagation (though it may still carry an `Authored` or
+`Classified` cell from Steps 1–2, which this gap does not affect). This under-populates
+the matrix relative to a symmetric reading, which is the conservative direction — an
+absent cell is a claim `explain` shows no opinion on, not a wrong one.
+
+If a future spec revision adds the `Opposes` base case, `decision/attachment.rs`'s
+`propagate` function is where it goes — the three existing rules are written as a
+small match table specifically so a fourth entry is a one-line addition, not a rewrite.

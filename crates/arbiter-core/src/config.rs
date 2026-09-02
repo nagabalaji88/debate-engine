@@ -10,6 +10,27 @@ pub struct DecisionConfig {
     pub graph: GraphParams,
     pub thresholds: Thresholds,
     pub confidence: ConfidenceWeights,
+    pub attachment: AttachmentParams,
+}
+
+/// INTERFACES §20 Step 3 — deterministic attachment propagation. Kept separate
+/// from `GraphParams`, which is scoped to the §6.3 fixpoint specifically: this
+/// walks the same relation edges but for a different purpose (which option a
+/// claim supports), not claim standing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AttachmentParams {
+    /// How many relation-hops propagation walks outward from a directly-attached
+    /// claim before stopping.
+    pub propagation_depth: u32,
+}
+
+impl Default for AttachmentParams {
+    fn default() -> Self {
+        Self {
+            propagation_depth: 2,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
