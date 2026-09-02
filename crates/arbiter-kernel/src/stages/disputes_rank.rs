@@ -63,21 +63,21 @@ pub(crate) struct Resolved {
 /// (possibly post-rebuttal) state, `resolution_cost` is the one component
 /// D36 established `arbiter-core::decision::dispute` cannot compute itself
 /// (it needs a real `BudgetLedger`), so the caller passes it in already
-/// computed.
+/// computed. `scores` is the judge scorecard map `evidence::evidence_map`
+/// needs — every caller before `decision.synthesize` (G9) passes an empty
+/// map (`judge.evaluate` is stage 13, after every one of them); G9 is the
+/// one caller with real scores to pass (D41).
 pub(crate) fn resolve_and_rank(
     claims: &[CanonicalClaim],
     relations: &[Relation],
     options: &ClusteredOptions,
     resolution_cost: f64,
+    scores: &BTreeMap<ModelId, Scorecard>,
     p: &ResolveParams<'_>,
 ) -> Resolved {
     let claim_ids: Vec<ClaimId> = claims.iter().map(|c| c.id.clone()).collect();
 
-    // No judge has run yet at this point in the pipeline (`judge.evaluate`
-    // is stage 13, after this one) -- `judge_factor` degrades gracefully to
-    // 1.0 for every claim with an empty score map (evidence.rs).
-    let scores: BTreeMap<ModelId, Scorecard> = BTreeMap::new();
-    let evidence_map = evidence::evidence_map(claims, &scores, p.weights);
+    let evidence_map = evidence::evidence_map(claims, scores, p.weights);
 
     let fx = fixpoint::solve(&claim_ids, &evidence_map, relations, p.graph);
     let claim_standing = fx.standing;
@@ -386,8 +386,17 @@ impl Stage for DisputesRank {
             attachment_params: &self.attachment_params,
             dispute_weights: &self.dispute_weights,
         };
-        let resolved =
-            resolve_and_rank(claims, relations, &input.options, resolution_cost, &params);
+        // No judge has run yet at this point in the pipeline (`judge.evaluate`
+        // is stage 13, after this one) -- `judge_factor` degrades gracefully
+        // to 1.0 for every claim with an empty score map (evidence.rs).
+        let resolved = resolve_and_rank(
+            claims,
+            relations,
+            &input.options,
+            resolution_cost,
+            &BTreeMap::new(),
+            &params,
+        );
         let claim_standing = resolved.standing;
         let propagated_matrix = resolved.propagated_matrix;
         let ranked = resolved.ranked;

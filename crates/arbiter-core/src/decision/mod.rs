@@ -12,6 +12,7 @@ pub mod fixpoint;
 pub mod outcome;
 pub mod record;
 pub mod standing;
+pub mod synthesize;
 pub mod triggers;
 
 use crate::option::OptionScore;

@@ -8,6 +8,7 @@ pub mod challenge_run;
 pub mod claims_extract;
 pub mod claims_normalize;
 pub mod controller_decide;
+pub mod decision_synthesize;
 pub mod disputes_rank;
 pub mod judge_evaluate;
 pub mod options_cluster;

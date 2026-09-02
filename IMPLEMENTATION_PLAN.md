@@ -1093,6 +1093,24 @@ than aborting the decision. See D40 for the one-shuffle-for-every-judge
 reading, the normalisation subset, and why two `Scorecard` shapes
 (mean and per-judge) both survive into the next stage.
 
+**G9** (`arbiter-core/src/decision/synthesize.rs` +
+`arbiter-kernel/src/stages/decision_synthesize.rs`) is implemented and
+tested — the last G-task, mostly wiring C1–C8's already-built decision core
+to real pipeline artifacts instead of test fixtures, plus the final
+fixpoint resolve with real judge scores (`resolve_and_rank` gained a
+`scores` parameter for exactly this, its two existing callers unaffected).
+`OutcomeInputs`/`PenaltyInputs`' three previously-undefined ratios
+(`evidence_mass`, `unresolved_critical_ratio`, `assumption_dependency_ratio`)
+get their derivations in the new core `decision::synthesize` module; the
+winning option's own authoring model(s) supply `confidence()`'s judge
+signal. `Completeness` (INTERFACES §9) cannot live in `arbiter-core` —
+`StopReason`/`StageName` are kernel types, D1 — so it is defined in the
+kernel and wraps C8's untouched `DecisionRecord` rather than reopening that
+type. See D41 for the full account, including why `RoundLimit` is not
+treated as truncated and `missing_stages` stays honestly empty (no
+stage-execution tracking exists anywhere in this codebase, D39). **All nine
+G-tasks (G1–G9) are now complete.**
+
 ---
 
 ## 6. Tasks — CLI
@@ -1447,7 +1465,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | G6 | ✅ | (this commit) | D38 — see PLAN_DEVIATIONS.md; rebuttal.run's output reuses disputes.rank's own input shape |
 | G7 | ✅ | (this commit) | D39 — see PLAN_DEVIATIONS.md; round-loop executor itself out of scope, no StageGraph runner exists yet |
 | G8 | ✅ | (this commit) | D40 — see PLAN_DEVIATIONS.md; mean + per-judge Scorecard shapes both carried forward |
-| G9 | ☐ | | |
+| G9 | ✅ | (this commit) | D41 — see PLAN_DEVIATIONS.md; Completeness lives in the kernel, wraps C8's DecisionRecord unchanged |
 | L1 | ☐ | | |
 | L2 | ☐ | | |
 | L3 | ☐ | | |

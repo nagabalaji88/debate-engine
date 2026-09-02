@@ -1585,3 +1585,79 @@ already consumes. Authored in
   evidence kind — the elision reads as the doc's own brevity, not an
   instruction to withhold content the judge structurally needs to do its
   job.
+
+## D41 — `decision.synthesize`: wiring C1–C8 to real artifacts, `Completeness`'s dependency problem, and three ambiguous ratios
+
+ARCHITECTURE §5's own table gives this stage exactly two facts — "runs the
+decision core," "calls no model" — and record.rs's own D18 note already
+flagged the fields it deliberately deferred here. This task is almost
+entirely wiring, with a handful of genuine gaps:
+
+- **`resolve_and_rank` gains a `scores` parameter.** Every caller before
+  this one (`disputes.rank`, `controller.decide`) runs before
+  `judge.evaluate` does and always passed an empty judge-score map,
+  previously hardcoded inside the function itself. `decision.synthesize` is
+  the first caller with real scores (`judge.evaluate`'s `scores_by_model`,
+  G8) to give it, so the empty map moved out to the two existing call
+  sites (both re-tested unmodified, still passing) and `resolve_and_rank`
+  now takes it as a parameter — the same "second/third consumer earns an
+  extraction" precedent `similarity.rs` and `resolve_and_rank` itself were
+  each built under.
+- **`Completeness` cannot live in `arbiter-core`.** INTERFACES §9 types it
+  as `Truncated { reason: StopReason, missing_stages: Vec<StageName> }` —
+  both kernel types (`StopReason` in `stage.rs`, `StageName` in `ids.rs`),
+  and `arbiter-core` cannot depend on `arbiter-kernel` (D1). `record.rs`'s
+  own D18 note already anticipated this exact conflict without resolving
+  it ("`StopReason`/`StageName` are pipeline/kernel concepts this pure
+  decision core has no need of yet"). Resolved by defining `Completeness`
+  in the kernel (`decision_synthesize.rs`) rather than smuggling
+  kernel-typed fields into `arbiter-core`'s `DecisionRecord` — this
+  stage's own output (`SynthesizedDecision`) wraps the untouched, C8-shipped
+  `DecisionRecord` alongside a sibling `completeness` field, instead of
+  reopening C8's already-tested type.
+- **"Truncated" is not every non-`Converged` `StopReason`.** `RoundLimit`
+  and `NoNewInformation` are both the controller *deciding* the debate was
+  done (ARCHITECTURE §5.5: "at standard depth the controller exits on
+  `RoundLimit`, by construction" — read as the normal, designed way a
+  standard-depth run ends, not an interruption). Only the four genuinely
+  external cutoffs — `BudgetExhausted`, `TokenLimit`, `Deadline`,
+  `Cancelled` — plus `ProviderFailure` (a real failure, not an adaptive
+  choice) count as `Truncated`. Treating `RoundLimit` as truncated would
+  mark nearly every `--depth standard` run truncated by construction (§5.5
+  itself says standard-depth rarely clears `Converged`'s bar in one round),
+  which would be a strange, punitive reading of a mode the spec calls its
+  own MVP default.
+- **`missing_stages` is always empty.** No stage-execution tracking exists
+  anywhere in this codebase (D39's own scope note) to know which stages a
+  truncated run never reached — inventing that tracking is not this task's
+  own scope, so the field is present (as the type requires) but honestly
+  empty rather than guessed at.
+- **Three ratios/means `OutcomeInputs`/`PenaltyInputs` are defined over but
+  never given a derivation**, resolved in the new `arbiter-core::decision::synthesize`
+  module:
+  - `evidence_mass` ("mean standing of the claims decisive for the winning
+    option") = mean standing over claims with a `Supports`/`Opposes` cell on
+    top1 specifically in the *propagated* matrix — exactly the set
+    `score_options` itself sums over for that option.
+  - `unresolved_critical_ratio`/`assumption_dependency_ratio` ("decision-
+    critical claims", no option named) = computed over the **union** of
+    decisive claims across every live-scored option, not top1 alone — the
+    two ARCHITECTURE phrasings ("decisive for the winning option" vs.
+    "decision-critical") are read as deliberately different scopes, not the
+    same set under two names.
+  - `assumption_dependency_ratio`'s own "unverified assumption" is read as
+    `EvidenceKind::Assumption` specifically, not `Unverified` too — a stated
+    assumption and ungrounded extraction are different failure modes
+    (`claims.extract`, D32) and conflating them would double-count claims
+    `Unverified` already penalizes through `kind_weight` (§6.2) on its own.
+- **`judges_for_confidence` reads the winning option's own authoring
+  model(s), not a debate-wide average.** `confidence()`'s own signature
+  (`judges: &[Scorecard]`) is agnostic to whose scorecards they are;
+  `judge_score`/`judge_dispersion` feed the *decision's* confidence, so the
+  literal, narrowest-scope reading is the judged quality of the case for
+  the option actually being recommended — found via the direct matrix's own
+  `Authored`+`Supports` cells on top1 (the same seeding `options.cluster`,
+  D34, already performs), then that model's `per_judge_scores` entry from
+  G8. An unattached top1 (no authoring model found) degrades to an empty
+  judge slice, which `confidence()` already handles (`judge_score` 0.0,
+  `judge_dispersion` `None`) rather than panicking or fabricating a score.

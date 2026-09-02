@@ -30,7 +30,7 @@ use crate::store::{Artifact, Cost};
 use arbiter_core::config::{AttachmentParams, DisputeWeights, GraphParams, Thresholds, Weights};
 use arbiter_core::decision::{attachment, controller};
 use arbiter_core::{ClaimId, ClaimStanding};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Combined input: this round's post-rebuttal claims (`rebuttals`) plus the
 /// previous round's already-resolved graph (`previous`), needed for the
@@ -78,7 +78,7 @@ pub struct ControllerDecision {
     pub max_standing_delta: f64,
 }
 
-fn control_flow_json(control: &ControlFlow) -> serde_json::Value {
+pub(crate) fn control_flow_json(control: &ControlFlow) -> serde_json::Value {
     match control {
         ControlFlow::Continue { round, focus } => serde_json::json!({
             "kind": "continue",
@@ -213,11 +213,14 @@ impl Stage for ControllerDecide {
             attachment_params: &self.attachment_params,
             dispute_weights: &self.dispute_weights,
         };
+        // No judge has run yet at this point in the pipeline either --
+        // `judge.evaluate` only runs once the round loop exits.
         let resolved = resolve_and_rank(
             &round_input.claims.0,
             &round_input.relations.0,
             &round_input.options,
             resolution_cost,
+            &BTreeMap::new(),
             &params,
         );
 
