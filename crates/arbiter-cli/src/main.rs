@@ -3,6 +3,7 @@
 
 mod orchestrator;
 mod render;
+mod resume_replay;
 mod run_handle;
 mod synthetic;
 
@@ -90,6 +91,27 @@ enum Command {
         #[arg(long, default_value = ".arbiter/runs")]
         store: PathBuf,
     },
+    /// Continue an interrupted run: releases reservations that never left
+    /// the machine, reports orphaned spend, then finishes the pipeline.
+    Resume {
+        run_id: String,
+        #[arg(long)]
+        json: bool,
+        /// Overrides the original run's cost cap for the remainder.
+        #[arg(long)]
+        budget: Option<f64>,
+        #[arg(long, default_value = ".arbiter/runs")]
+        store: PathBuf,
+    },
+    /// Exact replay: re-derives a run's decision from its own cached
+    /// responses, with no network access at all.
+    Replay {
+        run_id: String,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value = ".arbiter/runs")]
+        store: PathBuf,
+    },
     /// List past runs from the history catalogue.
     History {
         #[arg(long)]
@@ -149,7 +171,7 @@ type Roster = Vec<(ModelId, ProviderId)>;
 /// resolution and provider adapters (P3/P4) are out of scope for this task
 /// (PLAN_DEVIATIONS.md D42); `--panel mock` is the one panel this binary can
 /// actually run today.
-fn mock_panel() -> (Roster, Roster, ProviderId) {
+pub(crate) fn mock_panel() -> (Roster, Roster, ProviderId) {
     let provider = ProviderId::new("mock");
     let panel = vec![
         (ModelId::new("model-a"), provider.clone()),
@@ -169,7 +191,7 @@ fn resolve_question(arg: &str) -> anyhow::Result<String> {
     }
 }
 
-fn prompts_dir() -> PathBuf {
+pub(crate) fn prompts_dir() -> PathBuf {
     // No spec section pins this resolution order (PLAN_DEVIATIONS.md D42):
     // an env override first, then the workspace-relative dev path this
     // binary's own `CARGO_MANIFEST_DIR` was compiled against.
@@ -230,6 +252,17 @@ async fn main() -> anyhow::Result<()> {
             json,
             store,
         } => claims_command(RunId::new(run_id), state, json, store),
+        Command::Resume {
+            run_id,
+            json,
+            budget,
+            store,
+        } => resume_replay::resume_command(RunId::new(run_id), json, budget, store).await,
+        Command::Replay {
+            run_id,
+            json,
+            store,
+        } => resume_replay::replay_command(RunId::new(run_id), json, store).await,
         Command::History {
             outcome,
             since,
@@ -373,8 +406,19 @@ async fn run_command(
         );
     }
 
-    let result = run_pipeline(&cfg, &pack, &providers, &handle).await;
+    let budget = arbiter_kernel::budget::BudgetLedger::new(Some(cfg.bounds.max_cost));
+    let cache = arbiter_kernel::cache::ResponseCache::new();
+    let result = run_pipeline(&cfg, &pack, &providers, &handle, &budget, &cache).await;
     let duration_ms = run_started_at.elapsed().as_millis() as i64;
+
+    // The only place `cache_entries` is ever written to (PLAN_DEVIATIONS.md
+    // D44) -- every `Stage`'s own `ctx.cache.put()` call only updates this
+    // process's in-memory view. Persisted regardless of outcome: even a
+    // failed run's completed calls are real cache hits a later `resume`
+    // should not have to re-pay for.
+    for (key, response) in cache.snapshot() {
+        handle.put_cache_entry(&key, &response)?;
+    }
 
     match &result {
         Ok(synthesized) => {
@@ -452,7 +496,9 @@ async fn run_command(
     Ok(())
 }
 
-fn print_human(synthesized: &arbiter_kernel::stages::decision_synthesize::SynthesizedDecision) {
+pub(crate) fn print_human(
+    synthesized: &arbiter_kernel::stages::decision_synthesize::SynthesizedDecision,
+) {
     use arbiter_kernel::stages::decision_synthesize::Completeness;
 
     let record = &synthesized.record;

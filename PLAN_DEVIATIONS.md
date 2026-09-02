@@ -1845,3 +1845,105 @@ scope names them and `show`/`explain`/`claims` cannot exist without them.
   `DecisionRecord` itself has no such mismatch (its `to_json()` serializes
   the real struct via `serde` directly), which is why `read_decision_record`
   needs no equivalent workaround.
+
+## D44 — L3: `resume`/`replay` — the response cache was never persisted, and three more read/write primitives nothing had called yet
+
+Like L1 and L2 before it, L3's own file scope (`arbiter-cli/src/`) suggested
+wiring against already-built primitives. It mostly was — `classify_on_resume`
+(K3), `get_for_replay` (K3), `Tx::put_cache`/the `cache_entries` table (S4)
+all existed, fully unit-tested, with no caller anywhere in the codebase.
+Building `resume`/`replay` is what gives every one of them its first caller.
+One gap surfaced only by actually running the result end to end, the same
+way D42's collision bug did:
+
+- **`cache_entries` had never been written to by any run, ever.** A
+  `Stage`'s `StageContext::cache: &ResponseCache` is a bare in-memory
+  structure with no store handle of its own — `ResponseCache::put`
+  (`arbiter-kernel/src/cache.rs`) only ever updated its own `Mutex<BTreeMap>`
+  view. Discovered by running `arbiter run` then `arbiter replay` against
+  the same run id and getting `InsufficientEvidence` back instead of the
+  original `SplitDecision`: `reader.cache_entries()` returned empty, every
+  call missed, `ReplayProvider` (below) refused each one, and the pipeline's
+  own per-item degradation (`SkipItem`, ARCHITECTURE §8.4) quietly absorbed
+  every refusal into a claims-less, judge-less "successful" run instead of
+  a loud failure — a worse outcome than an error would have been, and the
+  only reason the bug was visible at all was that `replay`'s own
+  stored-vs-recomputed comparison (below) flagged the mismatch. Fixed with
+  `ResponseCache::snapshot()` (every entry currently held) and
+  `RunHandle::put_cache_entry` (writes one through `Tx::put_cache`);
+  `arbiter run`'s own `run_command` now persists a snapshot after every
+  pipeline invocation, succeeded or not, closing the same gap for the
+  command that already existed. Not incremental — a process that crashes
+  before reaching this point still loses that attempt's cache, which is
+  the honest limit of a fix scoped to `arbiter-cli` rather than threading a
+  persistence hook through `StageContext` into every G-stage call site.
+  `resume`'s other recoveries (reservation release, orphaned-spend
+  reporting, budget capping) do not depend on it and work regardless.
+- **Three new `RunReader`/`Tx` primitives, none of which existed before
+  this task needed them:** `RunReader::cache_entries` (rehydrates a fresh
+  process's `ResponseCache` from what a prior one persisted — `resume`'s and
+  `replay`'s shared mechanism for serving already-answered calls for free,
+  via `run_pipeline`'s own cache-before-call order, D31, with zero changes
+  to any stage); `RunReader::provider_calls` and `RunReader::budget_totals`
+  (`resume`'s inputs — the first gives `classify_on_resume` real rows to
+  classify, the second lets a freshly built `BudgetLedger` be capped at what
+  is actually left of the hard cap instead of the full amount again);
+  `Tx::release_reservation` (`resume`'s `RESERVED → FAILED` branch,
+  ARCHITECTURE §8.4 — `commit_budget` cannot serve this, since it
+  unconditionally marks the call `Completed`).
+- **`run_pipeline` (`arbiter-cli/src/orchestrator.rs`) now takes `budget`/
+  `cache` as caller-supplied references** instead of constructing
+  `BudgetLedger::new(...)`/`ResponseCache::new()` itself — the one change to
+  L1's own executor, needed so `resume`/`replay` can seed both before a
+  single stage runs. Every stage call inside it is untouched; `arbiter run`
+  passes the same fresh pair it always implicitly built.
+- **`ReplayProvider`** (mirrors L1's `SyntheticProvider`) always errors —
+  replay is cache-only by construction (a rehydrated cache plus a provider
+  that can never succeed), rather than threading a "replay mode" flag
+  through every stage to reach `ResponseCache::get_for_replay` (K3) that
+  particular way. Structurally the same "opens no socket" guarantee, one
+  layer up.
+- **`NullWriter`/`NullTx`** discard every write — `replay` must never mutate
+  the run it is replaying (nothing in ARCHITECTURE describes replay as a
+  second execution of the same run id; `--repolicy`/`--repack` are the two
+  operations that mint a new one), so `RunHandle` is given a writer that
+  accepts and drops everything rather than a second connection onto the
+  real `run.db`.
+- **`replay` cross-checks its own recomputed record against the one already
+  on record** (via `render::read_decision_record`) and warns, rather than
+  failing, on a mismatch — cheap since both are already in hand, and it is
+  what caught the cache-persistence bug above in the first place, before
+  the acceptance test's own `diff` would have.
+- **`--repolicy`/`--repack` are not implemented.** Both "mint a new run id"
+  (ARCHITECTURE §7/§15) — a materially different code path (a new `init`,
+  not a reopen) from exact replay's own "verify this run reproduces
+  itself." `replay`/`resume` both refuse outright if the recorded
+  `policy_version`/`pack_hash` differs from what this build would use,
+  rather than silently attempting a re-derivation with no rule for how one
+  should work yet.
+- **`depth` has nowhere durable to live except `history.db`.** Neither
+  `Manifest` (frozen at `init`) nor any artifact carries it; `resume`/
+  `replay` read it back from `run_catalog.depth` (L2's own write path), and
+  degrade to `Standard` with a loud warning if that row is missing or was
+  never written (a best-effort catalogue write, D43, or a run pre-dating
+  L2's catalogue wiring). No round loop can be correctly replayed under the
+  wrong depth, so this is a real limitation, not just cosmetic — logged
+  rather than silently guessed at.
+- **`arbiter resume` on an already-finished run** (a `RunCompleted`/
+  `RunFailed` event already present) short-circuits to printing the stored
+  decision rather than re-running anything — otherwise a second `resume`
+  call would needlessly re-walk an already-complete pipeline through a live
+  writer, growing the event log for no reason.
+
+Verified end to end: `arbiter run` then `arbiter replay --json` produces
+output **byte-identical** to `arbiter show --json` for the same run
+(the IMPLEMENTATION_PLAN.md L3 acceptance test's own comparison) once the
+cache-persistence fix above landed; `arbiter resume` against a run holding
+one genuinely `RESERVED` provider call (simulated directly against the
+store) correctly reports "released 1 reservation" and completes the run;
+a second `resume` against the now-completed run correctly reports nothing
+to resume. Full workspace: build clean, `cargo test --workspace` green
+(43 arbiter-store, up from 41 for the two new store-primitive tests; all
+other crates' counts unchanged), `cargo fmt --all -- --check` clean,
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`
+clean.

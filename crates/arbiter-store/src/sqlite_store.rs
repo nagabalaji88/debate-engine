@@ -18,8 +18,8 @@ use arbiter_kernel::event::{Event, EventType};
 use arbiter_kernel::ids::{ArtifactId, CallId, ReservationId, Sequence};
 use arbiter_kernel::provider::CallState;
 use arbiter_kernel::store::{
-    Artifact, CacheKey, CachedResponse, ChainStatus, Cost, Manifest, RunReader, RunStore,
-    RunWriter, StoreError as KernelStoreError, Tx,
+    Artifact, CacheKey, CachedResponse, ChainStatus, Cost, Manifest, ProviderCallRow, RunReader,
+    RunStore, RunWriter, StoreError as KernelStoreError, Tx,
 };
 use rusqlite::Connection;
 use std::path::PathBuf;
@@ -277,6 +277,42 @@ impl Tx for SqliteTx<'_> {
             .map_err(sqlite_error_to_store_error)?;
         Ok(())
     }
+
+    /// `resume`'s `RESERVED → FAILED` branch (ARCHITECTURE §8.4): the money
+    /// was never sent, so it goes back to `reserved` rather than
+    /// `committed` -- `commit_budget`'s own SQL moves it the other way and
+    /// unconditionally marks the call `Completed`, which would be a lie for
+    /// a call that was never dispatched.
+    fn release_reservation(
+        &mut self,
+        r: &ReservationId,
+        c: &CallId,
+    ) -> Result<(), KernelStoreError> {
+        let reserved_amount: f64 = self
+            .tx
+            .query_row(
+                "SELECT reserved_amount FROM provider_calls
+                 WHERE reservation_id = ?1 ORDER BY created_at DESC LIMIT 1",
+                [r.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_error_to_store_error)?;
+        self.tx
+            .execute(
+                "UPDATE budget SET reserved = reserved - ?1",
+                [reserved_amount],
+            )
+            .map_err(sqlite_error_to_store_error)?;
+        let state_json = serde_json::to_string(&CallState::Failed)
+            .map_err(|e| KernelStoreError::Other(e.to_string()))?;
+        self.tx
+            .execute(
+                "UPDATE provider_calls SET state = ?1 WHERE call_id = ?2",
+                rusqlite::params![state_json, c.as_str()],
+            )
+            .map_err(sqlite_error_to_store_error)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -365,6 +401,81 @@ impl RunReader for SqliteRunReader {
             .map(|p| serde_json::from_str(&p).unwrap_or(serde_json::Value::Null))
             .collect();
         Ok(rows)
+    }
+
+    fn cache_entries(&self) -> Result<Vec<(CacheKey, CachedResponse)>, KernelStoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT provider, model, params, prompt_hash, response_hash, size_bytes, inline
+                 FROM cache_entries",
+            )
+            .map_err(sqlite_error_to_store_error)?;
+        let rows = stmt
+            .query_map([], |row| {
+                let size_bytes: i64 = row.get(5)?;
+                Ok((
+                    CacheKey {
+                        provider: arbiter_core::ProviderId::new(row.get::<_, String>(0)?),
+                        model: arbiter_core::ModelId::new(row.get::<_, String>(1)?),
+                        params: row.get(2)?,
+                        prompt_hash: row.get(3)?,
+                    },
+                    CachedResponse {
+                        response_hash: row.get(4)?,
+                        size_bytes: size_bytes as u64,
+                        inline: row.get(6)?,
+                    },
+                ))
+            })
+            .map_err(sqlite_error_to_store_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_error_to_store_error)?;
+        Ok(rows)
+    }
+
+    fn provider_calls(&self) -> Result<Vec<ProviderCallRow>, KernelStoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT call_id, reservation_id, state, reserved_amount
+                 FROM provider_calls ORDER BY created_at DESC",
+            )
+            .map_err(sqlite_error_to_store_error)?;
+        let rows = stmt
+            .query_map([], |row| {
+                let state_json: String = row.get(2)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    state_json,
+                    row.get::<_, f64>(3)?,
+                ))
+            })
+            .map_err(sqlite_error_to_store_error)?
+            .collect::<Result<Vec<_>, rusqlite::Error>>()
+            .map_err(sqlite_error_to_store_error)?
+            .into_iter()
+            .map(|(call_id, reservation_id, state_json, reserved_amount)| {
+                let state: CallState = serde_json::from_str(&state_json)
+                    .map_err(|e| KernelStoreError::Other(e.to_string()))?;
+                Ok(ProviderCallRow {
+                    call_id: CallId::new(call_id),
+                    reservation_id: ReservationId::new(reservation_id),
+                    state,
+                    reserved_amount: Cost(reserved_amount),
+                })
+            })
+            .collect::<Result<Vec<_>, KernelStoreError>>()?;
+        Ok(rows)
+    }
+
+    fn budget_totals(&self) -> Result<(Cost, Cost), KernelStoreError> {
+        self.conn
+            .query_row("SELECT reserved, committed FROM budget", [], |r| {
+                Ok((Cost(r.get(0)?), Cost(r.get(1)?)))
+            })
+            .map_err(sqlite_error_to_store_error)
     }
 }
 
@@ -658,6 +769,90 @@ mod tests {
             state_json,
             serde_json::to_string(&CallState::Completed).unwrap()
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn release_reservation_returns_money_to_reserved_and_fails_the_call() {
+        let root = temp_root();
+        let store = SqliteRunStore::new(&root);
+        let run_id = RunId::new("run_1");
+        let mut writer = store.create(&run_id, &manifest()).unwrap();
+
+        let call_id = CallId::new("call_1");
+        let reservation_id = ReservationId::new("res_1");
+        writer
+            .transact(&mut |tx| tx.reserve_call(&call_id, &reservation_id, Cost(0.50)))
+            .unwrap();
+
+        writer
+            .transact(&mut |tx| tx.release_reservation(&reservation_id, &call_id))
+            .unwrap();
+
+        let conn = Connection::open(root.join("run_1").join("run.db")).unwrap();
+        let (reserved, committed) = read_budget(&conn);
+        assert!((reserved - 0.0).abs() < 1e-9, "reserved: {reserved}");
+        assert!((committed - 0.0).abs() < 1e-9, "committed: {committed}");
+
+        let state_json: String = conn
+            .query_row(
+                "SELECT state FROM provider_calls WHERE call_id = ?1",
+                [call_id.as_str()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            state_json,
+            serde_json::to_string(&CallState::Failed).unwrap()
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reader_reads_back_cache_entries_provider_calls_and_budget_totals() {
+        let root = temp_root();
+        let store = SqliteRunStore::new(&root);
+        let run_id = RunId::new("run_1");
+        let mut writer = store.create(&run_id, &manifest()).unwrap();
+
+        let key = CacheKey {
+            provider: arbiter_core::ProviderId::new("anthropic"),
+            model: arbiter_core::ModelId::new("claude"),
+            params: "{}".to_string(),
+            prompt_hash: "blake3:p".to_string(),
+        };
+        let response = CachedResponse {
+            response_hash: "blake3:r".to_string(),
+            size_bytes: 10,
+            inline: Some("hi".to_string()),
+        };
+        writer
+            .transact(&mut |tx| tx.put_cache(&key, &response))
+            .unwrap();
+
+        let call_id = CallId::new("call_1");
+        let reservation_id = ReservationId::new("res_1");
+        writer
+            .transact(&mut |tx| tx.reserve_call(&call_id, &reservation_id, Cost(0.20)))
+            .unwrap();
+
+        let reader = store.reader(&run_id).unwrap();
+
+        let cached = reader.cache_entries().unwrap();
+        assert_eq!(cached, vec![(key, response)]);
+
+        let calls = reader.provider_calls().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].call_id, call_id);
+        assert_eq!(calls[0].reservation_id, reservation_id);
+        assert_eq!(calls[0].state, CallState::Reserved);
+        assert!((calls[0].reserved_amount.0 - 0.20).abs() < 1e-9);
+
+        let (reserved, committed) = reader.budget_totals().unwrap();
+        assert!((reserved.0 - 0.20).abs() < 1e-9);
+        assert!((committed.0 - 0.0).abs() < 1e-9);
 
         let _ = std::fs::remove_dir_all(&root);
     }

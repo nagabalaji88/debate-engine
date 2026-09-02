@@ -1183,6 +1183,31 @@ own `"evidence"`, `Completion.cost`/`orphaned_cost`) are honestly omitted or
 zeroed rather than guessed at — no persisted artifact supports deriving
 them yet. See D43 for the full account.
 
+**L3 scope note.** `resume` and `replay` are where several already-built,
+fully-tested primitives got their first caller: `classify_on_resume` and
+`get_for_replay` (K3), `Tx::put_cache`/`cache_entries` (S4). Running the
+result end to end surfaced a real bug the same way D42's did: `cache_entries`
+had never actually been written to by any run, because a `Stage`'s
+`StageContext::cache` is a bare in-memory structure with no store handle —
+`arbiter run` then `arbiter replay` on the same run id came back
+`InsufficientEvidence` instead of the original `SplitDecision`, the pipeline's
+own per-item degradation quietly absorbing every cache-miss refusal into an
+empty decision instead of a loud failure. Fixed with `ResponseCache::snapshot`
+and `RunHandle::put_cache_entry`, now called by `run_command` too (closing
+the same gap for `arbiter run` itself, not just L3). `run_pipeline`
+(L1's own executor) now takes `budget`/`cache` as caller-supplied references
+instead of constructing them itself — the only change to its stage-wiring
+body — so `resume`/`replay` can seed both from what a prior process
+persisted before a single stage runs. New store primitives:
+`RunReader::cache_entries`/`provider_calls`/`budget_totals`,
+`Tx::release_reservation`. `--repolicy`/`--repack` are not implemented (both
+mint a new run id, a materially different code path from exact replay);
+`replay`/`resume` refuse outright on a `policy_version`/`pack_hash` mismatch
+rather than attempting one. Verified against the acceptance test's own
+byte-identical `replay --json` vs `show --json` comparison, and against a
+simulated interrupted run (one genuine `RESERVED` provider call) for
+`resume`'s release-and-report path. See D44 for the full account.
+
 `doctor` must report, per §11.1 and §8.5: key state per provider, correlation-table
 staleness, models missing from the table, provisional constants, runs stuck in `running`,
 the ledger invariant, orphaned spend, and orphaned blobs.
@@ -1512,7 +1537,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | G9 | ✅ | (this commit) | D41 — see PLAN_DEVIATIONS.md; Completeness lives in the kernel, wraps C8's DecisionRecord unchanged |
 | L1 | ✅ | (this commit) | D42 — see PLAN_DEVIATIONS.md; first StageGraph executor, `--panel mock` only, content_hash collision fixed across G4–G9 |
 | L2 | ✅ | (this commit) | D43 — see PLAN_DEVIATIONS.md; new artifact-read path, `claim_standings`, `defeat_chain_for`, `history.db` writes added to `run_command` |
-| L3 | ☐ | | |
+| L3 | ✅ | (this commit) | D44 — see PLAN_DEVIATIONS.md; `cache_entries` was never written to before this task, fixed for `run` too; `--repolicy`/`--repack` deferred |
 | L4 | ☐ | | |
 | F1 | ☐ | | |
 | F2 | ☐ | | |

@@ -167,6 +167,15 @@ pub trait Tx {
     fn put_cache(&mut self, k: &CacheKey, r: &CachedResponse) -> Result<(), StoreError>;
     fn commit_budget(&mut self, r: &ReservationId, actual: Cost) -> Result<(), StoreError>;
     fn set_call_state(&mut self, c: &CallId, s: CallState) -> Result<(), StoreError>;
+    /// `resume`'s `RESERVED → FAILED` branch (ARCHITECTURE §8.4's own resume
+    /// table): "the request never left the machine → release the
+    /// reservation." Not in INTERFACES §1's literal `Tx` trait — nothing
+    /// there names a `resume` operation at all, and `commit_budget` cannot
+    /// serve this instead: it unconditionally sets the call `Completed`
+    /// (INTERFACES §5's own commit path), which is wrong for a call that was
+    /// never sent. Added rather than repurposing `commit_budget` to mean two
+    /// different things (PLAN_DEVIATIONS.md D44).
+    fn release_reservation(&mut self, r: &ReservationId, c: &CallId) -> Result<(), StoreError>;
 }
 
 pub trait RunReader: Send {
@@ -181,6 +190,29 @@ pub trait RunReader: Send {
     /// D43). A caller after "the final state" (e.g. the last
     /// `controller_decision.v1` a round loop produced) takes `.last()`.
     fn artifacts_by_type(&self, artifact_type: &str) -> Result<Vec<serde_json::Value>, StoreError>;
+    /// Every `cache_entries` row — `resume`/`replay`'s (L3) only way to
+    /// rehydrate the in-memory `ResponseCache` a fresh process starts with
+    /// none of. Nothing read this table back before L3: `arbiter run`'s
+    /// cache always starts and ends empty within one process
+    /// (PLAN_DEVIATIONS.md D44).
+    fn cache_entries(&self) -> Result<Vec<(CacheKey, CachedResponse)>, StoreError>;
+    /// Every `provider_calls` row, most recent first — `resume`'s own input
+    /// to `crate::calls::classify_on_resume` (PLAN_DEVIATIONS.md D44); the
+    /// pure classification function K3 built had no caller until now.
+    fn provider_calls(&self) -> Result<Vec<ProviderCallRow>, StoreError>;
+    /// `(reserved, committed)` off the single `budget` row — `resume`'s way
+    /// to cap a freshly-constructed `BudgetLedger` at what is actually left
+    /// of the hard cap, not the full amount again (PLAN_DEVIATIONS.md D44).
+    fn budget_totals(&self) -> Result<(Cost, Cost), StoreError>;
+}
+
+/// One `provider_calls` row, as `resume` reads it back.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderCallRow {
+    pub call_id: CallId,
+    pub reservation_id: ReservationId,
+    pub state: CallState,
+    pub reserved_amount: Cost,
 }
 
 #[cfg(test)]
@@ -260,6 +292,13 @@ mod tests {
             Ok(())
         }
         fn set_call_state(&mut self, _c: &CallId, _s: CallState) -> Result<(), StoreError> {
+            Ok(())
+        }
+        fn release_reservation(
+            &mut self,
+            _r: &ReservationId,
+            _c: &CallId,
+        ) -> Result<(), StoreError> {
             Ok(())
         }
     }

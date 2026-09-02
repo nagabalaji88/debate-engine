@@ -28,13 +28,35 @@ impl ResponseCache {
         self.inner.lock().unwrap().get(key).cloned()
     }
 
-    /// Committed by the caller in the same transaction as the call and its
-    /// budget charge (§8.3) — this method itself only updates the in-memory
-    /// view; the transactional guarantee is `Tx::put_cache`'s (currently the
-    /// D21-deferred stub in `arbiter-store`, since `cache_entries` doesn't
-    /// exist yet).
+    /// This method itself only updates the in-memory view a stage reads
+    /// from within one process; nothing here writes through to
+    /// `cache_entries` (`Tx::put_cache`), since a `Stage`'s own
+    /// `StageContext::cache: &ResponseCache` has no store handle to write
+    /// one through with. Durable persistence is the caller's job, once the
+    /// run is done, via [`Self::snapshot`] — see its own doc comment
+    /// (PLAN_DEVIATIONS.md D44).
     pub fn put(&self, key: CacheKey, response: CachedResponse) {
         self.inner.lock().unwrap().insert(key, response);
+    }
+
+    /// Every entry currently held, for a caller to persist through
+    /// `Tx::put_cache` once a run finishes (successfully or not) — the only
+    /// way `cache_entries` ever gets written to at all, since no `Stage`
+    /// call site has a store handle of its own (PLAN_DEVIATIONS.md D44).
+    /// Not incremental: a process that never reaches this call (a genuine
+    /// crash mid-run, not a normal `Err` return) loses that attempt's cache
+    /// entries, same as it loses anything else not yet committed. `resume`
+    /// still recovers correctly in every other respect (reservation
+    /// release, orphaned-spend reporting, budget capping) — only "skip a
+    /// call this exact attempt already made" is unavailable for a crash
+    /// this deep.
+    pub fn snapshot(&self) -> Vec<(CacheKey, CachedResponse)> {
+        self.inner
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     /// Exact replay: "cache-only with the network disabled" (§7). A miss is an

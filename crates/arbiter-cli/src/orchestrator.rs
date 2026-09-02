@@ -69,22 +69,29 @@ fn take_error(handle: &RunHandle) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `budget`/`cache` are the caller's, not constructed here — `arbiter run`
+/// (L1) passes fresh ones, but `resume`/`replay` (L3) need to seed both from
+/// what a prior process already persisted (a `ResponseCache` rehydrated from
+/// `cache_entries`, a `BudgetLedger` capped at what is actually left of the
+/// hard cap) before a single stage runs, which only the caller has read
+/// (PLAN_DEVIATIONS.md D44). Threading them through is the only change from
+/// this function's own L1 shape -- every stage call below is untouched.
 pub async fn run_pipeline(
     cfg: &PipelineConfig,
     pack: &PromptPack,
     providers: &ProviderRegistry,
     handle: &RunHandle,
+    budget: &BudgetLedger,
+    cache: &ResponseCache,
 ) -> anyhow::Result<SynthesizedDecision> {
     let sink = handle.sink();
-    let budget = BudgetLedger::new(Some(cfg.bounds.max_cost));
-    let cache = ResponseCache::new();
     let deadline = Instant::now() + Duration::from_secs(cfg.bounds.max_wall_time_secs);
 
     let ctx = |round: u32| StageContext {
         providers,
-        budget: &budget,
+        budget,
         events: &sink,
-        cache: &cache,
+        cache,
         deadline,
         cancel: CancellationToken::new(),
         round,

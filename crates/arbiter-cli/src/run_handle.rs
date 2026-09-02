@@ -81,6 +81,18 @@ impl RunHandle {
         Ok(result.expect("transact only returns Ok after the closure ran"))
     }
 
+    /// Persists one `ResponseCache::snapshot()` entry to `cache_entries` —
+    /// the only path that table is ever written through (PLAN_DEVIATIONS.md
+    /// D44); see the orchestrator's own call site for when.
+    pub fn put_cache_entry(
+        &self,
+        key: &arbiter_kernel::store::CacheKey,
+        response: &arbiter_kernel::store::CachedResponse,
+    ) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.writer.transact(&mut |tx| tx.put_cache(key, response))
+    }
+
     /// Appends one event outside the `EventSink` seam — used for the two
     /// lifecycle events (`RUN_COMPLETED`/`RUN_FAILED`) no stage emits, since
     /// they bracket the whole run rather than belonging to any one stage.
