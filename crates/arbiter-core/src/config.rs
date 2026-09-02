@@ -101,6 +101,12 @@ pub struct Thresholds {
     /// `score(A)=0.11, score(B)=0.08` reads as a split between two options neither
     /// of which is evidenced — that is INSUFFICIENT_EVIDENCE, not SPLIT_DECISION.
     pub option_floor: f64,
+    /// Multiplies `min_evidence_mass` in outcome-classification rule 1 only, when
+    /// the run is `Completeness::Truncated` (§6.6, INTERFACES §9) — a half-finished
+    /// debate must clear a higher evidence bar before it is trusted to conclude.
+    /// Does **not** apply to rule 3's evidence check, which reads `min_evidence_mass`
+    /// alone per §6.6's literal text (PLAN_DEVIATIONS.md D12).
+    pub truncation_factor: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -159,6 +165,7 @@ impl Default for Thresholds {
             min_margin: 0.15,
             dissent: 0.30,
             option_floor: 0.20,
+            truncation_factor: 1.2,
         }
     }
 }
@@ -189,6 +196,11 @@ mod tests {
     #[test]
     fn option_floor_matches_the_spec() {
         assert_eq!(Thresholds::default().option_floor, 0.20);
+    }
+
+    #[test]
+    fn truncation_factor_matches_the_spec() {
+        assert_eq!(Thresholds::default().truncation_factor, 1.2);
     }
 
     #[test]

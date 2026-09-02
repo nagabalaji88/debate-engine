@@ -6,4 +6,5 @@
 pub mod attachment;
 pub mod evidence;
 pub mod fixpoint;
+pub mod outcome;
 pub mod standing;

@@ -259,3 +259,39 @@ absent cell is a claim `explain` shows no opinion on, not a wrong one.
 If a future spec revision adds the `Opposes` base case, `decision/attachment.rs`'s
 `propagate` function is where it goes — the three existing rules are written as a
 small match table specifically so a fourth entry is a one-line addition, not a rewrite.
+
+## D12 — `truncation_factor` missing from the plan's own load-bearing constants table
+
+IMPLEMENTATION_PLAN.md §0.6 lists every number that must appear as a named constant,
+not a literal — and ARCHITECTURE §6.6 rule 1 needs one it never listed:
+
+```
+INSUFFICIENT_EVIDENCE   evidence_mass < τ_min × truncation_factor
+```
+
+INTERFACES §9 gives the value: "the evidence-mass floor is raised by `truncation_factor`
+(default ×1.2)". §0.6's table has a row for the *penalty* (`0.10 truncation`, §6.7) but
+none for this multiplier, so C5 would have hard-coded `1.2` inline had this not been
+caught while reading §6.6 against the plan's own constant list before coding.
+
+**Resolved:** added `Thresholds::truncation_factor: f64 = 1.2` (config.rs), doc-commented
+to INTERFACES §9, pinned by a test alongside the other `Thresholds` constants. §0.6's
+table is corrected to add the missing row.
+
+## D13 — `score(top1)` / `margin(top1, top2)` in §6.6: raw or share?
+
+ARCHITECTURE §6.6 writes `score(top1)`, `score(top2)` and `margin(top1, top2)` without
+saying which `OptionScore` field they read. Two candidates exist post-C4:
+`raw` (`Σstanding(supporting) − 0.5·Σstanding(opposing)`, unbounded) and `share` (`raw`
+normalised across options, sums to 1.0 in the non-degenerate case, D10).
+
+§6.7 defines `decision_margin` — the same word, same top1/top2 pairing — explicitly as
+`share(top1) − share(top2)`. Reusing "margin" for a differently-scaled quantity three
+sections later, with `option_floor = 0.20` compared against it as if it were a
+probability-like share, would be an inconsistent spec; reading both as `share` keeps
+`option_floor` and `τ_gap` meaningful as fractions of the same normalised total both
+places, and keeps one definition of "margin" in the whole document.
+
+**Resolved:** `outcome::classify` reads `OptionScore.share` for every comparison against
+`option_floor` and `τ_gap` in §6.6 rules 1–3. If a future spec revision states `raw` was
+intended, this is the one function to change.

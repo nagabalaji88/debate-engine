@@ -3,9 +3,9 @@
 //! Nothing in this crate performs IO, awaits, or calls a model. The kernel feeds it
 //! recorded artifacts; it returns a decision that is a pure function of them.
 //!
-//! Work in progress: outcome classification, confidence decomposition and
-//! counterfactual triggers land next, on top of these types
-//! (IMPLEMENTATION_PLAN.md tasks C5–C8).
+//! Work in progress: confidence decomposition, counterfactual triggers and
+//! `DecisionRecord` land next, on top of these types (IMPLEMENTATION_PLAN.md
+//! tasks C6–C8).
 #![forbid(unsafe_code)]
 
 pub mod claim;
@@ -23,6 +23,7 @@ pub use claim::{
 pub use config::DecisionConfig;
 pub use decision::attachment::{AttachSource, Attachment, AttachmentMatrix, Polarity};
 pub use decision::fixpoint::FixpointResult;
+pub use decision::outcome::{Outcome, OutcomeInputs};
 pub use ids::{
     ClaimId, GroupId, ModelId, OptionId, OptionVersion, PolicyVersion, PositionId, ProviderId,
     RunId,

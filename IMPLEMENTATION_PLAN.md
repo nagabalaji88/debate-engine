@@ -93,6 +93,7 @@ These are load-bearing and must appear in code as named constants, not literals:
 | dispersion threshold | 0.15, inactive when `judge_count == 1` | §6.7 |
 | `option_floor` | 0.20 | §6.6 |
 | τ_gap | 0.15 | §6.6 |
+| `truncation_factor` | 1.2, multiplies the rule-1 evidence floor only | §6.6, INTERFACES §9 |
 | `converged_margin_factor` | 1.5 | §5.5 |
 | `min_new_claims` | 2 | §5.5 |
 | `min_standing_delta` | 0.05 | §5.5 |
@@ -442,7 +443,19 @@ propagation respects attachment_propagation_depth and does not cross it
 **Files:** `decision/outcome.rs` · **Spec:** §6.6
 
 Evaluated **in order**: `INSUFFICIENT_EVIDENCE` → `SPLIT_DECISION` → `CONSENSUS` →
-`MAJORITY_WITH_DISSENT`. `option_floor` (0.20) is required in rules 1–3.
+`MAJORITY_WITH_DISSENT`. `option_floor` (0.20) is required in rules 1–3. Rule 1's
+evidence floor is `min_evidence_mass × truncation_factor` (1.2, only when the run was
+truncated — D12); rule 3's is `min_evidence_mass` alone, per §6.6's literal text — do
+not carry the truncation multiplier into rule 3. `score(top1)`/`score(top2)`/`margin`
+read `OptionScore.share`, not `raw` (D13).
+
+`classify()` takes `evidence_mass`, `unresolved_critical_ratio`, and
+`live_dissent_against_top1` as plain scalar/bool inputs, plus a `truncated: bool` —
+**not** the full `Completeness{reason: StopReason, missing_stages: Vec<StageName>}`
+enum INTERFACES §9 describes. `StopReason`/`StageName` are pipeline/kernel concepts
+with no definition anywhere yet; C5's own scope is `decision/outcome.rs` and its
+dependencies are C3+C4 only, not any K/G task. `Completeness` itself is introduced in
+C8, where `DecisionRecord` actually needs to serialize it.
 
 **Acceptance** — the latent bug from §6.6 must be covered:
 ```
@@ -1080,7 +1093,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | C2 | ✅ | (this commit) | D7 — see PLAN_DEVIATIONS.md |
 | C3 | ✅ | (this commit) | D8 — see PLAN_DEVIATIONS.md |
 | C4 | ✅ | (this commit) | D9, D10, D11 — see PLAN_DEVIATIONS.md |
-| C5 | ☐ | | |
+| C5 | ✅ | (this commit) | D12, D13 — see PLAN_DEVIATIONS.md |
 | C6 | ☐ | | |
 | C7 | ☐ | | |
 | C8 | ☐ | | |
