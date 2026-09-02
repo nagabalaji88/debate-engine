@@ -329,3 +329,38 @@ aggregate consistent with `judge_dispersion` being defined as *spread around* a
 central value from the same set. If a future spec revision states a different
 aggregation (e.g. min, to be conservative about weak judges), `confidence()` is the
 one function to change.
+
+## D16 — plan's C7 sketch scoped candidates to "unresolved", spec says "unresolved or disputed"
+
+IMPLEMENTATION_PLAN.md's C7 section read "for each **unresolved** claim, flip it,
+re-run the fixpoint" — but ARCHITECTURE §6.8 is explicit: "For each **unresolved or
+disputed** claim, pin its standing to the opposite extreme and recompute." Disputed
+claims (a live attacker present despite possibly-high standing, per C3's §6.4
+classification) are exactly the claims a counterfactual pass should also probe — a
+disputed claim's standing could plausibly have gone the other way had the live
+attacker been more or less credible, which is precisely the kind of assumption
+`change_triggers` exists to surface.
+
+**Resolved:** `counterfactual_flips` takes `candidates: &[ClaimId]` as a plain input
+rather than hard-coding a standing-class filter (consistent with C5/C6's convention
+of taking pre-classified inputs, D12) — but the plan's own C7 section is corrected to
+say the caller must pass **both** `Disputed` and `Unresolved` claims from
+`standing::classify_all`, not `Unresolved` alone.
+
+## D17 — "the opposite extreme": one flip per claim, not both
+
+ARCHITECTURE §6.8 says "pin its standing to **the opposite extreme**" — singular,
+definite article — which reads as one deterministic flip per claim, not a test of
+both 0.0 and 1.0. Two things independently confirm this rather than the "test both
+directions" alternative:
+
+- INTERFACES §21 sizes the reused pass at "~32 runs of a 64-iteration loop... for ~32
+  candidate claims" — one fixpoint solve per claim, not two.
+- The `DecisionRecord.change_triggers` example (§6.9) carries a single `"direction":
+  "if_true"` per entry, not a pair of results.
+
+**Resolved:** the extreme tested is the one *opposite the claim's current baseline
+lean* — standing ≥ 0.5 is tested `IfFalse` (pinned to 0.0), standing < 0.5 is tested
+`IfTrue` (pinned to 1.0). If a future spec revision wants both directions probed
+per claim, `counterfactual_flips` is the one function to change — it would return two
+entries per candidate instead of one.

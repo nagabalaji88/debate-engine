@@ -21,8 +21,10 @@ pub struct DecisionOption {
     /// Set when this option replaced an earlier one after a *material* change in
     /// course of action (not mere rewording, which keeps the same `id`).
     pub supersedes: Option<(OptionId, OptionVersion)>,
-    /// Superseded versions and abandoned options are kept, never deleted — but
-    /// excluded from scoring. `score_options` skips every retired option.
+    /// Superseded versions and abandoned options are kept, never deleted, and
+    /// meant to be excluded from scoring — but `score_options` scores exactly the
+    /// slice it is given and does not check this field itself; filtering retired
+    /// options out of that slice is the caller's responsibility.
     pub retired: bool,
 }
 

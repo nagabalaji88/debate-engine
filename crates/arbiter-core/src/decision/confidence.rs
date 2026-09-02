@@ -66,13 +66,7 @@ pub fn confidence(
     penalties: &PenaltyInputs,
     weights: &ConfidenceWeights,
 ) -> ConfidenceBreakdown {
-    let mut ranked: Vec<&OptionScore> = scores.iter().collect();
-    ranked.sort_by(|a, b| {
-        b.share
-            .partial_cmp(&a.share)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.id.cmp(&b.id))
-    });
+    let ranked = super::rank_by_share(scores);
     let top1_share = ranked.first().map(|o| o.share).unwrap_or(0.0);
     let top2_share = ranked.get(1).map(|o| o.share).unwrap_or(0.0);
     let decision_margin = (top1_share - top2_share).clamp(0.0, 1.0);

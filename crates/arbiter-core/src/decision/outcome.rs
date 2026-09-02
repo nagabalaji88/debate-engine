@@ -46,13 +46,7 @@ pub fn classify(
     inputs: &OutcomeInputs,
     thresholds: &Thresholds,
 ) -> Outcome {
-    let mut ranked: Vec<&OptionScore> = scores.iter().collect();
-    ranked.sort_by(|a, b| {
-        b.share
-            .partial_cmp(&a.share)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.id.cmp(&b.id))
-    });
+    let ranked = super::rank_by_share(scores);
 
     let top1_share = ranked.first().map(|o| o.share).unwrap_or(0.0);
 

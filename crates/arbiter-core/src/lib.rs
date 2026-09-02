@@ -3,8 +3,8 @@
 //! Nothing in this crate performs IO, awaits, or calls a model. The kernel feeds it
 //! recorded artifacts; it returns a decision that is a pure function of them.
 //!
-//! Work in progress: counterfactual triggers and `DecisionRecord` land next, on top
-//! of these types (IMPLEMENTATION_PLAN.md tasks C7–C8).
+//! Work in progress: `DecisionRecord` and the `explain --json` payload land next, on
+//! top of these types (IMPLEMENTATION_PLAN.md task C8).
 #![forbid(unsafe_code)]
 
 pub mod claim;
@@ -24,6 +24,7 @@ pub use decision::attachment::{AttachSource, Attachment, AttachmentMatrix, Polar
 pub use decision::confidence::{ConfidenceBreakdown, PenaltyInputs};
 pub use decision::fixpoint::FixpointResult;
 pub use decision::outcome::{Outcome, OutcomeInputs};
+pub use decision::triggers::{CounterfactualFlip, FlipDirection};
 pub use ids::{
     ClaimId, GroupId, ModelId, OptionId, OptionVersion, PolicyVersion, PositionId, ProviderId,
     RunId,

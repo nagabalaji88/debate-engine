@@ -492,8 +492,12 @@ and the dispersion table from INTERFACES §14: judges 0.85/0.75 → penalty **0*
 
 **Files:** `decision/triggers.rs`, `decision/record.rs` · **Spec:** §6.8, §6.9, INTERFACES §22
 
-C7: for each unresolved claim, flip it, re-run the fixpoint, report `margin_before`,
-`margin_after` and whether the winner changes.
+C7: for each **unresolved or disputed** claim (D16 — not unresolved alone), pin its
+standing to the extreme opposite its current baseline lean (D17) and re-run the
+fixpoint, reporting `margin_before`, `margin_after` and whether the winner changes.
+`counterfactual_flips` returns one entry per candidate regardless of `is_trigger`,
+since INTERFACES §21's `decision_leverage` reuses this exact pass for every claim,
+not only the ones that flip the winner.
 
 C8: `DecisionRecord` carrying `policy_version`, and the `explain --json` payload of
 INTERFACES §22 — **including `dispersion`**, whose absence was a v2.9 finding.
@@ -1101,7 +1105,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | C4 | ✅ | (this commit) | D9, D10, D11 — see PLAN_DEVIATIONS.md |
 | C5 | ✅ | (this commit) | D12, D13 — see PLAN_DEVIATIONS.md |
 | C6 | ✅ | (this commit) | D14, D15 — see PLAN_DEVIATIONS.md |
-| C7 | ☐ | | |
+| C7 | ✅ | (this commit) | D16, D17 — see PLAN_DEVIATIONS.md |
 | C8 | ☐ | | |
 | K0 | ☐ | | |
 | S1 | ☐ | | |
