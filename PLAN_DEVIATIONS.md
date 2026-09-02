@@ -1225,3 +1225,139 @@ anchored under this stage's own ARCHITECTURE section.
   provider call at all (asserted directly by
   `fewer_than_two_claims_never_calls_the_provider`) — consistent with every
   other stage's "don't spend budget on work with no possible output."
+
+## D36 — `disputes.rank`: resolving the graph, `contested_mass`, and a gap in already-shipped G4
+
+INTERFACES §21 gives `dispute_priority` as a full formula with named terms and
+default weights (0.35 · 0.35 · 0.20 · 0.10) — the most concrete section for
+any G-task since §20 (D34). What this task adds, in
+`arbiter-core/src/decision/dispute.rs` and
+`arbiter-kernel/src/stages/disputes_rank.rs`:
+
+- **`dispute_priority`'s real signature vs. its pseudocode one.** §21 writes
+  `fn dispute_priority(c: &CanonicalClaim, g: &ResolvedGraph, cfg:
+  &PolicyConfig) -> f64` — neither `ResolvedGraph` nor `PolicyConfig` is given
+  a concrete definition anywhere (D19's category), and the four terms are
+  naturally computed by two different layers: `contested_mass`,
+  `decision_leverage` and `evidence_gap` need only recorded artifacts (pure,
+  belongs in `arbiter-core`), but `resolution_cost` ("estimated tokens for the
+  exchange ÷ remaining budget") needs a real `BudgetLedger`, which
+  `arbiter-core` cannot depend on (D1). `arbiter-core::decision::dispute`
+  therefore takes four already-computed `f64` components plus a new
+  `DisputeWeights` config struct (`w_contested`/`w_leverage`/`w_gap`/`w_cost`,
+  defaults transcribed from §21's own comment) rather than a fictional struct
+  standing in for values it cannot produce on its own.
+- **`contested_mass`, "normalised" read literally.** §21: "`Σ
+  standing(attackers) + Σ standing(defenders)` around `c`, normalised" — no
+  formula for what "normalised" means. Read as the mean standing of every
+  claim with a `Contradicts` or `Supports` edge into `c`: bounded to `[0,1]`
+  by construction (every individual standing already is; a raw sum is not),
+  and `0.0` for a claim nobody has any live relation into — "a claim nobody
+  contests is not a dispute" is §21's own stated reason this term exists at
+  all.
+- **`decision_leverage` is not reimplemented.** It already exists, verbatim,
+  as `CounterfactualFlip::leverage()` (C7, `decision::triggers`) — §21 says as
+  much itself ("`decision_leverage` reuses the counterfactual machinery
+  already built for change triggers"). This stage calls
+  `triggers::counterfactual_flips` directly over the claims currently
+  `Disputed`/`Unresolved` (`standing::classify_all`, C3) and reads `.leverage()`
+  off each returned flip.
+- **Where Step 3 (attachment propagation) actually runs: here.** D34
+  deferred `options.cluster`'s own Step 3 call with an exact prediction:
+  "calling `propagate` is whichever later stage first holds both a matrix and
+  a relation graph together." `disputes.rank` is that stage — it is the first
+  to be handed claims, relations, *and* the direct attachment matrix all at
+  once (`RankInput`, the same combining-wrapper pattern D34/D35 already
+  established for exactly this "no spec-given multi-artifact `Stage::In`"
+  gap). `run()` therefore calls `attachment::propagate` before scoring
+  anything, and `counterfactual_flips` is given the *propagated* matrix, not
+  the direct one — a claim's leverage over an option it only reaches through
+  the relation graph (not a direct attachment) would otherwise read as zero
+  leverage, understating exactly the claims Step 3 exists to credit.
+- **`RankedDisputes`, "the resolved graph."** §21's `ResolvedGraph` is never
+  defined (above), but this stage's own output is a reasonable, literal
+  reading of what that name would hold: claims/relations/options carried
+  forward unchanged (later stages, starting with `challenge.plan`, need them
+  again), plus the fixpoint standing map and the propagated matrix this stage
+  computed. `evidence.rs`'s `judge_factor` needs a `scores:
+  &BTreeMap<ModelId, Scorecard>` this stage does not have — `judge.evaluate`
+  is stage 13, seven stages after this one — so it is passed an empty map,
+  which `judge_factor` already degrades to `1.0` for (no judge signal yet,
+  not zero evidence).
+- **`FixpointNotConverged`.** `disputes.rank` is the first stage to call
+  `fixpoint::solve` on real pipeline data; INTERFACES §12's "if `max_iterations`
+  is reached with `Δ > ε`, the engine emits `FIXPOINT_NOT_CONVERGED {
+  max_delta, iterations }`" is wired here, the one place it was possible to
+  wire until now.
+- **A gap in already-shipped G4, fixed in passing.** ARCHITECTURE §9 /
+  INTERFACES §13 both name `RELATIONSHIP_FOUND` as one of the Debate-family
+  events, but `relations.analyze` (G4, D35) never emitted it — only
+  `CandidatesSelected`/`StageStarted`/`StageCompleted` and the provider-call
+  events. Neither §13 nor §9 states the exact firing granularity for this
+  event (no payload contract is given for it, the same category as every
+  other D19 gap), but `claims.extract`/`claims.normalize`'s own precedent
+  (one `ClaimExtracted`/`ClaimNormalised` per claim) makes "one
+  `RelationshipFound` per successfully parsed relation" the consistent
+  reading, not an invented one. Fixed directly in
+  `relations_analyze.rs` (one `ctx.events.emit` added to the existing parse
+  loop, one new assertion in `a_lexically_similar_pair_is_classified`) rather
+  than deferred to a separate task, since it was caught while building the
+  stage that consumes `relations.analyze`'s own output.
+
+## D37 — `challenge.plan`: money-derived sizing, "the claim's author" generalised, and `ChallengeIssued` reserved for G6
+
+ARCHITECTURE §5.5 and INTERFACES §21 give this stage's budget derivation and
+pair-selection algorithm as literal pseudocode — the most mechanical G-task
+so far. What required a decision:
+
+- **`remaining_rounds`.** "each round takes `remaining_budget ÷
+  remaining_rounds`" — neither spec file gives `remaining_rounds` a formula.
+  Read as `max_rounds − current_round + 1` (the round about to be planned
+  counts toward its own share): at `--depth standard` (`max_rounds = 1`,
+  round 1) this is 1, so the whole remaining budget is available to the only
+  round there is; at `--depth deep` (`max_rounds = 3`) it steps 3, 2, 1 across
+  rounds 1–3. `max_rounds` itself is not a field either `StageContext` or
+  `RunContext` carries (D19's category again), so it is a constructor
+  argument on `ChallengePlan`, the same way every other tuning constant this
+  crate cannot source from the artifact graph is (D31's `estimated_cost_per_call`
+  precedent).
+- **"The claim's author" (singular) generalised to the claim's asserters
+  (plural).** §21's pseudocode: `defender = the claim's author`. A
+  `CanonicalClaim` can carry members from several models at once — that is
+  the entire point of `claims.normalize` (ARCHITECTURE §5.2: "cluster
+  equivalent claims across models; members preserved"). Picking one of
+  several asserting models as "the" author to compare against would be
+  arbitrary; the rule's actual purpose — never let a model challenge a claim
+  it itself asserted — generalises cleanly to "skip any challenger present in
+  `claim.asserted_by()`", which is what `ChallengePair.defenders: Vec<ModelId>`
+  and the selection loop implement. Verified directly:
+  `a_defended_claim_is_never_challenged_by_its_own_author`.
+- **Challenger selection walks ranked attackers, not just the single
+  strongest.** §21: "challenger = the model whose claim most strongly
+  contradicts it ... skip if challenger == defender ... skip if that model
+  already has `max_challenges_per_model`". Read as: sort this claim's
+  `Contradicts` attackers by `confidence × attacker_standing` descending
+  (claim id ascending as a tie-break), then walk that list — and, within one
+  attacking claim, its own `asserted_by()` models in order — taking the first
+  model that is neither a defender nor already at cap. This is the literal
+  algorithm the two `skip if` lines describe (try the best, and if it's
+  disqualified, try the next), not an invented fallback; verified by
+  `a_model_already_at_the_per_model_cap_is_skipped_in_favor_of_the_next` and
+  `the_strongest_cross_model_attacker_is_chosen_as_challenger`.
+- **The per-model cap is per round, across every planned pair — never reset
+  per claim.** "that model already has `max_challenges_per_model` this
+  round" (§5.5's own stated reason: it's a *fairness* limit inside the
+  money-derived envelope, never what sizes it) — `per_model_count` is one
+  running map for the whole `run()` call, incremented as each pair is
+  accepted, exactly matching "this round" rather than "this dispute".
+- **`ChallengeIssued` is not emitted here.** ARCHITECTURE §5's own pipeline
+  table assigns "issue challenges in parallel" to `challenge.run`, not
+  `challenge.plan` ("select targeted pairs within budget; never all-pairs" —
+  selection, not issuance). This stage emits only `StageStarted`/
+  `StageCompleted`; `ChallengeIssued` is left for G6 to fire when a challenge
+  actually goes out.
+- **`ChallengePlanned`, carrying `RankedDisputes` forward whole.** Same
+  "resolved graph, carried forward" shape D36 established for
+  `disputes.rank`'s own output — `challenge.run` will need the claim texts,
+  relations and standing again, and re-deriving them from scratch would
+  duplicate work this stage's input already did.

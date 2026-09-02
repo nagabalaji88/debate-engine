@@ -11,6 +11,7 @@ pub struct DecisionConfig {
     pub thresholds: Thresholds,
     pub confidence: ConfidenceWeights,
     pub attachment: AttachmentParams,
+    pub dispute: DisputeWeights,
 }
 
 /// INTERFACES §20 Step 3 — deterministic attachment propagation. Kept separate
@@ -29,6 +30,30 @@ impl Default for AttachmentParams {
     fn default() -> Self {
         Self {
             propagation_depth: 2,
+        }
+    }
+}
+
+/// INTERFACES §21's `dispute_priority` weights (`cfg.w_contested` etc.), copied
+/// field-for-field from the pseudocode. `PolicyConfig` there is never given a
+/// concrete struct anywhere (D19's category); this is the piece of it this
+/// crate actually needs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DisputeWeights {
+    pub w_contested: f64,
+    pub w_leverage: f64,
+    pub w_gap: f64,
+    pub w_cost: f64,
+}
+
+impl Default for DisputeWeights {
+    fn default() -> Self {
+        Self {
+            w_contested: 0.35,
+            w_leverage: 0.35,
+            w_gap: 0.20,
+            w_cost: 0.10,
         }
     }
 }
@@ -244,5 +269,15 @@ mod tests {
         assert_eq!(c.convergence_penalty, 0.05);
         assert_eq!(c.dispersion_weight, 0.20);
         assert_eq!(c.dispersion_threshold, 0.15);
+    }
+
+    /// INTERFACES §21's own comment: "defaults: 0.35 · 0.35 · 0.20 · 0.10".
+    #[test]
+    fn dispute_priority_weights_match_the_spec_defaults() {
+        let d = DisputeWeights::default();
+        assert_eq!(d.w_contested, 0.35);
+        assert_eq!(d.w_leverage, 0.35);
+        assert_eq!(d.w_gap, 0.20);
+        assert_eq!(d.w_cost, 0.10);
     }
 }

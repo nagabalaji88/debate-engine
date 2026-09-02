@@ -415,11 +415,22 @@ impl Stage for RelationsAnalyze {
                 };
                 let from_id: ClaimId = claims[from_idx].id.clone();
                 let to_id: ClaimId = claims[to_idx].id.clone();
+                let confidence = r.confidence.clamp(0.0, 1.0);
+                ctx.events.emit(
+                    EventType::RelationshipFound,
+                    &self.name(),
+                    serde_json::json!({
+                        "from": from_id.as_str(),
+                        "to": to_id.as_str(),
+                        "kind": r.kind,
+                        "confidence": confidence,
+                    }),
+                );
                 relations.push(Relation {
                     from: from_id,
                     to: to_id,
                     kind,
-                    confidence: r.confidence.clamp(0.0, 1.0),
+                    confidence,
                 });
             }
         }
@@ -607,6 +618,11 @@ mod tests {
         assert_eq!(out.0[0].kind, RelationKind::Contradicts);
         assert_eq!(out.0[0].from, ClaimId::new("claim_a"));
         assert_eq!(out.0[0].to, ClaimId::new("claim_b"));
+        assert_eq!(
+            sink.count(EventType::RelationshipFound),
+            1,
+            "one parsed relation must emit exactly one RelationshipFound"
+        );
     }
 
     #[tokio::test]

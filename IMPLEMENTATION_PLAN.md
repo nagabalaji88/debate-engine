@@ -1016,6 +1016,27 @@ expect — no adapter needed when a later stage wires them together. See D35 for
 the `similarity.rs` extraction, the T2 literal reading, and the direction/
 batch-size choices.
 
+**G5** (`arbiter-kernel/src/stages/disputes_rank.rs` +
+`arbiter-kernel/src/stages/challenge_plan.rs`, plus a new
+`arbiter-core/src/decision/dispute.rs`) is implemented and tested.
+`disputes.rank` is the stage that finally resolves the argument graph: it
+runs the C2 fixpoint over real pipeline claims/relations for the first time,
+runs Step 3 attachment propagation (`options.cluster`/D34 predicted exactly
+this handoff — "whichever later stage first holds both a matrix and a
+relation graph together"), classifies every claim's standing (C3), and ranks
+every `Disputed`/`Unresolved` claim by INTERFACES §21's `dispute_priority`
+formula — `contested_mass` and `evidence_gap` computed fresh in the new
+`decision::dispute` module, `decision_leverage` reusing C7's
+`CounterfactualFlip::leverage()` exactly as §21 itself says to.
+`challenge.plan` spends a money-derived challenge budget (judge's share
+reserved first, per §5.5) top-down over that ranking, selecting a
+challenger for each affordable dispute via §21's confidence-weighted
+attacker-standing rule and a per-round-not-per-claim per-model cap. See D36
+and D37 for the `ResolvedGraph`/`PolicyConfig` signature gap, the
+`contested_mass` normalisation reading, the `remaining_rounds` formula, "the
+claim's author" generalised to a claim's full asserter set, and a
+`RELATIONSHIP_FOUND` emission gap in already-shipped G4 fixed in passing.
+
 ---
 
 ## 6. Tasks — CLI
@@ -1366,7 +1387,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | G2 | ☐ (partial: `init` + `positions.generate` + `claims.extract` + `claims.normalize`; `panel.resolve` deferred) | (this commit) | D30, D31, D32, D33 — see PLAN_DEVIATIONS.md; see plan text above |
 | G3 | ✅ | (this commit) | D34 — see PLAN_DEVIATIONS.md; propagate/score_options already built by C4, see plan text above |
 | G4 | ✅ | (this commit) | D35 — see PLAN_DEVIATIONS.md; shared `similarity.rs`, T2 polarity sweep literal reading |
-| G5 | ☐ | | |
+| G5 | ✅ | (this commit) | D36, D37 — see PLAN_DEVIATIONS.md; Step 3 propagation runs in disputes.rank |
 | G6 | ☐ | | |
 | G7 | ☐ | | |
 | G8 | ☐ | | |

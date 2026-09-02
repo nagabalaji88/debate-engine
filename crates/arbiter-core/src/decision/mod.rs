@@ -5,6 +5,7 @@
 
 pub mod attachment;
 pub mod confidence;
+pub mod dispute;
 pub mod evidence;
 pub mod fixpoint;
 pub mod outcome;
