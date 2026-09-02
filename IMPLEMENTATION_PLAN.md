@@ -984,6 +984,23 @@ landed, G2 is functionally complete for the no-panel-recommendation path
 (explicit panel selection, which ARCHITECTURE §5 itself calls "the default
 path" — recommendation "is never a mandatory dependency").
 
+**G3** (`arbiter-kernel/src/stages/options_cluster.rs`) is implemented and
+tested — INTERFACES §20's Steps 1–2: clusters positions into
+`DecisionOption`s (one batched LLM call, same "no option is ever invented"
+invariant as `claims.normalize`'s clustering — an unmentioned or
+unparseable-response position always becomes its own option, never dropped
+or merged away) and produces the *direct* `AttachmentMatrix` (claims seeded
+`Authored` toward their own position's option, then one batched classifier
+call that may revise any cell to `Classified`/`supports`/`opposes`, or
+remove it via `neutral`). Step 3 (deterministic propagation) and §6.5 scoring
+were already fully built and tested by C4
+(`arbiter_core::decision::attachment::{propagate, score_options}`) — this
+task calls neither, since propagation needs `relations: &[Relation]`, which
+don't exist until `relations.analyze` (G4) runs, one stage later. See D34 for
+the multi-artifact `Stage::In` gap this task had to close (a `ClusterInput`
+wrapper combining positions and claims — the first stage needing more than
+one upstream artifact) and the cluster/attach prompt contracts.
+
 ---
 
 ## 6. Tasks — CLI
@@ -1332,7 +1349,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | P4 | ☐ | deferred as own pass — needs real HTTP adapters against live provider APIs, no CI-testable acceptance criterion | |
 | G1 | ✅ | (this commit) | D28 — see PLAN_DEVIATIONS.md; pack machinery only, no production prompt content — see plan text above |
 | G2 | ☐ (partial: `init` + `positions.generate` + `claims.extract` + `claims.normalize`; `panel.resolve` deferred) | (this commit) | D30, D31, D32, D33 — see PLAN_DEVIATIONS.md; see plan text above |
-| G3 | ☐ | | |
+| G3 | ✅ | (this commit) | D34 — see PLAN_DEVIATIONS.md; propagate/score_options already built by C4, see plan text above |
 | G4 | ☐ | | |
 | G5 | ☐ | | |
 | G6 | ☐ | | |

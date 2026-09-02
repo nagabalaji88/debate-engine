@@ -1041,6 +1041,62 @@ these):**
   fallback for a case the spec itself calls a rare defensive branch, not the
   common path.
 
+## D34 — `options.cluster`: multi-artifact input, the cluster+attach contracts, and where Step 3 actually runs
+
+INTERFACES §20 is the most concrete section for any G-task so far — it gives
+a full `OptionClusterer` trait, `AttachmentMatrix`/`Attachment`/`Polarity`/
+`AttachSource` structs, and a fully-worked, three-step algorithm. Almost none
+of it needed inventing; `arbiter-core`'s C4 work already built and tested
+Step 3 (`decision::attachment::propagate`) and the §6.5 scoring
+(`score_options`) verbatim from this same section, months (in task-graph
+terms) before this task existed to consume them. What this task adds:
+
+- **`ClusterInput`, a combining wrapper.** `options.cluster` is the first
+  stage needing more than one upstream artifact — INTERFACES §20's own
+  `OptionClusterer` trait takes `positions` and `claims` as two separate
+  method arguments, but K3's `Stage` trait (INTERFACES §6, copied verbatim)
+  has exactly one associated `In` type, with no provision anywhere in either
+  spec file for a multi-artifact stage. Resolved with a small `Artifact`
+  wrapper (`ClusterInput { positions, claims }`, content-hashed over both)
+  rather than changing `Stage`'s own shape, which would ripple back through
+  every already-shipped single-input stage for no reason this task's own
+  scope requires.
+- **The cluster call's contract** (`prompts/default/v1/options.cluster.md`):
+  a batched grouping call over ALL position text (not just "the
+  recommendation" — positions don't carry a separately-extracted
+  recommendation field anywhere in this codebase; `positions.generate`'s own
+  prompt already asks for reasoning *and* a labelled recommendation within
+  one text block, so the clustering call reads the whole thing and is asked
+  to identify + group recommendations *and* supply a label for each group in
+  one pass, since no earlier stage produces a machine-parsed recommendation
+  field to cluster instead). Every position resolves to exactly one option —
+  a position the model's response never mentions still becomes its own
+  singleton option, and an unparseable response degrades to "every position
+  is its own option" — both preserve INTERFACES §20's own invariant, "no
+  option is ever invented," by construction: nothing is ever merged or
+  dropped, only ever split further on failure.
+- **The attach call's contract** (`prompts/default/v1/options.attach.md`):
+  "Claims from a position that recommended O start as `Authored` toward O and
+  may be revised by the classifier" is implemented literally — every claim is
+  seeded `Authored`/`Supports`/1.0 toward its own position's clustered option
+  *before* the classifier call runs, and the classifier's response for that
+  exact `(claim, option)` pair overwrites the seed when it says `supports` or
+  `opposes`, or removes it entirely when it says `neutral` (a neutral verdict
+  on a specific pair the classifier was actually asked about is itself a
+  revision, not silence). The classifier omits pairs it judges neutral by
+  default (INTERFACES §20 doesn't specify whether the response must be dense
+  or sparse; a sparse response — only entries "you have something to say
+  about" — matches "one call for the whole matrix" being about avoiding
+  |C|×|O| separate *calls*, not about padding one response with `(claim,
+  option)` pairs neither side needs recorded).
+- **Where Step 3 actually runs: not here.** `propagate` needs
+  `relations: &[Relation]`, and `relations.analyze` — the stage that produces
+  them — runs *after* `options.cluster` in the pipeline
+  (`options.cluster → relations.analyze`). So this task's own output is the
+  direct matrix only (`Authored`/`Classified` cells); calling `propagate` is
+  whichever later stage first holds both a matrix and a relation graph
+  together, which is outside this task's own scope to build or guess at.
+
 ## D31 — `positions.generate`: `Question`/`Position`/`Positions`, the missing per-provider semaphore, and the first real prompt
 
 ARCHITECTURE §5.1's only description of a position is "position text"; no spec

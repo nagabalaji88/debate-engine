@@ -5,4 +5,5 @@
 
 pub mod claims_extract;
 pub mod claims_normalize;
+pub mod options_cluster;
 pub mod positions_generate;
