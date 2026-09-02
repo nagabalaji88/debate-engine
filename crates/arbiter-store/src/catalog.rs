@@ -98,6 +98,81 @@ pub fn update_completion(conn: &Connection, c: &Completion) -> Result<(), Catalo
     Ok(())
 }
 
+/// One `run_catalog` row, as `arbiter history` reads it back.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunSummary {
+    pub run_id: String,
+    pub status: String,
+    pub question: String,
+    pub outcome: Option<String>,
+    pub confidence: Option<f64>,
+    pub margin: Option<f64>,
+    pub cost: f64,
+    pub model_count: Option<i64>,
+    pub depth: Option<String>,
+    pub policy_version: String,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+}
+
+/// `arbiter history [--outcome · --since · --min-confidence]` (ARCHITECTURE
+/// §12) — every filter optional and AND-ed together.
+#[derive(Debug, Clone, Default)]
+pub struct HistoryFilter {
+    pub outcome: Option<String>,
+    /// An RFC3339 timestamp; only runs `started_at >=` this are returned.
+    pub since: Option<String>,
+    pub min_confidence: Option<f64>,
+}
+
+/// Newest-started first, matching `ix_catalog_time`'s own `started_at DESC`
+/// ordering — the index this query is built to use.
+pub fn list_runs(
+    conn: &Connection,
+    filter: &HistoryFilter,
+) -> Result<Vec<RunSummary>, CatalogError> {
+    let mut sql = "SELECT run_id, status, question, outcome, confidence, margin, cost, \
+                    model_count, depth, policy_version, started_at, completed_at \
+                    FROM run_catalog WHERE 1=1"
+        .to_string();
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(outcome) = &filter.outcome {
+        args.push(Box::new(outcome.clone()));
+        sql.push_str(&format!(" AND outcome = ?{}", args.len()));
+    }
+    if let Some(since) = &filter.since {
+        args.push(Box::new(since.clone()));
+        sql.push_str(&format!(" AND started_at >= ?{}", args.len()));
+    }
+    if let Some(min_confidence) = filter.min_confidence {
+        args.push(Box::new(min_confidence));
+        sql.push_str(&format!(" AND confidence >= ?{}", args.len()));
+    }
+    sql.push_str(" ORDER BY started_at DESC");
+
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+    let rows = stmt
+        .query_map(params.as_slice(), |r| {
+            Ok(RunSummary {
+                run_id: r.get(0)?,
+                status: r.get(1)?,
+                question: r.get(2)?,
+                outcome: r.get(3)?,
+                confidence: r.get(4)?,
+                margin: r.get(5)?,
+                cost: r.get(6)?,
+                model_count: r.get(7)?,
+                depth: r.get(8)?,
+                policy_version: r.get(9)?,
+                started_at: r.get(10)?,
+                completed_at: r.get(11)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Rebuilds `run_catalog` by scanning `runs_root` for `<run_id>/run.db` files
 /// and upserting one row per run found — "a scan and an upsert, no watermark, no
 /// delta pass, no lock choreography" (§8.1's changelog on this exact rewrite).
@@ -291,6 +366,98 @@ mod tests {
         assert_eq!(count, 50);
 
         let _ = std::fs::remove_file(&*path);
+    }
+
+    #[test]
+    fn list_runs_filters_by_outcome_since_and_min_confidence() {
+        let path = temp_path("list_runs");
+        let conn = open_history_db(&path, "0.1.0", &crate::now_rfc3339()).unwrap();
+
+        let rows = [
+            ("run_early", "2026-01-01T00:00:00Z", "Consensus", 0.9),
+            ("run_late_low", "2026-06-01T00:00:00Z", "Consensus", 0.4),
+            (
+                "run_late_high",
+                "2026-06-01T00:00:00Z",
+                "SplitDecision",
+                0.7,
+            ),
+        ];
+        for (id, started_at, outcome, confidence) in rows {
+            insert_running(
+                &conn,
+                &NewRun {
+                    run_id: id.to_string(),
+                    question: "q".to_string(),
+                    policy_version: "argument-v1".to_string(),
+                    started_at: started_at.to_string(),
+                    run_path: format!("/runs/{id}"),
+                },
+            )
+            .unwrap();
+            update_completion(
+                &conn,
+                &Completion {
+                    run_id: id.to_string(),
+                    status: "completed".to_string(),
+                    outcome: Some(outcome.to_string()),
+                    confidence: Some(confidence),
+                    margin: Some(0.1),
+                    cost: 0.5,
+                    orphaned_cost: 0.0,
+                    duration_ms: Some(1000),
+                    model_count: Some(3),
+                    depth: Some("standard".to_string()),
+                    completed_at: crate::now_rfc3339(),
+                },
+            )
+            .unwrap();
+        }
+
+        let all = list_runs(&conn, &HistoryFilter::default()).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(
+            all[0].run_id, "run_late_low",
+            "newest started_at first (tie broken by insertion order among equal timestamps is not asserted)"
+        );
+
+        let by_outcome = list_runs(
+            &conn,
+            &HistoryFilter {
+                outcome: Some("Consensus".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(by_outcome.len(), 2);
+        assert!(
+            by_outcome
+                .iter()
+                .all(|r| r.outcome.as_deref() == Some("Consensus"))
+        );
+
+        let since = list_runs(
+            &conn,
+            &HistoryFilter {
+                since: Some("2026-03-01T00:00:00Z".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(since.len(), 2);
+
+        let min_conf = list_runs(
+            &conn,
+            &HistoryFilter {
+                min_confidence: Some(0.6),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(min_conf.len(), 2);
+        assert!(min_conf.iter().all(|r| r.confidence.unwrap() >= 0.6));
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

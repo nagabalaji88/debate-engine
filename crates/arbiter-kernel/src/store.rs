@@ -174,6 +174,13 @@ pub trait RunReader: Send {
     /// byte-for-byte `DecisionRecord` cannot depend on one that happens to hold.
     fn events(&self) -> Result<Box<dyn Iterator<Item = Event>>, StoreError>;
     fn verify_chain(&self) -> Result<ChainStatus, StoreError>;
+    /// Every persisted artifact of one `Artifact::artifact_type()`, oldest to
+    /// newest insertion order — the CLI's own read path (`show`/`explain`/
+    /// `claims`, L2), which has no other way to get an artifact's payload
+    /// back out: nothing in this trait exposed one before (PLAN_DEVIATIONS.md
+    /// D43). A caller after "the final state" (e.g. the last
+    /// `controller_decision.v1` a round loop produced) takes `.last()`.
+    fn artifacts_by_type(&self, artifact_type: &str) -> Result<Vec<serde_json::Value>, StoreError>;
 }
 
 #[cfg(test)]

@@ -259,20 +259,52 @@ impl Artifact for RankedDisputes {
                 })
             })
             .collect();
+        let mut cell_rows: Vec<serde_json::Value> = self
+            .propagated_matrix
+            .cells
+            .iter()
+            .map(|((claim, option), a)| {
+                serde_json::json!({
+                    "claim": claim.as_str(),
+                    "option": option.as_str(),
+                    "polarity": format!("{:?}", a.polarity),
+                    "confidence": a.confidence,
+                    "source": format!("{:?}", a.source),
+                })
+            })
+            .collect();
+        cell_rows.sort_by_key(|c| c.to_string());
         let combined = format!(
-            "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
+            "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
             self.artifact_type(),
             self.claims.content_hash(),
             self.relations.content_hash(),
             self.options.content_hash(),
             serde_json::to_string(&standing_rows).expect("standing serializes"),
             serde_json::to_string(&ranked_rows).expect("ranked serializes"),
+            serde_json::to_string(&cell_rows).expect("cells serialize"),
         );
         format!("blake3:{}", blake3::hash(combined.as_bytes()).to_hex())
     }
+    /// Carries the full resolved graph (`claims`/`relations`/`options`/
+    /// `propagated_matrix`), not just `standing`/`ranked` as originally
+    /// shipped — `arbiter show`/`explain`/`claims` (L2) need claim text,
+    /// relation edges and option attachment to render anything at all, and
+    /// this is the only artifact in a finished run that still carries them
+    /// (PLAN_DEVIATIONS.md D43).
     fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
+            "claims": self.claims.to_json(),
+            "relations": self.relations.to_json(),
+            "options": self.options.to_json(),
             "standing": self.standing.iter().map(|(id, s)| (id.as_str().to_string(), *s)).collect::<BTreeMap<_, _>>(),
+            "propagated_cells": self.propagated_matrix.cells.iter().map(|((claim, option), a)| serde_json::json!({
+                "claim": claim.as_str(),
+                "option": option.as_str(),
+                "polarity": format!("{:?}", a.polarity),
+                "confidence": a.confidence,
+                "source": format!("{:?}", a.source),
+            })).collect::<Vec<_>>(),
             "ranked": self.ranked.iter().map(|r| serde_json::json!({
                 "claim_id": r.claim_id.as_str(),
                 "priority": r.priority,

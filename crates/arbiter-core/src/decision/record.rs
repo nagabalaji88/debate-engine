@@ -13,6 +13,7 @@
 //! formula or type for, and the rest wait for whichever kernel stage first has
 //! their inputs (`G9 decision.synthesize`, which is why it depends on C8).
 
+use crate::claim::ClaimStanding;
 use crate::config::ConfidenceWeights;
 use crate::decision::outcome::Outcome;
 use crate::decision::triggers::{CounterfactualFlip, FlipDirection};
@@ -163,6 +164,11 @@ pub struct DecisionRecord {
     /// example, which lists triggering claims only.
     pub change_triggers: Vec<ChangeTriggerEntry>,
     pub unresolved_claims: Vec<ClaimId>,
+    /// Every claim's classification, not just the unresolved ones —
+    /// `arbiter claims --state`'s only source, since no other persisted
+    /// artifact carries the post-fixpoint classification at all
+    /// (PLAN_DEVIATIONS.md D43).
+    pub claim_standings: BTreeMap<ClaimId, ClaimStanding>,
     pub engine_version: String,
     pub inputs_hash: String,
 }
@@ -229,6 +235,7 @@ pub fn build(
         claims,
         change_triggers,
         unresolved_claims,
+        claim_standings: claim_standings.clone(),
         engine_version: engine_version.into(),
         inputs_hash: inputs_hash.into(),
     }

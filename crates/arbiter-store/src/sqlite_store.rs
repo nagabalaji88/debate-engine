@@ -340,6 +340,32 @@ impl RunReader for SqliteRunReader {
     fn verify_chain(&self) -> Result<ChainStatus, KernelStoreError> {
         crate::events::verify_chain(self)
     }
+
+    fn artifacts_by_type(
+        &self,
+        artifact_type: &str,
+    ) -> Result<Vec<serde_json::Value>, KernelStoreError> {
+        let mut stmt = self
+            .conn
+            // `artifact_id` is TEXT PRIMARY KEY (not `INTEGER PRIMARY KEY`), so
+            // SQLite still maintains an implicit rowid to order by -- insertion
+            // order, which `created_at`'s string-timestamp granularity cannot
+            // reliably guarantee under two puts in the same millisecond.
+            .prepare("SELECT payload FROM artifacts WHERE artifact_type = ?1 ORDER BY rowid")
+            .map_err(sqlite_error_to_store_error)?;
+        let rows: Vec<serde_json::Value> = stmt
+            .query_map([artifact_type], |row| {
+                let payload: String = row.get(0)?;
+                Ok(payload)
+            })
+            .map_err(sqlite_error_to_store_error)?
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(sqlite_error_to_store_error)?
+            .into_iter()
+            .map(|p| serde_json::from_str(&p).unwrap_or(serde_json::Value::Null))
+            .collect();
+        Ok(rows)
+    }
 }
 
 impl SqliteRunReader {
@@ -560,6 +586,32 @@ mod tests {
             .unwrap();
 
         assert_eq!(id_a.as_str(), artifact.content_hash());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn artifacts_by_type_returns_only_matching_payloads_in_insertion_order() {
+        let root = temp_root();
+        let store = SqliteRunStore::new(&root);
+        let run_id = RunId::new("run_1");
+        let mut writer = store.create(&run_id, &manifest()).unwrap();
+
+        writer
+            .transact(&mut |tx| {
+                tx.put_artifact(&TestArtifact { content: "first" })?;
+                tx.put_artifact(&TestArtifact { content: "second" })?;
+                Ok(())
+            })
+            .unwrap();
+
+        let reader = store.reader(&run_id).unwrap();
+        let payloads = reader.artifacts_by_type("test.v1").unwrap();
+        assert_eq!(payloads.len(), 2);
+        assert_eq!(payloads[0]["content"], "first");
+        assert_eq!(payloads[1]["content"], "second");
+
+        assert!(reader.artifacts_by_type("no_such.v1").unwrap().is_empty());
 
         let _ = std::fs::remove_dir_all(&root);
     }

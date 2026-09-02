@@ -1757,3 +1757,91 @@ no earlier task could have.
   hash properties like determinism and equality-under-reordering) and a
   direct SQLite query confirming all twelve distinct artifact types now
   persist per run, up from eleven.
+
+## D43 — L2: `show`/`explain`/`claims`/`history` — the missing artifact-read path, `defeat_chains`, and what a finished run still doesn't persist
+
+L2's own file scope (`arbiter-cli/src/`) suggested this would be wiring
+against already-built primitives, the way L1's own scope note first assumed
+before finding no `StageGraph` executor existed. The same thing happened
+here: `RunReader` (K0/S2) exposed `events()`/`verify_chain()` only — nothing
+could read an artifact back out of a finished run at all — and most
+artifacts' own `to_json()` (G3–G9) was written minimal, sufficient only for
+`content_hash` and audit, never meant to round-trip enough data to *render*
+anything. Both gaps are this task's own to close, since no other task's
+scope names them and `show`/`explain`/`claims` cannot exist without them.
+
+- **`RunReader::artifacts_by_type(artifact_type) -> Vec<Value>`, new.**
+  Ordered by SQLite `rowid` (insertion order), not `created_at` — the
+  latter's string timestamp cannot reliably distinguish two puts issued
+  within the same millisecond, which a synthetic-provider run routinely
+  does. A caller after "the current state" (e.g. the round loop's last
+  `controller_decision.v1`) takes `.last()`.
+- **`RankedDisputes::to_json()` extended to carry the full resolved graph**
+  (`claims`, `relations`, `options`, `propagated_matrix` cells), not just
+  `standing`/`ranked` as G5 shipped it — the only artifact in a finished run
+  that still carries claim text, relation edges and attachment once the
+  round loop has moved past `disputes.rank`. `content_hash` was extended to
+  mix in the propagated cells too, so this is a genuine content change, not
+  cosmetic — re-verified via the full workspace test suite (unchanged pass
+  counts, same reasoning as D42: no test pins an exact hash value).
+- **`DecisionRecord` gains `claim_standings: BTreeMap<ClaimId, ClaimStanding>`**
+  (`arbiter-core`, C8's own type). `build()` already computed this map
+  internally to produce `ClaimCounts`/`unresolved_claims`; it was discarded
+  rather than stored. `arbiter claims --state agreed|disputed|unresolved|
+  defeated` has no other source for the three non-unresolved states — no
+  persisted artifact carries a per-claim classification otherwise. Zero new
+  parameters: `build()`'s existing `claim_standings` argument is now also
+  cloned onto the record it returns.
+- **A new `arbiter-core::decision::explain` module, `defeat_chain_for`,**
+  reconstructs INTERFACES §22's `defeat_chains` (`steps` with `by`/
+  `relation`/`attacker_standing`/`weight`/`delta`, plus `saturated`) from
+  data the fixpoint already computed — the final `standing` map and the
+  relation list that produced it — rather than a second, possibly-drifting
+  computation. Per-edge `delta` pro-rates the aggregate `gain * min(raw,
+  cap)` term back across the edges that produced `raw`, so summing every
+  step for one claim reproduces the fixpoint's own term exactly, capped or
+  not. This is arithmetic decomposition of an already-computed number, not
+  new decision logic invented for the CLI's sake — the same standard C8's
+  `explain_confidence` was already held to. **Not reproduced:** the worked
+  example's separate `"evidence"` field (`E(c)`) — recomputing it exactly
+  needs the claim's judge scores and lifecycle
+  (`decision::evidence::evidence`'s own signature), and no persisted
+  artifact joins a finished claim back to either. Omitted rather than
+  guessed at.
+- **Decision-level `defeat_chains` selection (no `claim_id` given) is a
+  product choice, not a spec rule.** INTERFACES §22 shows one entry even at
+  decision scope but does not say which claims qualify. Chosen: every
+  unresolved or disputed claim, plus every claim named in
+  `change_triggers`, deduplicated and capped at 10 — the claims actually
+  driving "why not more confident" and "what would flip this," rather than
+  the whole graph.
+- **`arbiter history` needed `history.db` writes L1 never added** — L1's own
+  scope was `run` alone, and its acceptance test only checked the printed
+  decision, not the catalogue. `run_command` now opens `history.db` as
+  `--store`'s parent directory (ARCHITECTURE §8's own sibling layout:
+  `history.db` next to `runs/`) and calls `insert_running`/
+  `update_completion` around the pipeline call. Best-effort: a catalogue
+  write failure (e.g. a read-only filesystem) does not fail the run, since
+  the run itself is still fully persisted and replayable — only its
+  catalogue row is missing, exactly the gap `arbiter reindex` (S6) already
+  exists to repair.
+- **`Completion.cost`/`orphaned_cost` are written as `0.0`.** No aggregate
+  budget reader exists anywhere yet to source a run's total committed spend
+  from — the same honest gap `reindex`'s own doc comment already leaves for
+  columns it cannot yet derive, applied here to the write path instead of
+  the read path. `model_count` (`cfg.panel.len()`) and `margin` (reusing
+  `confidence.dimensions`' own `"decision_margin"` entry, not re-derived)
+  needed no such gap.
+- **`list_runs`'s `--since` takes an RFC3339 timestamp**, matching
+  `started_at`'s own column format — ARCHITECTURE names the flag but not
+  its value format.
+- **Relation/polarity strings inside a resolved-graph payload are parsed by
+  literal match, not `serde`.** `AnalyzedRelations`/`AttachmentMatrix`'s own
+  `to_json()` (G4/G3) writes `format!("{:?}", kind)` (`"Contradicts"`), not
+  the type's own `#[serde(rename_all = "snake_case")]` form
+  (`"contradicts"`) — so the CLI's read-side view structs match the actual
+  literal string the artifact contains, rather than assuming a `Deserialize`
+  round-trip that was never wired on the write side for these fields.
+  `DecisionRecord` itself has no such mismatch (its `to_json()` serializes
+  the real struct via `serde` directly), which is why `read_decision_record`
+  needs no equivalent workaround.

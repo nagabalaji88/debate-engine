@@ -1161,6 +1161,28 @@ two different artifact types could collide and silently lose data via
 and `ChallengesIssued` on a zero-pair round. Fixed across all nineteen
 implementations. See D42 for the full account.
 
+**L2 scope note.** `show`, `explain [claim_id] [--json]`, `claims --state`
+and `history` all needed a read path nothing before them had built:
+`RunReader` (K0/S2) exposed only `events()`/`verify_chain()`, with no way to
+read an artifact back out of a finished run, and most artifacts'
+`to_json()` (G3–G9) was written minimal — enough for `content_hash`, never
+enough to render. New: `RunReader::artifacts_by_type`; `RankedDisputes::
+to_json()` extended to carry the full resolved graph (claims/relations/
+options/attachment), the one artifact that still has it once the round loop
+moves past `disputes.rank`; `DecisionRecord` gains `claim_standings` (every
+claim's classification, not just the unresolved list `build()` already
+produced); a new `arbiter-core::decision::explain::defeat_chain_for`
+reconstructs INTERFACES §22's `defeat_chains` from the fixpoint's own final
+standing and relations, arithmetic decomposition rather than new decision
+logic — held to the same standard C8's `explain_confidence` already was.
+`arbiter history` also needed `history.db` writes L1 never added (its own
+scope was `run` alone); `run_command` now writes `insert_running`/
+`update_completion` around the pipeline call, best-effort so a catalogue
+write failure never fails the run itself. Several fields (`defeat_chains`'
+own `"evidence"`, `Completion.cost`/`orphaned_cost`) are honestly omitted or
+zeroed rather than guessed at — no persisted artifact supports deriving
+them yet. See D43 for the full account.
+
 `doctor` must report, per §11.1 and §8.5: key state per provider, correlation-table
 staleness, models missing from the table, provisional constants, runs stuck in `running`,
 the ledger invariant, orphaned spend, and orphaned blobs.
@@ -1489,7 +1511,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | G8 | ✅ | (this commit) | D40 — see PLAN_DEVIATIONS.md; mean + per-judge Scorecard shapes both carried forward |
 | G9 | ✅ | (this commit) | D41 — see PLAN_DEVIATIONS.md; Completeness lives in the kernel, wraps C8's DecisionRecord unchanged |
 | L1 | ✅ | (this commit) | D42 — see PLAN_DEVIATIONS.md; first StageGraph executor, `--panel mock` only, content_hash collision fixed across G4–G9 |
-| L2 | ☐ | | |
+| L2 | ✅ | (this commit) | D43 — see PLAN_DEVIATIONS.md; new artifact-read path, `claim_standings`, `defeat_chain_for`, `history.db` writes added to `run_command` |
 | L3 | ☐ | | |
 | L4 | ☐ | | |
 | F1 | ☐ | | |

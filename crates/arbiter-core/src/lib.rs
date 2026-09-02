@@ -24,6 +24,7 @@ pub use claim::{
 pub use config::DecisionConfig;
 pub use decision::attachment::{AttachSource, Attachment, AttachmentMatrix, Polarity};
 pub use decision::confidence::{ConfidenceBreakdown, PenaltyInputs};
+pub use decision::explain::{DefeatChain, DefeatStep, defeat_chain_for};
 pub use decision::fixpoint::FixpointResult;
 pub use decision::outcome::{Outcome, OutcomeInputs};
 pub use decision::record::{

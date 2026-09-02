@@ -8,6 +8,7 @@ pub mod confidence;
 pub mod controller;
 pub mod dispute;
 pub mod evidence;
+pub mod explain;
 pub mod fixpoint;
 pub mod outcome;
 pub mod record;

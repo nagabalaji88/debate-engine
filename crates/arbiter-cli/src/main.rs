@@ -2,6 +2,7 @@
 //! every number it prints comes out of `arbiter-core` (ARCHITECTURE.md §12).
 
 mod orchestrator;
+mod render;
 mod run_handle;
 mod synthetic;
 
@@ -54,6 +55,75 @@ enum Command {
         #[arg(long, default_value = ".arbiter/runs")]
         store: PathBuf,
     },
+    /// Show one run — the decision (default), its claims, or its raw event
+    /// transcript.
+    Show {
+        run_id: String,
+        #[arg(long, conflicts_with_all = ["transcript"])]
+        claims: bool,
+        #[arg(long, conflicts_with_all = ["claims", "transcript"])]
+        decision: bool,
+        #[arg(long, conflicts_with_all = ["claims", "decision"])]
+        transcript: bool,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value = ".arbiter/runs")]
+        store: PathBuf,
+    },
+    /// Confidence terms, defeat chains and change triggers for a run, or one
+    /// claim within it.
+    Explain {
+        run_id: String,
+        claim_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value = ".arbiter/runs")]
+        store: PathBuf,
+    },
+    /// List a run's claims, optionally filtered by standing.
+    Claims {
+        run_id: String,
+        #[arg(long, value_enum)]
+        state: Option<StateArg>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value = ".arbiter/runs")]
+        store: PathBuf,
+    },
+    /// List past runs from the history catalogue.
+    History {
+        #[arg(long)]
+        outcome: Option<String>,
+        /// An RFC3339 timestamp; only runs started at or after this are
+        /// shown.
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long = "min-confidence")]
+        min_confidence: Option<f64>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value = ".arbiter/runs")]
+        store: PathBuf,
+    },
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+enum StateArg {
+    Agreed,
+    Disputed,
+    Unresolved,
+    Defeated,
+}
+
+impl From<StateArg> for arbiter_core::ClaimStanding {
+    fn from(s: StateArg) -> Self {
+        match s {
+            StateArg::Agreed => arbiter_core::ClaimStanding::Agreed,
+            StateArg::Disputed => arbiter_core::ClaimStanding::Disputed,
+            StateArg::Unresolved => arbiter_core::ClaimStanding::Unresolved,
+            StateArg::Defeated => arbiter_core::ClaimStanding::Defeated,
+        }
+    }
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy)]
@@ -126,7 +196,59 @@ async fn main() -> anyhow::Result<()> {
             stream,
             store,
         } => run_command(question, panel, depth.into(), budget, json, stream, store).await,
+        Command::Show {
+            run_id,
+            claims,
+            decision: _,
+            transcript,
+            json,
+            store,
+        } => {
+            let view = if claims {
+                ShowView::Claims
+            } else if transcript {
+                ShowView::Transcript
+            } else {
+                ShowView::Decision
+            };
+            show_command(RunId::new(run_id), view, json, store)
+        }
+        Command::Explain {
+            run_id,
+            claim_id,
+            json,
+            store,
+        } => explain_command(
+            RunId::new(run_id),
+            claim_id.map(arbiter_core::ClaimId::new),
+            json,
+            store,
+        ),
+        Command::Claims {
+            run_id,
+            state,
+            json,
+            store,
+        } => claims_command(RunId::new(run_id), state, json, store),
+        Command::History {
+            outcome,
+            since,
+            min_confidence,
+            json,
+            store,
+        } => history_command(outcome, since, min_confidence, json, store),
     }
+}
+
+/// `store_root` (`--store`, default `.arbiter/runs`) is where every run's own
+/// directory lives; `history.db` is its sibling, matching ARCHITECTURE §8's
+/// own layout (`~/.arbiter/{history.db, runs/<run_id>/run.db}`) one level
+/// down from wherever `--store` is rooted.
+fn history_db_path(store_root: &Path) -> PathBuf {
+    store_root
+        .parent()
+        .map(|p| p.join("history.db"))
+        .unwrap_or_else(|| PathBuf::from("history.db"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -200,6 +322,35 @@ async fn run_command(
         .ok_or_else(|| anyhow::anyhow!("run store did not record RUN_STARTED"))?;
     let handle = RunHandle::new(run_id.clone(), writer).continuing_from(Some(&run_started));
 
+    // `arbiter history` (L2) reads this catalogue -- L1 never wrote to it,
+    // since its own scope was `run` alone (PLAN_DEVIATIONS.md D43). Best
+    // effort: a run that cannot open `history.db` (e.g. a read-only
+    // filesystem) still completes and is still fully replayable from its own
+    // `run.db` -- only its catalogue entry is missing, exactly the gap
+    // `arbiter reindex` (S6) exists to repair.
+    let history_conn = arbiter_store::catalog::open_history_db(
+        &history_db_path(&store_root),
+        env!("CARGO_PKG_VERSION"),
+        &arbiter_store::now_rfc3339(),
+    )
+    .ok();
+    if let Some(conn) = &history_conn {
+        let _ = arbiter_store::catalog::insert_running(
+            conn,
+            &arbiter_store::catalog::NewRun {
+                run_id: run_id.as_str().to_string(),
+                question: question.clone(),
+                policy_version: policy.version.as_str().to_string(),
+                started_at: arbiter_store::now_rfc3339(),
+                run_path: store_root
+                    .join(run_id.as_str())
+                    .to_string_lossy()
+                    .to_string(),
+            },
+        );
+    }
+    let run_started_at = std::time::Instant::now();
+
     let mut providers = ProviderRegistry::new();
     providers.register(Box::new(SyntheticProvider::new(provider_id)));
 
@@ -223,6 +374,7 @@ async fn run_command(
     }
 
     let result = run_pipeline(&cfg, &pack, &providers, &handle).await;
+    let duration_ms = run_started_at.elapsed().as_millis() as i64;
 
     match &result {
         Ok(synthesized) => {
@@ -230,12 +382,62 @@ async fn run_command(
                 arbiter_kernel::event::EventType::RunCompleted,
                 serde_json::json!({"outcome": format!("{:?}", synthesized.record.outcome)}),
             )?;
+            if let Some(conn) = &history_conn {
+                let record = &synthesized.record;
+                // The `decision_margin` dimension's own `value` *is* the
+                // margin between top1 and top2 (confidence's own reading of
+                // it, C6) -- reused rather than re-derived from `options`
+                // (PLAN_DEVIATIONS.md D43). `cost`/`orphaned_cost` are left
+                // at 0: no aggregate budget reader exists yet to source them
+                // from, the same honest gap `reindex` (S6) already leaves
+                // for columns it cannot yet derive.
+                let margin = record
+                    .confidence
+                    .dimensions
+                    .iter()
+                    .find(|d| d.name == "decision_margin")
+                    .map(|d| d.value);
+                let _ = arbiter_store::catalog::update_completion(
+                    conn,
+                    &arbiter_store::catalog::Completion {
+                        run_id: run_id.as_str().to_string(),
+                        status: "completed".to_string(),
+                        outcome: Some(format!("{:?}", record.outcome)),
+                        confidence: Some(record.confidence.total),
+                        margin,
+                        cost: 0.0,
+                        orphaned_cost: 0.0,
+                        duration_ms: Some(duration_ms),
+                        model_count: Some(cfg.panel.len() as i64),
+                        depth: Some(format!("{depth:?}")),
+                        completed_at: arbiter_store::now_rfc3339(),
+                    },
+                );
+            }
         }
         Err(e) => {
             handle.append_lifecycle_event(
                 arbiter_kernel::event::EventType::RunFailed,
                 serde_json::json!({"error": e.to_string()}),
             )?;
+            if let Some(conn) = &history_conn {
+                let _ = arbiter_store::catalog::update_completion(
+                    conn,
+                    &arbiter_store::catalog::Completion {
+                        run_id: run_id.as_str().to_string(),
+                        status: "failed".to_string(),
+                        outcome: None,
+                        confidence: None,
+                        margin: None,
+                        cost: 0.0,
+                        orphaned_cost: 0.0,
+                        duration_ms: Some(duration_ms),
+                        model_count: Some(cfg.panel.len() as i64),
+                        depth: Some(format!("{depth:?}")),
+                        completed_at: arbiter_store::now_rfc3339(),
+                    },
+                );
+            }
         }
     }
 
@@ -273,4 +475,266 @@ fn print_human(synthesized: &arbiter_kernel::stages::decision_synthesize::Synthe
             println!("Completeness: truncated ({reason:?})")
         }
     }
+}
+
+enum ShowView {
+    Decision,
+    Claims,
+    Transcript,
+}
+
+fn show_command(
+    run_id: RunId,
+    view: ShowView,
+    json: bool,
+    store_root: PathBuf,
+) -> anyhow::Result<()> {
+    let reader = render::open_reader(&store_root, &run_id)?;
+    match view {
+        ShowView::Decision => {
+            let record = render::read_decision_record(reader.as_ref())?;
+            let completeness = render::read_completeness(reader.as_ref())?;
+            if json {
+                println!("{}", serde_json::to_string(&record)?);
+            } else {
+                println!("Run: {}", record.run_id.as_str());
+                println!("Question: {}", record.question);
+                println!("Outcome: {:?}", record.outcome);
+                match &record.recommendation {
+                    Some(r) => println!("Recommendation: {} ({})", r.label, r.option_id.as_str()),
+                    None => println!("Recommendation: none"),
+                }
+                println!("Confidence: {:.2}", record.confidence.total);
+                println!(
+                    "Claims: {} agreed, {} disputed, {} unresolved, {} defeated",
+                    record.claims.agreed,
+                    record.claims.disputed,
+                    record.claims.unresolved,
+                    record.claims.defeated
+                );
+                match completeness.reason {
+                    Some(reason) => println!("Completeness: {} ({reason})", completeness.status),
+                    None => println!("Completeness: {}", completeness.status),
+                }
+            }
+        }
+        ShowView::Claims => print_claims(reader.as_ref(), None, json)?,
+        ShowView::Transcript => {
+            let events: Vec<arbiter_kernel::event::Event> = reader
+                .events()
+                .map_err(|e| anyhow::anyhow!("reading events: {e}"))?
+                .collect();
+            if json {
+                println!("{}", serde_json::to_value(&events)?);
+            } else {
+                for e in &events {
+                    println!(
+                        "{} [{}] {:?} {}",
+                        e.timestamp,
+                        e.stage.as_str(),
+                        e.event_type,
+                        e.payload
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_claims(
+    reader: &dyn arbiter_kernel::store::RunReader,
+    filter: Option<StateArg>,
+    json: bool,
+) -> anyhow::Result<()> {
+    let record = render::read_decision_record(reader)?;
+    let graph = render::read_final_graph(reader)?;
+    let mut rows = render::claim_rows(&record, &graph);
+    if let Some(state) = filter {
+        let want: arbiter_core::ClaimStanding = state.into();
+        rows.retain(|r| r.standing == want);
+    }
+    if json {
+        println!("{}", serde_json::to_string(&rows)?);
+    } else if rows.is_empty() {
+        println!("(no claims match)");
+    } else {
+        for row in &rows {
+            println!(
+                "[{:?}] {} ({}): {}",
+                row.standing,
+                row.id.as_str(),
+                row.kind,
+                row.text
+            );
+        }
+    }
+    Ok(())
+}
+
+fn claims_command(
+    run_id: RunId,
+    state: Option<StateArg>,
+    json: bool,
+    store_root: PathBuf,
+) -> anyhow::Result<()> {
+    let reader = render::open_reader(&store_root, &run_id)?;
+    print_claims(reader.as_ref(), state, json)
+}
+
+fn explain_command(
+    run_id: RunId,
+    claim_id: Option<arbiter_core::ClaimId>,
+    json: bool,
+    store_root: PathBuf,
+) -> anyhow::Result<()> {
+    let reader = render::open_reader(&store_root, &run_id)?;
+    let record = render::read_decision_record(reader.as_ref())?;
+    let graph = render::read_final_graph(reader.as_ref())?;
+    let output = render::build_explain(&record, &graph, claim_id.as_ref());
+
+    if json {
+        println!("{}", serde_json::to_string(&output)?);
+        return Ok(());
+    }
+
+    println!(
+        "Run: {}  Policy: {}",
+        output.run_id.as_str(),
+        output.policy_version
+    );
+    match &output.subject.id {
+        Some(id) => println!("Subject: claim {}", id.as_str()),
+        None => println!("Subject: decision"),
+    }
+    println!(
+        "\nConfidence: {:.4} (base {:.4})",
+        output.confidence.total, output.confidence.base
+    );
+    for d in &output.confidence.dimensions {
+        println!(
+            "  + {:<16} value {:.2} x weight {:.2} = {:+.4}",
+            d.name, d.value, d.weight, d.contribution
+        );
+    }
+    for p in &output.confidence.penalties {
+        let note = p
+            .note
+            .as_deref()
+            .map(|n| format!("  ({n})"))
+            .unwrap_or_default();
+        println!("  - {:<16} {:+.4}{note}", p.name, p.contribution);
+    }
+
+    if !output.defeat_chains.is_empty() {
+        println!("\nDefeat chains:");
+        for chain in &output.defeat_chains {
+            let text = graph
+                .claim_text(&chain.claim_id)
+                .unwrap_or("<unknown claim>");
+            println!(
+                "  {} (standing {:.2}{}): {}",
+                chain.claim_id.as_str(),
+                chain.standing,
+                if chain.saturated { ", saturated" } else { "" },
+                text
+            );
+            for step in &chain.steps {
+                println!(
+                    "    {:+.4} <- {} ({:?}, weight {:.2}, standing {:.2})",
+                    step.delta,
+                    step.by.as_str(),
+                    step.relation,
+                    step.weight,
+                    step.attacker_standing
+                );
+            }
+        }
+    }
+
+    if !output.change_triggers.is_empty() {
+        println!("\nChange triggers:");
+        for t in &output.change_triggers {
+            println!(
+                "  {} {:?} -> {:?}",
+                t.claim_id.as_str(),
+                t.direction,
+                t.new_winner.as_ref().map(|o| o.as_str())
+            );
+        }
+    }
+
+    println!("\nOptions:");
+    for o in &output.options {
+        println!(
+            "  {} ({}) share {:.2} -- supports {:?}, opposes {:?}",
+            o.label,
+            o.id.as_str(),
+            o.share,
+            o.supported_by
+                .iter()
+                .map(|c| c.as_str())
+                .collect::<Vec<_>>(),
+            o.opposed_by.iter().map(|c| c.as_str()).collect::<Vec<_>>(),
+        );
+    }
+
+    Ok(())
+}
+
+fn history_command(
+    outcome: Option<String>,
+    since: Option<String>,
+    min_confidence: Option<f64>,
+    json: bool,
+    store_root: PathBuf,
+) -> anyhow::Result<()> {
+    let conn = arbiter_store::catalog::open_history_db(
+        &history_db_path(&store_root),
+        env!("CARGO_PKG_VERSION"),
+        &arbiter_store::now_rfc3339(),
+    )
+    .map_err(|e| anyhow::anyhow!("opening history.db: {e}"))?;
+    let rows = arbiter_store::catalog::list_runs(
+        &conn,
+        &arbiter_store::catalog::HistoryFilter {
+            outcome,
+            since,
+            min_confidence,
+        },
+    )
+    .map_err(|e| anyhow::anyhow!("querying history.db: {e}"))?;
+
+    if json {
+        let json_rows: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "run_id": r.run_id, "status": r.status, "question": r.question,
+                    "outcome": r.outcome, "confidence": r.confidence, "margin": r.margin,
+                    "cost": r.cost, "model_count": r.model_count, "depth": r.depth,
+                    "policy_version": r.policy_version, "started_at": r.started_at,
+                    "completed_at": r.completed_at,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string(&json_rows)?);
+    } else if rows.is_empty() {
+        println!("(no runs recorded)");
+    } else {
+        for r in &rows {
+            println!(
+                "{}  {:<10} {:<20} {:<8} conf={:<5} {}",
+                r.started_at,
+                r.status,
+                r.outcome.as_deref().unwrap_or("-"),
+                r.depth.as_deref().unwrap_or("-"),
+                r.confidence
+                    .map(|c| format!("{c:.2}"))
+                    .unwrap_or_else(|| "-".to_string()),
+                r.question,
+            );
+        }
+    }
+    Ok(())
 }
