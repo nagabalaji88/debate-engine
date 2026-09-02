@@ -98,6 +98,7 @@ dependencies = [
  "arbiter-kernel",
  "arbiter-providers",
  "arbiter-store",
+ "blake3",
  "clap",
  "serde",
  "serde_json",

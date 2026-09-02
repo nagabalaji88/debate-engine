@@ -1139,6 +1139,28 @@ arbiter replay "$RID" --json | diff - <(arbiter show "$RID" --json)   # byte-ide
 arbiter keys list   # prints sources and fingerprints, never a key
 ```
 
+**L1 scope note.** L1 is the first task to build a `StageGraph` executor —
+none existed anywhere in the codebase before it (D39's own scope note
+deferred it). `run_pipeline` (`arbiter-cli/src/orchestrator.rs`) wires all
+thirteen stages — `positions.generate → claims.extract → claims.normalize →
+options.cluster → relations.analyze → disputes.rank →` a
+`challenge.plan/challenge.run/rebuttal.run/controller.decide` loop
+re-entering on `ControlFlow::Continue` `→ judge.evaluate →
+decision.synthesize` — against real, hash-chained `SqliteRunStore`
+persistence via a new `RunHandle` bridging `EventSink` to the store.
+`--panel mock` runs the whole pipeline against `SyntheticProvider`, a
+prompt-literal-matching synthetic responder built because `MockProvider`'s
+hand-scripted `VecDeque` can't answer a call sequence this data-dependent;
+real provider adapters (P3/P4) stay out of scope. `--stream` durably
+records every event but does not yet mirror them to stdout live. Building
+and running this task's own end-to-end pipeline also surfaced and fixed a
+real bug in already-shipped G4–G9 code: none of the nineteen
+`Artifact::content_hash()` implementations mixed in `artifact_type()`, so
+two different artifact types could collide and silently lose data via
+`put_artifact`'s idempotent-insert contract — concretely, `ChallengePlanned`
+and `ChallengesIssued` on a zero-pair round. Fixed across all nineteen
+implementations. See D42 for the full account.
+
 `doctor` must report, per §11.1 and §8.5: key state per provider, correlation-table
 staleness, models missing from the table, provisional constants, runs stuck in `running`,
 the ledger invariant, orphaned spend, and orphaned blobs.
@@ -1466,7 +1488,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | G7 | ✅ | (this commit) | D39 — see PLAN_DEVIATIONS.md; round-loop executor itself out of scope, no StageGraph runner exists yet |
 | G8 | ✅ | (this commit) | D40 — see PLAN_DEVIATIONS.md; mean + per-judge Scorecard shapes both carried forward |
 | G9 | ✅ | (this commit) | D41 — see PLAN_DEVIATIONS.md; Completeness lives in the kernel, wraps C8's DecisionRecord unchanged |
-| L1 | ☐ | | |
+| L1 | ✅ | (this commit) | D42 — see PLAN_DEVIATIONS.md; first StageGraph executor, `--panel mock` only, content_hash collision fixed across G4–G9 |
 | L2 | ☐ | | |
 | L3 | ☐ | | |
 | L4 | ☐ | | |

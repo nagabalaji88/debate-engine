@@ -61,7 +61,8 @@ impl Artifact for SynthesizeInput {
     }
     fn content_hash(&self) -> String {
         let combined = format!(
-            "{}\u{1}{}\u{1}{}",
+            "{}\u{1}{}\u{1}{}\u{1}{}",
+            self.artifact_type(),
             self.run_id.as_str(),
             self.question,
             self.judged.content_hash(),
@@ -104,7 +105,10 @@ impl Artifact for SynthesizedDecision {
                     .join(",")
             ),
         };
-        let combined = format!("{record_json}\u{1}{completeness_json}");
+        let combined = format!(
+            "{}\u{1}{record_json}\u{1}{completeness_json}",
+            self.artifact_type()
+        );
         format!("blake3:{}", blake3::hash(combined.as_bytes()).to_hex())
     }
     fn to_json(&self) -> serde_json::Value {

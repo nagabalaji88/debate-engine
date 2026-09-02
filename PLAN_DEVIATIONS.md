@@ -1661,3 +1661,99 @@ entirely wiring, with a handful of genuine gaps:
   G8. An unattached top1 (no authoring model found) degrades to an empty
   judge slice, which `confidence()` already handles (`judge_score` 0.0,
   `judge_dispersion` `None`) rather than panicking or fabricating a score.
+
+## D42 — L1: `arbiter run`, the first `StageGraph` executor, `SyntheticProvider`, and a `content_hash` collision found in already-shipped G4–G9 code
+
+No `StageGraph` executor exists anywhere in the codebase before this task
+(D39's own scope note explicitly deferred it); every one of G2–G9's stages
+was previously only exercised by its own unit tests, each constructing its
+`StageContext` and inputs by hand. L1 is the first task that actually
+chains all thirteen stages together end to end against real persistence,
+which is also why it is the task that surfaced the collision bug below —
+no earlier task could have.
+
+- **`RunHandle` bridges `EventSink` to the real store.** `EventSink::emit`
+  (`arbiter-kernel/src/stage.rs`, fixed by every G2–G9 stage already
+  shipped) returns `()`, not a `Result` — there is no channel for a store
+  write failure to travel back through it without reopening every stage's
+  own already-tested call site, which is out of this task's scope.
+  Resolved by having `RunHandle` (`arbiter-cli/src/run_handle.rs`) record
+  the first such failure and having the orchestrator poll
+  `RunHandle::take_error()` after every stage completes, rather than
+  losing the error silently or panicking inside a trait method whose
+  signature this task does not own. `RunHandle` also owns the one open
+  `RunWriter`/`ChainState` pair for the run's lifetime and is the sole
+  caller of `put_artifact` — no stage calls it directly, consistent with
+  every stage's own `run()` returning its artifact rather than persisting
+  it.
+- **The chain must continue from `init`'s own `RUN_STARTED`, not restart.**
+  `arbiter_store::init::init` seals and appends `RUN_STARTED` against its
+  own internal `ChainState` before `RunHandle` exists. Constructing
+  `RunHandle` with a fresh, empty `ChainState` would make its first
+  appended event wrongly claim `previous_event_hash: None` a second time,
+  breaking `verify_chain` against what `init` already wrote. Caught by
+  reasoning through chain continuity before ever running the code, not by
+  a test failure; fixed by reading back `RUN_STARTED` via
+  `sqlite_store.reader(&run_id)?.events()?.last()` immediately after
+  `init` returns and seeding `RunHandle::continuing_from(Some(&run_started))`
+  with it.
+- **`--panel mock` only; real provider adapters (P3/P4) are out of
+  scope.** `arbiter-providers`'s `MockProvider` is a hand-scripted
+  `VecDeque` — correct for a fixture test that already knows its exact
+  call sequence, useless for a command that must run the whole pipeline
+  without knowing in advance how many candidate pairs T1 finds or how many
+  rounds the controller runs. `SyntheticProvider`
+  (`arbiter-cli/src/synthetic.rs`) instead inspects each call's *rendered*
+  prompt text — which already contains the real interpolated claim/
+  position text, since rendering happens before the provider ever sees it
+  — and returns a plausible, schema-correct response by matching literal
+  text this session's own shipped `prompts/default/v1/*.md` templates are
+  known to contain. Any `--panel` value other than `mock` is rejected with
+  an explicit error citing this entry, rather than silently degrading or
+  attempting real network calls no credential-resolution path exists for
+  yet.
+- **Prompt-pack directory resolution order is not pinned by any spec
+  section.** Resolved as: `ARBITER_PROMPTS_DIR` env var first, else the
+  workspace-relative dev path baked in via `env!("CARGO_MANIFEST_DIR")` —
+  a conservative default that works out of the box for a workspace
+  checkout, overridable for any other layout.
+- **`--stream` is only partially implemented this pass.** Every event is
+  durably recorded through the real hash chain and readable via the store
+  exactly as `--stream`'s non-streaming sibling would produce, but live
+  mirroring of each event line to stdout as the run progresses is not yet
+  wired — `run_command` prints a one-line notice to stderr instead of
+  silently accepting the flag and doing nothing observably different.
+- **Artifact `content_hash` collision across two different artifact types,
+  found by this task's own end-to-end integration testing and fixed
+  across twelve already-shipped files spanning G4 through G9.** The
+  `artifacts` table's primary key is `artifact_id` (= `content_hash`), and
+  `put_artifact` is `INSERT ... ON CONFLICT(artifact_id) DO NOTHING`
+  (S1/S2's idempotency contract, exercised by its own
+  `put_artifact_is_idempotent_on_identical_content` test — correct for its
+  intended case, a retried write of the *same* artifact). None of the
+  nineteen `Artifact::content_hash()` implementations across
+  `arbiter-kernel/src/stages/*.rs` mixed the artifact's own `artifact_type()`
+  into its hash, so two structurally different artifact types could hash
+  identically whenever their type-specific "extra" content happened to be
+  empty and their shared sub-hash was otherwise the same input.
+  Concretely: `ChallengePlanned` (empty `pairs`) and `ChallengesIssued`
+  (empty `challenges`, same unchanged `resolved` graph) both reduced to
+  `blake3(ranked_disputes_hash \u{1} "[]")` whenever a round produced zero
+  challenge pairs, so the second `put_artifact` call silently no-op'd and
+  `challenges_issued.v1` vanished from the persisted log — a real,
+  user-visible data loss that no G4–G9 unit test could have caught, since
+  no earlier test ever persisted two different artifact types into the
+  same physical table where a cross-type collision could actually
+  manifest; it took this task's own multi-stage, real-store run to expose
+  it. Fixed by adding `self.artifact_type()` as a hash-mixing prefix to
+  all nineteen implementations (not just the two that collided, since the
+  same structural gap existed in every one of them), across
+  `decision_synthesize.rs`, `rebuttal_run.rs`, `controller_decide.rs`,
+  `challenge_run.rs`, `challenge_plan.rs`, `relations_analyze.rs`,
+  `claims_normalize.rs`, `claims_extract.rs`, `positions_generate.rs`,
+  `options_cluster.rs`, `disputes_rank.rs`, and `judge_evaluate.rs`.
+  Verified via a full `cargo test --workspace` before and after (identical
+  pass counts — no existing test asserts on an exact hash *value*, only on
+  hash properties like determinism and equality-under-reordering) and a
+  direct SQLite query confirming all twelve distinct artifact types now
+  persist per run, up from eleven.

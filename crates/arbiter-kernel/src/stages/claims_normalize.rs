@@ -53,7 +53,11 @@ impl Artifact for NormalizedClaims {
             .map(|c| (c.id.as_str().to_string(), claim_json(c)))
             .collect();
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
-        let text = serde_json::to_string(&pairs).expect("claims serialize");
+        let text = format!(
+            "{}\u{1}{}",
+            self.artifact_type(),
+            serde_json::to_string(&pairs).expect("claims serialize")
+        );
         format!("blake3:{}", blake3::hash(text.as_bytes()).to_hex())
     }
     fn to_json(&self) -> serde_json::Value {

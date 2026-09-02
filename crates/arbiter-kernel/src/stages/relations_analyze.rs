@@ -46,7 +46,8 @@ impl Artifact for AnalyzeInput {
     }
     fn content_hash(&self) -> String {
         let combined = format!(
-            "{}\u{1}{}",
+            "{}\u{1}{}\u{1}{}",
+            self.artifact_type(),
             self.claims.content_hash(),
             self.options.content_hash()
         );
@@ -78,7 +79,11 @@ impl Artifact for AnalyzedRelations {
             })
             .collect();
         rows.sort_by_key(|v| v.to_string());
-        let text = serde_json::to_string(&rows).expect("relations serialize");
+        let text = format!(
+            "{}\u{1}{}",
+            self.artifact_type(),
+            serde_json::to_string(&rows).expect("relations serialize")
+        );
         format!("blake3:{}", blake3::hash(text.as_bytes()).to_hex())
     }
     fn to_json(&self) -> serde_json::Value {

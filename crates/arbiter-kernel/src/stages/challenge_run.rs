@@ -58,7 +58,8 @@ impl Artifact for ChallengesIssued {
             })
             .collect();
         let combined = format!(
-            "{}\u{1}{}",
+            "{}\u{1}{}\u{1}{}",
+            self.artifact_type(),
             self.resolved.content_hash(),
             serde_json::to_string(&rows).expect("challenges serialize"),
         );

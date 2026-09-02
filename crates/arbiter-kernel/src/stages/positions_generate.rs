@@ -36,7 +36,8 @@ impl Artifact for Question {
         "question.v1"
     }
     fn content_hash(&self) -> String {
-        format!("blake3:{}", blake3::hash(self.text.as_bytes()).to_hex())
+        let text = format!("{}\u{1}{}", self.artifact_type(), self.text);
+        format!("blake3:{}", blake3::hash(text.as_bytes()).to_hex())
     }
     fn to_json(&self) -> serde_json::Value {
         serde_json::json!({"text": self.text})
@@ -73,7 +74,11 @@ impl Artifact for Positions {
     }
     fn content_hash(&self) -> String {
         let canonical: Vec<serde_json::Value> = self.0.iter().map(position_json).collect();
-        let text = serde_json::to_string(&canonical).expect("positions serialize");
+        let text = format!(
+            "{}\u{1}{}",
+            self.artifact_type(),
+            serde_json::to_string(&canonical).expect("positions serialize")
+        );
         format!("blake3:{}", blake3::hash(text.as_bytes()).to_hex())
     }
     fn to_json(&self) -> serde_json::Value {

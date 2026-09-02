@@ -184,7 +184,8 @@ impl Artifact for RankInput {
     }
     fn content_hash(&self) -> String {
         let combined = format!(
-            "{}\u{1}{}\u{1}{}",
+            "{}\u{1}{}\u{1}{}\u{1}{}",
+            self.artifact_type(),
             self.claims.content_hash(),
             self.relations.content_hash(),
             self.options.content_hash()
@@ -259,7 +260,8 @@ impl Artifact for RankedDisputes {
             })
             .collect();
         let combined = format!(
-            "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
+            "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
+            self.artifact_type(),
             self.claims.content_hash(),
             self.relations.content_hash(),
             self.options.content_hash(),

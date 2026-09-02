@@ -54,7 +54,8 @@ impl Artifact for JudgeInput {
             })
             .collect();
         let combined = format!(
-            "{}\u{1}{}\u{1}{}",
+            "{}\u{1}{}\u{1}{}\u{1}{}",
+            self.artifact_type(),
             self.positions.content_hash(),
             self.resolved.content_hash(),
             serde_json::to_string(&exchange_rows).expect("exchanges serialize"),
@@ -105,7 +106,8 @@ impl Artifact for JudgeEvaluation {
         let mean_rows: Vec<serde_json::Value> =
             self.scores_by_model.values().map(scorecard_json).collect();
         let combined = format!(
-            "{}\u{1}{}",
+            "{}\u{1}{}\u{1}{}",
+            self.artifact_type(),
             self.resolved.content_hash(),
             serde_json::to_string(&mean_rows).expect("scores serialize"),
         );

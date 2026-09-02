@@ -49,7 +49,8 @@ impl Artifact for ClusterInput {
     }
     fn content_hash(&self) -> String {
         let combined = format!(
-            "{}\u{1}{}",
+            "{}\u{1}{}\u{1}{}",
+            self.artifact_type(),
             self.positions.content_hash(),
             self.claims.content_hash()
         );
@@ -94,7 +95,11 @@ impl Artifact for ClusteredOptions {
         // on ClaimId/OptionId's own Ord, not this JSON's string form -- sort
         // explicitly so the hash is self-evidently canonical.
         cells.sort_by_key(|a| a.to_string());
-        let text = serde_json::to_string(&(option_ids, cells)).expect("options serialize");
+        let text = format!(
+            "{}\u{1}{}",
+            self.artifact_type(),
+            serde_json::to_string(&(option_ids, cells)).expect("options serialize")
+        );
         format!("blake3:{}", blake3::hash(text.as_bytes()).to_hex())
     }
     fn to_json(&self) -> serde_json::Value {

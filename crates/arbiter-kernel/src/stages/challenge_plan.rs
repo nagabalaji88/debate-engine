@@ -81,7 +81,8 @@ impl Artifact for ChallengePlanned {
             })
             .collect();
         let combined = format!(
-            "{}\u{1}{}",
+            "{}\u{1}{}\u{1}{}",
+            self.artifact_type(),
             self.resolved.content_hash(),
             serde_json::to_string(&pair_rows).expect("pairs serialize"),
         );

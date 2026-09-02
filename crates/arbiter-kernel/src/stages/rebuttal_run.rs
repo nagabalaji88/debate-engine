@@ -88,7 +88,8 @@ impl Artifact for RebuttalsRun {
             })
             .collect();
         let combined = format!(
-            "{}\u{1}{}",
+            "{}\u{1}{}\u{1}{}",
+            self.artifact_type(),
             self.next_round_input.content_hash(),
             serde_json::to_string(&rows).expect("outcomes serialize"),
         );

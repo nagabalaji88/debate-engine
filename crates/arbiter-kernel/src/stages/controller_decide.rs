@@ -49,7 +49,8 @@ impl Artifact for DecideInput {
     }
     fn content_hash(&self) -> String {
         let combined = format!(
-            "{}\u{1}{}",
+            "{}\u{1}{}\u{1}{}",
+            self.artifact_type(),
             self.rebuttals.content_hash(),
             self.previous.content_hash()
         );
@@ -98,7 +99,8 @@ impl Artifact for ControllerDecision {
     }
     fn content_hash(&self) -> String {
         let combined = format!(
-            "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
+            "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
+            self.artifact_type(),
             control_flow_json(&self.control),
             self.resolved.content_hash(),
             self.converged,
