@@ -924,6 +924,22 @@ actual prompt text for any of the 15 pipeline stages. Each `G2`–`G9` task writ
 its own stage's real `.md` template(s) as it implements that stage; no
 `prompts/` directory with production content exists yet.
 
+**G2 scope note (`init` done; `panel.resolve`/`positions.generate`/
+`claims.extract`/`claims.normalize` pending):** `init` (ARCHITECTURE §5: no LLM
+call) is implemented — split across `arbiter-kernel/src/init.rs` (pure
+question validation) and `arbiter-store/src/init.rs` (opens the run and
+appends a correctly hash-chained `RUN_STARTED`, since that needs both
+`RunStore` and the chaining machinery neither of which `arbiter-kernel` may
+depend on, D1). See D30 for the question-validation rule, `RUN_STARTED`'s
+invented payload (the question plus the full `Manifest`), and why `init` is
+not itself a `Stage` impl. The other four G2 stages are deliberately left for
+their own passes: `panel.resolve` needs `correlation.toml` (not yet shipped);
+`positions.generate` is the first stage needing real provider orchestration
+through `StageContext`; `claims.extract`/`claims.normalize` carry the
+grounding/repair loop, Kahn cycle detection, and three-tier similarity
+matching (§5.1, §5.4) — each substantial enough on its own that bundling all
+five into one pass risks under-testing every one of them.
+
 ---
 
 ## 6. Tasks — CLI
@@ -1271,7 +1287,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | P3 | ☐ | deferred as own pass — security-sensitive (OS keychain, redaction) | |
 | P4 | ☐ | deferred as own pass — needs real HTTP adapters against live provider APIs, no CI-testable acceptance criterion | |
 | G1 | ✅ | (this commit) | D28 — see PLAN_DEVIATIONS.md; pack machinery only, no production prompt content — see plan text above |
-| G2 | ☐ | | |
+| G2 | ☐ (partial: `init` only) | (this commit) | D30 — see PLAN_DEVIATIONS.md; panel.resolve/positions.generate/claims.extract/claims.normalize remain, see plan text above |
 | G3 | ☐ | | |
 | G4 | ☐ | | |
 | G5 | ☐ | | |

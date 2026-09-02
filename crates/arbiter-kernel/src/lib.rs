@@ -14,6 +14,7 @@ pub mod cache;
 pub mod calls;
 pub mod event;
 pub mod ids;
+pub mod init;
 pub mod prompt;
 pub mod provider;
 pub mod stage;

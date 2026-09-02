@@ -10,6 +10,7 @@
 pub mod blob;
 pub mod catalog;
 pub mod events;
+pub mod init;
 pub mod lease;
 pub mod project;
 pub mod schema;

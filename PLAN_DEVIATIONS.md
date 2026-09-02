@@ -856,3 +856,47 @@ construction. `cache_entries`/`artifacts` are written directly by
 `rebuild_operational_projections` — no per-stage event payload contract for
 cache/artifact content exists yet to replay from (the same gap D27 already
 named for blob GC's referenced-set).
+
+## D30 — G2's `init` stage: question validation, `RUN_STARTED`'s payload, and its split across two crates
+
+ARCHITECTURE §5's own words for `init` are "validate question, snapshot config
+and prompt pack hash, seed RNG, open log" — no upper bound on question length,
+no `RUN_STARTED` payload field list, and (like every other stage) no code
+block. Three gaps, same D19 category, resolved as:
+
+- **Question validation** rejects only empty or whitespace-only input.
+  "Validate" without a stated rule is read at the conservative minimum the
+  stage's own name implies — a question must exist to debate at all — rather
+  than inventing a length ceiling or a content policy no worked example asks
+  for.
+- **`RUN_STARTED`'s payload** carries the question plus every field of
+  [`Manifest`] (`policy_version`, `config_hash`, `pack_hash`,
+  `correlation_table_version`, `rng_seed`). INTERFACES §23 already gives the
+  reasoning for recording `pack_hash` specifically ("the run states which
+  prompts produced it"); the same reasoning applies to every other constant
+  `--repolicy`/`--repack` can vary, so the whole manifest is recorded rather
+  than singling out one field arbitrarily.
+- **The implementation is split across two crates.** `init`'s question
+  validation is pure (no I/O) and lives in `arbiter-kernel/src/init.rs`. The
+  concrete "open the run, then append a correctly hash-chained `RUN_STARTED`"
+  orchestration needs `RunStore`'s concrete implementation *and*
+  `arbiter-store::events::ChainState`/`append_chained` in the same call —
+  `arbiter-kernel` cannot depend on `arbiter-store` (D1) — so that half lives
+  in `arbiter-store/src/init.rs` instead, calling back into
+  `arbiter_kernel::init::validate_question`. `init` is deliberately not a
+  `Stage` impl: K3's `Stage`/`StageContext` (INTERFACES §6) presuppose an
+  already-open run to hold `events`/`budget`/`cache` references into: `init`
+  is what creates that run in the first place, so it runs one level below the
+  `Stage` abstraction, not through it.
+
+**G2 scope note:** the plan's G2 task bundles five stages (`init`,
+`panel.resolve`, `positions.generate`, `claims.extract`, `claims.normalize`)
+into one line. This commit implements `init` only — the one stage with no LLM
+call, no panel/correlation-table dependency (`panel.resolve` needs
+`correlation.toml`, not yet shipped), and no real provider wiring, making it
+the cleanest, most self-contained unit to land correctly on its own. The
+remaining four are large enough on their own (real provider orchestration,
+grounding/repair, Kahn cycle detection, three-tier similarity matching) that
+attempting all of G2 in one pass risks exactly the kind of rushed, under-tested
+work this project's own §0.2/§0.4 discipline exists to prevent. Each will be
+picked up as its own follow-on pass, in pipeline order.
