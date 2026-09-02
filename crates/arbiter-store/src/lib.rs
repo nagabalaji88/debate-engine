@@ -6,3 +6,5 @@
 //! defines — dependency direction is store -> kernel -> core, never the reverse,
 //! so the orchestration engine never has to know SQLite exists.
 #![forbid(unsafe_code)]
+
+pub mod schema;

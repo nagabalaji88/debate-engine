@@ -507,3 +507,49 @@ constructible as `Box<dyn RunWriter>` at all. A unit test in `store.rs`
 (`transact_lets_a_caller_extract_a_value_via_closure_capture`) proves the pattern
 works end to end against an in-memory `Tx`/`RunWriter` pair built purely from these
 trait definitions.
+
+## D21 — S1 scoped down to the 3 tables (+ history.db's `run_catalog`) the spec actually gives columns for
+
+ARCHITECTURE §8.1's table lists ~15 more projection tables beyond `events` and
+`schema_metadata`: `run`, `stages`, `provider_calls`, `budget`, `positions`,
+`claims`, `claim_relations`, `disputes`, `challenges`, `rebuttals`,
+`judge_evaluations`, `decision`, `decision_triggers`, `provenance`,
+`cache_entries`, `artifacts`. It names every one of them — status (source of
+truth / projection) and rebuild policy (never / replay / migrations) — but gives
+**column definitions for none of them**. The only tables with a complete,
+spec-given shape anywhere in either file are:
+
+- `events` — ARCHITECTURE §9's JSON envelope example, field-for-field.
+- `run` — INTERFACES §1's literal `INSERT`/`UPDATE` statements (D19 already
+  established this same column list for the `Manifest`/lease-CAS discussion).
+- `schema_metadata` — ARCHITECTURE §8.7's explicit prose column list.
+- `run_catalog` (in `history.db`) — ARCHITECTURE §8.5's `CREATE TABLE`, verbatim,
+  the only fully-given `CREATE TABLE` statement in either document.
+
+Two more (`budget`, `provider_calls`) have *some* columns nameable from scattered
+SQL fragments in §5/§8.3/§8.4 (`reserved`, `committed`, `state`,
+`reserved_amount`, ...) but not a complete, confident list — and `cache_entries`/
+`artifacts` have only the K0-authored `CacheKey`/`CachedResponse`/`Artifact`
+shapes (themselves already D19-flagged as inferred, not spec-given) to go on. The
+remaining ~9 (`stages`, `positions`, `claims`, `claim_relations`, `disputes`,
+`challenges`, `rebuttals`, `judge_evaluations`, `decision`, `decision_triggers`,
+`provenance`) have **zero** column information anywhere in either file.
+
+Authoring ~15 table schemas from a names-only list would be invention at a scale
+this project's own discipline (§0.2 rule 1: never invent, log the gap) does not
+tolerate for something this load-bearing — a wrong column now means every later
+task that reads/writes these tables inherits the mistake, and there is no worked
+example anywhere to test a guess against.
+
+**Resolved:** `migrations/0001_initial.sql` creates exactly `events`, `run`,
+`schema_metadata`. `schema.rs` separately applies `history.db`'s `run_catalog` (+
+its own `schema_metadata`) as a Rust constant rather than a second migrations
+directory, since the plan's own file list for S1 names only one migration file.
+`budget`, `provider_calls`, `cache_entries` and `artifacts` are deferred to K1
+(budget ledger), K2 (provider-call state machine) and K5 (response cache) — the
+tasks that actually read and write them, and so are best positioned to pin exact
+columns against real code rather than a schema built in isolation ahead of its own
+users. The 9-table debate/decision projection group is deferred to S4
+("Projections + rebuild-from-events"), which the task graph already has depending
+on C8 (done) and K3 (StageGraph, not yet built) — i.e. it was never meant to
+happen before the Rust types being projected exist to project from.

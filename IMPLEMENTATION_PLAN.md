@@ -523,8 +523,16 @@ cargo test -p arbiter-core record::tests::penalties_array_has_five_entries
 **Spec:** §8.1, §8.5, §8.7
 
 `run.db`: `events` (**`seq INTEGER PRIMARY KEY`** — rowid alias, so `ORDER BY seq` is a
-scan not a sort), plus the projection tables of §8.1, plus `schema_metadata`.
-`history.db`: `run_catalog` exactly as §8.5 writes it, with both indexes.
+scan not a sort), `run`, plus `schema_metadata`. `history.db`: `run_catalog` exactly
+as §8.5 writes it, with both indexes.
+
+Scoped to exactly the tables the spec gives complete columns for (D21) — §8.1 names
+~15 more projection tables by title only, with no column list anywhere in either
+spec file. `budget`/`provider_calls`/`cache_entries`/`artifacts` wait for K1/K2/K5,
+the tasks that actually read and write them; the debate/decision projection group
+(`positions`, `claims`, `claim_relations`, `disputes`, `challenges`, `rebuttals`,
+`judge_evaluations`, `decision`, `decision_triggers`, `provenance`, `stages`) waits
+for S4, which already depends on C8 and K3 for exactly this reason.
 
 `schema_metadata` carries **`db_schema_version`**, never `schema_version` — that name
 already means the event envelope (§9).
@@ -1122,7 +1130,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | C7 | ✅ | (this commit) | D16, D17 — see PLAN_DEVIATIONS.md |
 | C8 | ✅ | (this commit) | D18 — see PLAN_DEVIATIONS.md |
 | K0 | ✅ | (this commit) | D19, D20 — see PLAN_DEVIATIONS.md |
-| S1 | ☐ | | |
+| S1 | ✅ | (this commit) | D21 — see PLAN_DEVIATIONS.md |
 | S2 | ☐ | | |
 | S3 | ☐ | | |
 | S4 | ☐ | | |
