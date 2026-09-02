@@ -15,4 +15,5 @@ pub mod calls;
 pub mod event;
 pub mod ids;
 pub mod provider;
+pub mod stage;
 pub mod store;

@@ -592,3 +592,68 @@ binary (an `event_type` this one has never heard of) is still hashable and
 chain-verifiable, matching INTERFACES §13's forward-compatibility promise:
 `RunReader::events()`'s typed view *skips* such a row, but `verify_chain` still
 accounts for it.
+
+## D23 — the stage idempotency key: two spec files describe different axes
+
+INTERFACES §5 gives the idempotency key as a literal formula: `blake3(stage_name ‖
+engine_version ‖ config_hash ‖ round ‖ input_artifact_hashes)`. ARCHITECTURE §7
+describes the same concept differently: "idempotency key per `(run_id, stage,
+input_hash)`" — and argues explicitly that `policy_version`/`pack_hash`/
+`table_version`/`config_hash` do **not** need to be part of it at all, since
+they're frozen by `init` and constant within a run, and `run_id` already prevents
+a stage from colliding across runs. The two lists disagree on both ends:
+INTERFACES's formula has no `run_id` term; ARCHITECTURE's tuple has no
+`engine_version`/`config_hash` (and doesn't explicitly mention `round`, though
+§6's re-entrant round-subgraph design separately requires round to be in *some*
+per-round key).
+
+Neither text is obviously wrong on its own — ARCHITECTURE's reasoning ("these are
+constants within a run, so they add nothing") is sound as an argument for why they
+*don't need* to be included, which is different from a claim that INTERFACES's
+formula is incorrect to include them.
+
+**Resolved:** `idempotency_key()` (`arbiter-kernel/src/stage.rs`) hashes the union
+of both — `stage_name`, `run_id`, `engine_version`, `config_hash`, `round`, and
+`input_artifact_hashes` — joined with a U+0001 separator so no two distinct input
+sequences can concatenate to the same string. Hashing a few extra, already-
+constant-within-a-run values cannot cause a *false* match (a false idempotency hit
+that wrongly skips real work); it can, at most, make the key strictly more
+specific than INTERFACES's own minimal formula requires, which is the safer
+direction to err in given the two texts disagree. If a future spec revision picks
+one list explicitly, this is the one function to narrow.
+
+## D24 — K3's remaining undefined `StageContext` field types
+
+`Stage`/`StageContext` (INTERFACES §6) reference four more types with no
+definition anywhere in either spec file, the same category of gap D19 already
+established for K0: `RunContext`, `Key`, `CostEstimate`, `StageError`,
+`ProviderRegistry`, `EventSink`, `DeterministicRng`, `CancellationToken`.
+Authored each from whatever anchor existed (full detail in each type's own doc
+comment in `arbiter-kernel/src/stage.rs`):
+
+- `RunContext` — assembled to carry exactly what [`idempotency_key`] needs (D23).
+- `Key`, `CostEstimate`, `StageError` — no struct given anywhere; modelled
+  minimally (a `blake3:`-prefixed hash newtype; calls/tokens/dollar-cost fields
+  matching ARCHITECTURE §11's own cost-breakdown table; a single `Other(String)`
+  error variant, matching `StoreError`'s D19 precedent of not inventing a failure
+  taxonomy no real implementation has exercised yet).
+- `DeterministicRng` — genuinely implemented (SplitMix64, seeded from the
+  manifest's `rng_seed`), not a placeholder, since a real seeded PRNG costs
+  nothing extra to build correctly and every future G-task needs one.
+- `CancellationToken` — genuinely implemented (`Arc<AtomicBool>`), same reasoning.
+- `EventSink` — a trait, not a concrete type, matching the `RunStore` seam pattern
+  (D1): the real implementation needs `arbiter-store`'s hash-chaining machinery
+  this crate cannot depend on.
+- `ProviderRegistry` — stays a near-empty placeholder. Unlike the above, there is
+  nothing real to build here yet: it would hold `Provider` trait objects, and
+  `Provider` doesn't exist until P1. Kept as a named type now (not deferred
+  entirely) so `StageContext`'s shape matches INTERFACES §6 today; P1 fills in
+  its fields and lookup methods without needing to change `StageContext` itself.
+
+`Stage::run`'s signature also required a choice INTERFACES §6's code block
+doesn't make explicit: it writes `async fn run(...)`, which is stable Rust for a
+non-`dyn` trait but is not by itself object-safe. Since nothing in K3's own scope
+needs `Box<dyn Stage>` yet (no executor exists to hold one), this was left as
+plain `-> impl Future<Output = ...> + Send` (RPITIT) rather than pre-emptively
+solving a dyn-safety problem no caller has yet — if a future G-task's executor
+needs `Box<dyn Stage<...>>`, that is the point to revisit this, not now.

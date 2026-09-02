@@ -769,11 +769,26 @@ K5 (`cache.rs`, §7): key is the **full tuple** `(provider, model, params, promp
 never `prompt_hash` alone, or the same prompt to two models collides. Committed in the same
 transaction as the call and its budget charge. Replay is cache-only with the network disabled.
 
-K5 done; K3 not yet — `Stage`'s own supporting types (`RunContext`, `Parallelism`,
-`Key`, `CostEstimate`, `StageError`) are as underspecified as K0's were (D19's
-category of gap), and K3 additionally needs bounded concurrency, per-provider rate
-limits and circuit breakers designed from scratch, which is a substantially larger
-lift than K5's — it is picked up as its own pass rather than rushed alongside K5.
+K5 done. K3 done for the `Stage` trait / `StageContext` / idempotency-key /
+round-control (`ControlFlow`/`StopReason`) surface — `Stage`'s own supporting
+types (`RunContext`, `Key`, `CostEstimate`, `StageError`, plus `StageContext`'s
+`ProviderRegistry`/`EventSink`/`DeterministicRng`/`CancellationToken` fields) were
+as underspecified as K0's were (D19's category of gap, now D24), and the two spec
+files even disagree on which axes the idempotency key itself carries (D23,
+resolved as the union of both). `ProviderRegistry` stays a near-empty placeholder
+until P1 defines `Provider` — nothing real can go in it before that.
+
+**Deferred out of K3's scope, genuinely later work:** bounded concurrency (the
+per-item join-set fan-out `positions.generate`/`claims.extract`/`challenge.run`
+need), per-provider rate limits, and circuit breakers. These need a concrete
+`Provider` (P1) and at least one real multi-item stage to design against
+meaningfully — building them now, with nothing yet calling through them, risks
+guessing a shape that doesn't fit the first real caller. `Parallelism::PerItem {
+max }` (the *declaration* of a stage's desired fan-out) is implemented; the
+*executor* that actually bounds concurrency against it is not, and is exactly the
+"executor" D24 already flags as the reason `Stage::run` doesn't need `dyn`
+object-safety yet either — both wait for the same future task (a G-task or a
+dedicated K3b).
 
 **Acceptance**
 ```bash
@@ -1187,7 +1202,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | S6 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K1 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K2 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
-| K3 | ☐ | picked up as its own pass, see plan text above | |
+| K3 | ✅ | (this commit) | D23, D24 — see PLAN_DEVIATIONS.md; concurrency/rate-limits/circuit-breakers deferred, see plan text above |
 | K4 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | K5 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
 | P1 | ☐ | | |
