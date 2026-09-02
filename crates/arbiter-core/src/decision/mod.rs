@@ -4,3 +4,4 @@
 //! which is what makes golden-fixture testing possible without spending a token.
 
 pub mod evidence;
+pub mod fixpoint;

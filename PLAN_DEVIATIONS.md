@@ -111,3 +111,48 @@ should share a group" and provider identity alone systematically overstates inde
 (§6.2). Fixed in C1: `correlation_group` added to `ClaimMember`; `independence()`
 repartitions on it. `corroboration()` is unaffected — the spec still defines it over
 distinct providers, not correlation groups.
+
+---
+
+## D7 — C2's own formula sketch capped in the wrong order
+
+**What the plan said** (§2, C2 section): `support = min(Σ α·standing(s), support_cap)`,
+`attack = min(Σ β·standing(a), attack_cap)` — weighting *inside* the cap.
+
+**What ARCHITECTURE §6.3 actually says:** the cap applies to the **raw, unweighted**
+sum, and α/β are applied *after*:
+
+```
+attack_term  = β · min(Σ w·standing(a), attack_cap)
+support_term = α · min(Σ w·standing(s), support_cap)
+```
+
+**Confirmed to actually diverge**, not just cosmetically different — with three
+full-strength supporters (raw = 3.0, α = 0.25, `support_cap` = 2.0):
+
+```
+spec (cap raw, then weight):    0.25 * min(3.0, 2.0) = 0.5
+plan's sketch (weight, then cap): min(0.25*3.0, 2.0) = 0.75
+```
+
+The plan's version needs a raw sum of `cap / gain` (6.0 for attack, 8.0 for support)
+before the cap ever engages, instead of `cap` (1.5 / 2.0) — the cap would almost never
+fire in practice under the wrong reading.
+
+**Caught by:** implementing C2 against ARCHITECTURE §6.3 directly (not the plan's own
+shorthand) and checking the result against the spec's four worked examples, which only
+match under the cap-the-raw-sum reading.
+
+**Fix:** `decision/fixpoint.rs` implements the correct order. `IMPLEMENTATION_PLAN.md`'s
+C2 section is corrected to match. Anyone re-deriving this from the plan's own
+(now-fixed) text rather than the spec directly would have gotten the right answer
+either way.
+
+Also corrected in the same pass: the plan's sketch signature (`solve(graph: &ClaimGraph,
+…, p: &Policy)`) referenced a `ClaimGraph` type that doesn't exist anywhere in the spec
+or codebase. The actual signature takes `claim_ids: &[ClaimId]` and `relations:
+&[Relation]` directly — the natural inputs the function needs, nothing invented — and
+`&GraphParams` rather than the wider `&Policy`, since the fixpoint uses only the graph
+constants, not the policy's other threshold groups. `FixpointResult` also gained a
+`max_delta: f64` field the sketch omitted, needed for the `FIXPOINT_NOT_CONVERGED{
+max_delta, iterations }` event payload §6.3 names.

@@ -318,7 +318,8 @@ is the one C1 must lock down, since C4 builds directly on it.
 ### C2 · Argumentation fixpoint
 
 **Files:** `crates/arbiter-core/src/decision/fixpoint.rs`
-**Spec:** §6.3
+**Spec:** §6.3 · **Corrected per** `PLAN_DEVIATIONS.md` D7 — read that before trusting
+the formula below if you are working from an older copy of this plan.
 
 Damped Jacobi iteration to a fixpoint over the claim graph.
 
@@ -327,16 +328,30 @@ pub struct FixpointResult {
     pub standing: BTreeMap<ClaimId, f64>,
     pub iterations: u32,
     pub converged: bool,           // false -> FIXPOINT_NOT_CONVERGED + 0.05 penalty
+    pub max_delta: f64,            // for that event's payload
     pub saturated: BTreeSet<ClaimId>,
 }
-pub fn solve(graph: &ClaimGraph, evidence: &BTreeMap<ClaimId, f64>,
-             p: &Policy) -> FixpointResult;
+pub fn solve(claim_ids: &[ClaimId], evidence: &BTreeMap<ClaimId, f64>,
+             relations: &[Relation], p: &GraphParams) -> FixpointResult;
 ```
 
-Per iteration, for each claim: `support = min(Σ α·standing(s), support_cap)`,
-`attack = min(Σ β·standing(a), attack_cap)`, `qualify = Σ γ·standing(q)`, then
-`next = clamp01(evidence + support − attack − qualify)` damped by λ against the previous
-value. Stop when max delta < `epsilon` or at `max_iterations`; record which.
+Per iteration, for each claim: cap the **raw, unweighted** sum first, weight it
+second — `support_term = α · min(Σ w·standing(s), support_cap)`, `attack_term = β ·
+min(Σ w·standing(a), attack_cap)`, where `w` is `Relation::confidence`. Qualify has no
+stated cap: `qualify_term = γ · Σ w·standing(q)`. `Unrelated`/`Uncertain` relations
+carry no weight and are excluded entirely (`relation.rs`). Then `target =
+clamp01(E(c) + support_term − attack_term − qualify_term)`, and the next value is
+`prev + λ·(target − prev)` — damped *toward* the target, not the target itself.
+Every read within one sweep uses the *previous* sweep's values (Jacobi, not
+Gauss-Seidel), which is what makes the result order-independent by construction
+rather than by convention. Stop when max delta < `epsilon` or at `max_iterations`;
+record which. Initial condition (not stated by the spec): `standing_0(c) = E(c)` — the
+only value that needs no information about neighbours, and already a fixed point for
+any claim with no incoming edges.
+
+**Getting the cap order backwards is the single highest-value mistake to avoid here**
+— `α · min(raw, cap)` and `min(α · raw, cap)` diverge numerically (D7 works the
+example), and only the first matches the spec's own worked numbers.
 
 **Acceptance** — these behaviours, each its own test:
 ```
@@ -1028,7 +1043,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | X1 | ✅ | (this commit) | none |
 | X2 | ✅ | (this commit) | none |
 | C1 | ✅ | (this commit) | D3, D4, D5, D6 — see PLAN_DEVIATIONS.md |
-| C2 | ☐ | | |
+| C2 | ✅ | (this commit) | D7 — see PLAN_DEVIATIONS.md |
 | C3 | ☐ | | |
 | C4 | ☐ | | |
 | C5 | ☐ | | |
