@@ -56,6 +56,21 @@ def load_catalog(store: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=5)
 def load_run(store: str, run_id: str) -> dict:
+    """Demo-store schema only, for now.
+
+    `confidence_terms`/`options`/`claims` are this tool's own pre-implementation
+    mockup of ARCHITECTURE §8.1's projection tables (see `seed_demo.py`'s
+    docstring: "so app.py can be run before the engine exists"). The real
+    `run.db` migration (`crates/arbiter-store/migrations/0001_initial.sql`)
+    only creates `events`, `run` and `schema_metadata` so far — every other
+    projection table, this trio included, is intentionally deferred until S4
+    gives `run.db` a `decision` projection to read them back from
+    (PLAN_DEVIATIONS.md D21). Point this at a real (non-seeded) store today and
+    `page_run` will fail with "no such table: confidence_terms" — that is
+    expected, not a bug in either the tool or the engine, until S4 lands.
+    `page_history`/`page_trends` (`load_catalog`, above) already read the real
+    `history.db` schema (S6) and work against a genuine store now.
+    """
     db = Path(store) / "runs" / run_id / "run.db"
     with connect_ro(db) as con:
         conf = pd.read_sql_query(
@@ -67,7 +82,9 @@ def load_run(store: str, run_id: str) -> dict:
         claims = pd.read_sql_query(
             "SELECT claim_id, text, standing, state, kind, author "
             "FROM claims ORDER BY standing DESC", con)
-        # events is the source of truth; every read is ordered by seq (ARCH 8.1)
+        # events is the source of truth; every read is ordered by seq (ARCH 8.1).
+        # NB: the real schema's column is `timestamp`, not `created_at` --
+        # this query only works against seed_demo.py's mock schema regardless.
         events = pd.read_sql_query(
             "SELECT seq, event_type, stage, created_at FROM events ORDER BY seq", con)
     return {"confidence": conf, "options": opts, "claims": claims, "events": events}

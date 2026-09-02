@@ -20,6 +20,24 @@ python seed_demo.py /tmp/demo-arbiter
 streamlit run app.py -- --store /tmp/demo-arbiter
 ```
 
+## Current schema status — read before pointing this at a real store
+
+This tool was built during design work, before `arbiter-store`'s real schema
+existed, so it currently has **two different relationships to the real store**
+depending on the page:
+
+- **History and Trends** (`history.db`'s `run_catalog`) read the schema the
+  engine actually implements today (`arbiter-store` task S6) and work against
+  a genuine store.
+- **Run detail** (`run.db`'s `confidence_terms`/`options`/`claims`/`events`)
+  is still `seed_demo.py`'s own pre-implementation mockup of ARCHITECTURE
+  §8.1's projection tables. The real `run.db` migration only creates `events`,
+  `run` and `schema_metadata` so far — everything else, including these three
+  tables, is intentionally deferred to task S4 (`PLAN_DEVIATIONS.md` D21).
+  Selecting a run from a genuine (non-seeded) store will error with "no such
+  table" until S4 lands; that is expected, not a bug. Use `seed_demo.py`'s
+  output to exercise this page until then.
+
 ## Why this is read-only, and stays that way
 
 `POST /api/runs` in `arbiter serve` spends real money, and ARCHITECTURE §17.1
