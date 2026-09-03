@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Arbiter -- install prerequisites, build, and launch the UI.
 #
-# For Linux, and for Windows via WSL (arbiter_store::lease reads
-# /proc/<pid> and /proc/sys/kernel/random/boot_id for its run-ownership
-# check -- see crates/arbiter-store/src/lease.rs -- so this only runs
-# where a real Linux kernel is underneath; native Windows/macOS builds
-# refuse to compile on purpose rather than silently mis-detecting a
-# live run as abandoned). install_and_run.bat delegates to this script
-# under WSL automatically when it finds one.
+# For Linux (also fine under WSL on Windows, if you'd rather use that than
+# the native path). macOS and Windows both build directly now too --
+# arbiter_store::lease has a real liveness check for each
+# (crates/arbiter-store/src/lease.rs) -- so this script is not the only
+# way to run this project anymore, just the Linux-native one.
+# install_and_run.bat falls back to this script under WSL only if a
+# native Windows build has trouble.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"

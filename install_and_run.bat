@@ -22,34 +22,6 @@ if not exist "Cargo.toml" (
     goto :fail
 )
 
-rem ---- 0. Windows isn't a supported build target yet ---------------
-rem Arbiter's run-safety check (crates\arbiter-store\src\lease.rs) proves
-rem one process still owns a run by checking /proc/<pid> and
-rem /proc/sys/kernel/random/boot_id -- both Linux-only. Off Linux that
-rem check would always report "no such process," so every lease would
-rem look abandoned and a second process could steal a live run out from
-rem under its owner. The crate refuses to compile anywhere but Linux
-rem rather than risk that silently, so a native build here fails 100%
-rem of the time today, not just sometimes -- WSL is a real Linux kernel,
-rem so it isn't affected.
-echo [NOTE] This project's run-safety check only works on Linux by design
-echo        and won't compile natively on Windows -- see
-echo        crates\arbiter-store\src\lease.rs for why. WSL runs a real
-echo        Linux kernel, so it isn't affected.
-echo(
-where wsl >nul 2>&1
-if errorlevel 1 goto :native_notice
-
-choice /C YN /M "Run Arbiter under WSL instead (recommended)"
-if errorlevel 2 goto :native_notice
-if errorlevel 1 goto :run_via_wsl
-
-:native_notice
-echo(
-echo        Continuing with a native Windows build attempt below -- this is
-echo        expected to fail today with a "Linux-only" compile error.
-echo(
-
 rem ---- 1. Rust toolchain ----------------------------------------
 where cargo >nul 2>&1
 if not errorlevel 1 goto :rust_ok
@@ -100,8 +72,12 @@ set "BUILD_RC=%ERRORLEVEL%"
 type "%BUILD_LOG%"
 if "%BUILD_RC%"=="0" goto :buildok
 
+rem A stale checkout (from before this .bat's own fix) can still carry the
+rem old, Windows-blocking compile_error! in crates\arbiter-store\src\lease.rs
+rem -- catch that specific case with an accurate message instead of sending
+rem someone chasing a linker install that could never have fixed it.
 findstr /C:"Linux-only" "%BUILD_LOG%" >nul 2>&1
-if not errorlevel 1 goto :linux_only_failure
+if not errorlevel 1 goto :stale_checkout_failure
 
 echo(
 echo [ERROR] The build failed. The most common cause on a fresh Windows
@@ -124,13 +100,20 @@ set "BUILD_RC=%ERRORLEVEL%"
 type "%BUILD_LOG%"
 if "%BUILD_RC%"=="0" goto :buildok
 findstr /C:"Linux-only" "%BUILD_LOG%" >nul 2>&1
-if not errorlevel 1 goto :linux_only_failure
+if not errorlevel 1 goto :stale_checkout_failure
 goto :buildtools_retry_failed
 
 :buildtools_retry_failed
 echo [ERROR] Still failing after installing the Build Tools. Close this
 echo         window, open a NEW Command Prompt ^(so the updated environment
-echo         is picked up^), and re-run this script.
+echo         is picked up^), and re-run this script. If it still won't
+echo         build, WSL is a proven fallback -- see the note below.
+where wsl >nul 2>&1
+if errorlevel 1 goto :fail
+echo(
+choice /C YN /M "Try running it under WSL instead"
+if errorlevel 2 goto :fail
+if errorlevel 1 goto :run_via_wsl
 goto :fail
 
 :buildtools_manual
@@ -146,16 +129,24 @@ echo         https://visualstudio.microsoft.com/visual-cpp-build-tools/
 echo         then re-run this script.
 goto :fail
 
-:linux_only_failure
+:stale_checkout_failure
 echo(
-echo [ERROR] That's the expected "Linux-only" failure from
-echo         crates\arbiter-store\src\lease.rs ^(see the note at the top of
-echo         this run^) -- not a linker problem, so installing the VS Build
-echo         Tools would not help. Run this script again and choose WSL
-echo         when asked, or install WSL yourself ^(elevated prompt^):
-echo             wsl --install
-echo         then restart Windows, open the "Ubuntu" app once to finish
-echo         its setup, and re-run this .bat.
+echo [ERROR] That "Linux-only" failure is from an older version of this repo
+echo         -- crates\arbiter-store\src\lease.rs now has a real check for
+echo         Windows too ^(not just Linux^), so a fresh `git pull` should fix
+echo         this outright. If you're already up to date and still see this,
+where wsl >nul 2>&1
+if errorlevel 1 goto :stale_checkout_no_wsl
+echo         WSL is available as a proven fallback:
+echo(
+choice /C YN /M "Run Arbiter under WSL instead"
+if errorlevel 2 goto :fail
+if errorlevel 1 goto :run_via_wsl
+goto :fail
+
+:stale_checkout_no_wsl
+echo         install WSL ^(elevated prompt: wsl --install, then restart
+echo         Windows^) and re-run this script.
 goto :fail
 
 :buildok
@@ -173,8 +164,8 @@ goto :end
 
 rem ---- WSL delegation --------------------------------------------
 rem install_and_run.sh does the same three steps (Rust check, release
-rem build, launch) against a real Linux kernel, where lease.rs's
-rem liveness check is genuinely correct.
+rem build, launch) against a real Linux kernel. Only used as a fallback
+rem now -- the native Windows build above is expected to work.
 :run_via_wsl
 echo(
 echo Switching to WSL...

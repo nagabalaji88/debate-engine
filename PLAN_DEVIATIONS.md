@@ -2502,3 +2502,77 @@ fallback — run twice at different `--test-threads` values with no
 flakiness observed. Full workspace: `cargo test --workspace` green, `cargo
 fmt --all -- --check` clean, `cargo clippy --workspace --all-targets
 --all-features -- -D warnings` clean.
+
+## D50 — `arbiter-store::lease`: real macOS and Windows liveness checks, added past spec at user request
+
+`crates/arbiter-store/src/lease.rs`'s `compile_error!` gate (D-less until now — it
+shipped as part of S2, before this deviation log's own numbering caught up to it)
+previously refused to build anywhere but Linux, on the grounds stated in its own
+doc comment: without a real per-OS liveness check, [`pid_is_alive`] would always
+return `false` off Linux, making every lease look abandoned and stealable out
+from under a live owner. Neither ARCHITECTURE.md nor INTERFACES.md discusses any
+platform beyond what this workspace's CI runs (`ubuntu-latest`) — this task is
+genuinely outside both spec files' scope, done because the user explicitly asked
+for the engine to run on "all machines," not because §0's authority order
+required it.
+
+- **What changed:** `boot_id()`, `hostname()`, and `pid_is_alive()` each gained
+  real `#[cfg(target_os = "macos")]` / `#[cfg(target_os = "windows")]` arms
+  alongside the existing Linux one, and the `compile_error!` gate now only fires
+  for a platform with none of the three. No `unsafe` code was introduced
+  (`#![forbid(unsafe_code)]` stands); every new arm shells out to a command
+  already present on its OS by default (`sysctl`, `kill`, `hostname` on macOS;
+  `powershell` on Windows) via `std::process::Command`, the same technique
+  `serve/mod.rs`'s `webbrowser_open` (D48) already used for its own per-OS
+  `open`/`start`/`xdg-open` calls — not a new dependency, not a new pattern.
+- **macOS:** `boot_id()` reads `sysctl -n kern.bootsessionuuid`, a per-boot-session
+  UUID Apple ships specifically for this purpose — the direct analogue of
+  Linux's `/proc/sys/kernel/random/boot_id`. `pid_is_alive()` runs `kill -0
+  <pid>` (the portable command-line form of the `kill(pid, 0)` libc call
+  `#![forbid(unsafe_code)]` rules out calling directly) and reads its result:
+  success or any failure *other than* a "No such process" stderr message is
+  read as alive, not just a clean exit code — `kill -0` also fails with the
+  same exit status on `EPERM` (a live process owned by someone else), and
+  collapsing that into "dead" would make a live foreign-owned process's lease
+  falsely stealable.
+- **Windows:** `boot_id()` reads `(Get-CimInstance Win32_OperatingSystem).LastBootUpTime`
+  via PowerShell — deliberately not `wmic`, which Microsoft has been removing
+  from default Windows installs. `pid_is_alive()` runs `Get-Process -Id <pid>
+  -ErrorAction SilentlyContinue` and checks whether anything came back.
+  Windows has no boot-session UUID equivalent to macOS's; a boot timestamp
+  serves the same purpose here (constant for one boot, different across any
+  other) even though it isn't a UUID.
+- **Fail-closed on ambiguity, every new platform:** if the OS command can't be
+  spawned at all, or its output doesn't parse as expected, `pid_is_alive`
+  returns `true` (alive) rather than `false` — a lease that stays open past
+  its owner's real death is a stuck run (recoverable: `arbiter doctor` reports
+  it, an operator can act); a lease stolen out from under a still-live owner
+  is silent, undetectable corruption. Only Linux's own `/proc/<pid>` check
+  resolves every case outright with no fallback needed, since it is the one
+  platform this workspace's own CI (`ubuntu-latest`) can actually verify.
+- **What is *not* verified: this workspace's CI, and this whole session, run on
+  Linux only.** The Linux arms are unchanged and still pass their existing 5
+  `lease::` tests unmodified. The macOS and Windows arms compile clean —
+  checked two ways: `cargo check`/`cargo clippy --target x86_64-pc-windows-gnu`
+  against the real crate (a `gcc-mingw-w64-x86-64` cross-toolchain was
+  installed in this sandbox specifically to let `rusqlite`'s bundled C sources
+  build for that target), and, since a real macOS SDK isn't available to cross-
+  compile against from Linux, the platform-specific functions themselves were
+  extracted into a dependency-free standalone file and type-checked directly
+  against `rustc --target x86_64-apple-darwin`'s real prebuilt std with `--deny
+  warnings`. Neither of those proves the *behavior* is correct on real
+  hardware — that `sysctl kern.bootsessionuuid`, `kill -0`, `Get-CimInstance
+  Win32_OperatingSystem`, and `Get-Process -Id` all behave exactly as their
+  documentation says, under whatever locale/permission/PowerShell-execution-
+  policy configuration a real machine has. This should be smoke-tested on a
+  real macOS box and a real Windows box before being trusted with a run that
+  actually matters, the same way the Linux arm already has 1.0's own worth of
+  CI runs behind it and these two do not.
+
+Verified: `cargo test -p arbiter-store lease::` — 5/5 passing (Linux, unchanged).
+`cargo check`/`cargo clippy -p arbiter-store --target x86_64-pc-windows-gnu -- -D
+warnings` — clean. Standalone `rustc --target x86_64-apple-darwin --crate-type
+lib --deny warnings` on the platform-specific functions in isolation — clean.
+Full workspace: `cargo test --workspace` green, `cargo fmt --all -- --check`
+clean, `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+clean, all on the Linux host.

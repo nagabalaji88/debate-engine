@@ -1589,7 +1589,7 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | C8 | ✅ | (this commit) | D18 — see PLAN_DEVIATIONS.md |
 | K0 | ✅ | (this commit) | D19, D20 — see PLAN_DEVIATIONS.md |
 | S1 | ✅ | (this commit) | D21 — see PLAN_DEVIATIONS.md |
-| S2 | ✅ | (this commit) | scope note — see plan text above, no new D-entry |
+| S2 | ✅ | (this commit) | D50 — see PLAN_DEVIATIONS.md; `arbiter-store::lease` gained real macOS/Windows liveness checks past spec (user request), Linux still the only platform this workspace's own CI verifies |
 | S3 | ✅ | (this commit) | D22 — see PLAN_DEVIATIONS.md |
 | S4 | ✅ (partial) | (this commit) | D29 — see PLAN_DEVIATIONS.md; budget/provider_calls/cache_entries/artifacts only, see plan text above |
 | S5 | ✅ | (this commit) | D27 — see PLAN_DEVIATIONS.md |

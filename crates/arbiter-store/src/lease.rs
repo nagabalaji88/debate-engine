@@ -3,29 +3,41 @@
 //! decides whether a steal is *permitted*; a monotonic `lease_epoch` decides who
 //! *wins*."
 //!
-//! Linux-only (`/proc/sys/kernel/random/boot_id`, `/proc/<pid>`) — neither spec
-//! file discusses any other platform, and this workspace's CI runs on
-//! `ubuntu-latest`. `#![forbid(unsafe_code)]` rules out the traditional
-//! `kill(pid, 0)` liveness check, so `/proc/<pid>` existence is the safe
-//! equivalent already available without a new dependency.
+//! Linux, macOS, and Windows each get a real, native liveness + boot-id check
+//! below — neither spec file discusses any platform beyond what this workspace's
+//! CI runs (`ubuntu-latest`), so macOS/Windows are a deliberate addition past
+//! spec, not a spec requirement (PLAN_DEVIATIONS.md D50). `#![forbid(unsafe_code)]`
+//! rules out the traditional `kill(pid, 0)` libc call everywhere, so each
+//! platform gets the safe, dependency-free equivalent already available to it —
+//! see [`pid_is_alive`] and [`boot_id`] below for what each one actually does.
 //!
-//! This is a hard compile-time gate, not a comment, because the failure mode of
-//! skipping it is silent and actively unsafe rather than merely broken: off
-//! Linux, `/proc/<pid>` never exists, so [`pid_is_alive`] would always return
-//! `false` and [`owner_is_gone`] would then report *every* lease as abandoned —
-//! including one held by a live process on the same machine and boot. A second
-//! `reopen` would then successfully steal it via the epoch CAS, and two
-//! processes would both believe they own the run: exactly the failure INTERFACES
-//! §1's epoch design exists to prevent, reintroduced through an OS-specific
-//! precondition quietly returning the wrong answer instead of refusing to build.
+//! This is a hard compile-time gate on every *other* platform, not a comment,
+//! because the failure mode of skipping it is silent and actively unsafe rather
+//! than merely broken: without a real liveness check, [`pid_is_alive`] would
+//! always return `false` and [`owner_is_gone`] would then report *every* lease
+//! as abandoned — including one held by a live process on the same machine and
+//! boot. A second `reopen` would then successfully steal it via the epoch CAS,
+//! and two processes would both believe they own the run: exactly the failure
+//! INTERFACES §1's epoch design exists to prevent, reintroduced through an
+//! OS-specific precondition quietly returning the wrong answer instead of
+//! refusing to build.
+//!
+//! Every non-Linux liveness check below fails *closed* on any ambiguous result
+//! (the OS command couldn't run, its output didn't parse, a permission error
+//! instead of a clean "no such process") by reporting the pid as still alive —
+//! a lease that should have been reclaimed but wasn't is a stuck run; a lease
+//! stolen out from under its live owner is silent corruption. Only Linux's
+//! `/proc/<pid>` check, verified against this workspace's own CI, is trusted to
+//! resolve every case on its own.
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 compile_error!(
-    "arbiter_store::lease is Linux-only: pid_is_alive()'s /proc/<pid> check always \
-     returns false on other platforms, which makes every lease look abandoned and \
-     stealable regardless of whether its owner is still running — silently unsafe, \
-     not just unsupported. Porting this module to another OS means implementing a \
-     real liveness check for that OS, not removing this gate."
+    "arbiter_store::lease has a real liveness check for linux, macos, and windows \
+     only. pid_is_alive() would always return false on any other platform, which \
+     makes every lease look abandoned and stealable regardless of whether its \
+     owner is still running — silently unsafe, not just unsupported. Porting this \
+     module to another OS means implementing a real liveness check for that OS, \
+     not removing this gate."
 );
 
 use rusqlite::{Connection, OptionalExtension};
@@ -48,22 +60,116 @@ impl Owner {
     }
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) fn boot_id() -> String {
     std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
 }
 
+/// macOS's own per-boot-session UUID, regenerated on every boot — exactly
+/// `/proc/sys/kernel/random/boot_id`'s job. `sysctl -n` is the safe,
+/// dependency-free command-line form of the same value `sysctlbyname(3)`
+/// returns; `#![forbid(unsafe_code)]` rules out calling that directly.
+#[cfg(target_os = "macos")]
+pub(crate) fn boot_id() -> String {
+    std::process::Command::new("sysctl")
+        .args(["-n", "kern.bootsessionuuid"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+/// Windows has no single "boot id" file; `LastBootUpTime` is stable for one
+/// boot and changes on every restart, which is all this needs — an opaque
+/// string that is the *same* across one boot and *different* across any
+/// other. `Get-CimInstance` (not the deprecated `wmic`, removed by default
+/// starting with newer Windows releases) is the safe, dependency-free way
+/// to read it.
+#[cfg(target_os = "windows")]
+pub(crate) fn boot_id() -> String {
+    std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')",
+        ])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "linux")]
 fn hostname() -> String {
     std::fs::read_to_string("/proc/sys/kernel/hostname")
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
 }
 
+/// Informational only — never read by [`owner_is_gone`]'s liveness decision,
+/// only shown back in `arbiter doctor`'s own output — so the portable
+/// `hostname` command line utility already present on macOS and Windows
+/// alike is simpler than chasing each OS's own API for a field this
+/// unimportant.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn hostname() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
+}
+
 /// `/proc/<pid>` existing is the safe, dependency-free equivalent of `kill(pid,
 /// 0)` on Linux.
+#[cfg(target_os = "linux")]
 fn pid_is_alive(pid: u32) -> bool {
     std::path::Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// `kill -0 <pid>`'s exit status is the portable, `unsafe`-free equivalent of
+/// `kill(pid, 0)` on macOS: success means the process exists and could be
+/// signaled (same user or root); a clean "No such process" means it does not.
+/// Any other failure — most commonly "Operation not permitted", a live
+/// process owned by someone else — is deliberately read as alive: this
+/// check's only job is telling a genuinely dead owner from everything else,
+/// and failing closed (never stealable) is the safe direction to be wrong in
+/// on anything ambiguous.
+#[cfg(target_os = "macos")]
+fn pid_is_alive(pid: u32) -> bool {
+    match std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .output()
+    {
+        Ok(o) if o.status.success() => true,
+        Ok(o) => !String::from_utf8_lossy(&o.stderr).contains("No such process"),
+        Err(_) => true,
+    }
+}
+
+/// `Get-Process -Id` is the safe, `unsafe`-free equivalent on Windows of
+/// Linux's `/proc/<pid>` existence check and macOS's `kill -0`: it looks the
+/// process up by pid without sending it anything. Any failure to run
+/// PowerShell itself is read as alive, for the same fail-closed reason as
+/// the macOS check above.
+#[cfg(target_os = "windows")]
+fn pid_is_alive(pid: u32) -> bool {
+    std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &format!("if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ 'ALIVE' }} else {{ 'DEAD' }}"),
+        ])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("ALIVE"))
+        .unwrap_or(true)
 }
 
 /// INTERFACES §1's precondition table: gone when the boot differs (the recorded
