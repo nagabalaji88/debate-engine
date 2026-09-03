@@ -2348,3 +2348,157 @@ any `Access-Control-*` response header — all confirmed by hand against
 the running process, not only the automated suite. Full workspace: `cargo
 test --workspace` green, `cargo fmt --all -- --check` clean, `cargo
 clippy --workspace --all-targets --all-features -- -D warnings` clean.
+
+## D49 — U2-U7: the embedded UI's 5 screens and their acceptance suite — "Playwright" becomes a direct-CDP crate, `GET /api/runs/:id` grows beyond `explain --json`, and a server-computed estimate
+
+New `arbiter-cli/src/serve/ui.html` (the single embedded page, ARCHITECTURE
+§17.1's "no build step, no npm, no bundler, no framework, no CDN" taken
+literally: one `<style>` block, one `<script>` block, no dependency of any
+kind) and `arbiter-cli/tests/ui.rs` (the plan's own "Playwright" acceptance
+suite, `cargo test -p arbiter-cli --test ui`).
+
+- **U6's "Add key" element (a masked input plus a "Save to keychain"
+  button) is a CLI-redirect notice, not a working form.** The plan's own
+  U6 table describes it literally, but no endpoint anywhere in this
+  build's own API surface accepts a secret: U1's 8-endpoint table (D48),
+  ARCHITECTURE §17.1, and INTERFACES §24's own "five endpoints" prose all
+  list the same set, and none of them is a key-write route — `POST
+  /api/providers/:p/test` only ever *verifies* a key already resolved by
+  `CredentialSource`. Inventing a ninth endpoint that accepts a raw secret
+  over this loopback socket would be exactly the kind of unrequested
+  surface this project's own discipline avoids, and sits uneasily next to
+  INTERFACES §25's own stated paranoia about where a key is allowed to
+  come from (three fixed sources, no `ConfigFile` variant "deliberately").
+  The Keys screen's "Add a key" panel instead states plainly that the
+  field is for reference only and points at `arbiter keys set
+  <provider>`, the CLI path (L4) that already writes to the OS keychain —
+  U6's own "never render a key" and "config files are never read for a
+  key" requirements are unaffected either way, since no key ever transits
+  this page or this process's HTTP surface either now.
+- **The acceptance suite is `chromiumoxide` driving this sandbox's
+  pre-installed Chromium directly over CDP, not a literal Node.js
+  `@playwright/test` run.** IMPLEMENTATION_PLAN.md's own U2-U7 acceptance
+  commands say "Playwright" by name, but a literal Playwright run needs
+  `npm install` at test time against a live package registry — exactly the
+  kind of non-reproducible, network-dependent step this workspace's own
+  `cargo test --workspace` has never had anywhere else in it. This sandbox
+  already ships a pre-installed Chromium meant to be driven by
+  `executablePath` (`/opt/pw-browsers/chromium`) — exactly the shape
+  `chromiumoxide::BrowserConfig::chrome_executable` wants — so the suite
+  stays Cargo-native, offline-reproducible, and exercises the identical
+  real browser engine Playwright itself would have driven, just without a
+  second language runtime and package manager in the loop. Read as
+  fulfilling U2-U7's own acceptance intent (a real browser, not jsdom or a
+  hand-rolled DOM shim, running against a real `arbiter serve` subprocess)
+  rather than its literal tool name.
+- **`GET /api/runs/:id` (added under U1, D48) returns more than a bare
+  `explain --json` passthrough — Screen 3 (Result) genuinely needs fields
+  `explain --json` was never asked to carry.** U5's own plan text describes
+  a Result screen showing the outcome tag, live-objection banner, options
+  table, confidence breakdown, claims table, change triggers, and run
+  integrity (chain/fixpoint/completeness/orphaned cost) in one screen load
+  — no combination of existing CLI JSON outputs carries all of that in one
+  shape. The response nests the untouched `explain --json` payload
+  verbatim under an `"explain"` key (so anything depending on that
+  sub-object byte-for-byte, including D48's own
+  `explain_endpoint_matches_cli_byte_for_byte` test, still holds) and adds
+  sibling fields — `outcome`, `recommendation`, `claims`
+  (`render::claim_rows`), `integrity` — built from the same reader/render
+  primitives `arbiter show`/`arbiter claims` already use, not new
+  computation. This is read as filling in what U1's summary table left
+  implicit rather than as a conflict with it: nothing in U1's own text says
+  this endpoint's response is *limited to* `explain --json`, only that it
+  exists.
+- **`GET /api/providers`'s `estimates` object is a worst-case formula, not
+  a measured cost.** U2/U7 both require the New Run screen to show a call
+  count/cost/wall-clock estimate that visibly falls when a provider becomes
+  unusable — nothing in ARCHITECTURE or INTERFACES defines an estimation
+  algorithm, only that one must exist and respond to the usable-provider
+  count. `run_estimate(depth, usable_count)` builds its number from the
+  same flat per-call cost constants the real orchestrator already uses
+  (`orchestrator::CALL_COST`, made `pub(crate)` for this one caller) times
+  the worst-case call count a full run at that depth could reach — the same
+  conservative-upper-bound spirit as the budget ledger's own admission
+  check (INTERFACES §6), not a promise of the run's actual eventual cost.
+  `usable_count` is the input that makes "the estimate falls when models
+  are unusable" true and testable end-to-end
+  (`estimate_falls_when_a_model_is_unusable`), rather than a UI number
+  nothing on the server side actually computes.
+- **Two real application bugs found and fixed by the acceptance suite
+  itself, not test-harness artifacts:** (1) `EventType`'s wire form is
+  `SCREAMING_SNAKE_CASE` and `ClaimStanding`'s is `snake_case`
+  (`#[serde(rename_all = ...)]` in `arbiter-kernel::event`/
+  `arbiter-core::claim` respectively) — `ui.html`'s first draft compared
+  against PascalCase/capitalized strings for both, so the Running screen's
+  stage tracking and the Result screen's claims-table filter silently
+  never matched anything. (2) `SqliteRunStore::reader()` silently creates
+  an empty `run.db` for any run id that does not exist yet (needed for
+  `init`'s own first-write use case), which meant `GET /api/runs/:id`,
+  `GET /api/runs/:id/events`, and `POST /api/runs/:id/accept` all returned
+  200 on an unknown run id (`{"status":"running"}` forever) instead of 404
+  — fixed with a `run_exists` file-existence check performed before ever
+  opening a reader, applied uniformly across all three handlers.
+- **A non-`CONSENSUS` outcome with empty `defeat_chains` is a real, valid
+  case, not one this UI can assume away.** `SplitDecision` can arise from
+  pure option-share fragmentation with every claim already `Agreed` —
+  exactly the synthetic panel's own three independent, non-contradicting
+  positions produce. U5's "Live objection... above the fold" requirement
+  reads as applying to every non-consensus outcome, so `renderResult()`
+  falls back to a margin-based explanation (built from the same
+  `outcome`/`recommendation` fields already in the response) when
+  `defeat_chains` is empty, rather than omitting the banner for this
+  outcome shape.
+- **`sse_reconnect_resumes_without_duplicate_events` exercises
+  `Last-Event-ID` resumption via the browser's own `fetch`, not by reading
+  the rendered Running-screen DOM live.** The mock-provider pipeline this
+  sandbox runs completes fast enough that the very first `GET
+  /api/runs/:id` status check `ui.html` makes before ever opening an
+  `EventSource` frequently already sees `"status": "complete"` — the
+  Running screen never renders a populated event log at all in that case,
+  making "catch the log mid-stream" a genuine, unfixable race rather than
+  a timing bug in the test. The suite instead fetches the completed run's
+  full event backlog once, picks a sequence id partway through, and
+  re-fetches with a `Last-Event-ID` header set to it — the same header
+  `EventSource`'s own native reconnect sends — asserting the resumed
+  stream starts at exactly that id's successor with no gap or replay. This
+  runs from inside the real page's own browser context (`X-Arbiter-Token`
+  header, same-origin `fetch`, real admission gate) rather than a bare
+  `reqwest` call, which is what a browser-driven acceptance suite adds
+  over `serve::tests::sse_resumes_from_last_event_id` (D48's own
+  HTTP-client-side coverage of the same contract) rather than duplicating
+  it.
+- **Addendum — `panel_without_keys` (D47's own list of genuinely-blocked
+  fixtures) stays blocked even now that U2 (the screen that owns it in the
+  ledger) is done.** ARCHITECTURE's own fixture table (§19) states its
+  requirement precisely: "models with no key are listed, disabled,
+  excluded from the estimate, and lower independence." The first three
+  hold and are tested (`estimate_falls_when_a_model_is_unusable`,
+  `start_disabled_with_0_usable_models`); the fourth does not, because
+  `GET /api/providers`'s response never gained the `usable_models`/
+  `independence_groups`/`independence_if_selected` fields INTERFACES
+  §25's own worked example shows. INTERFACES §25 requires these be
+  "computed by the same code path §6.2 uses — not a UI approximation," and
+  §6.2's `independence` formula (`arbiter-core::decision::evidence::
+  independence`) takes a `CanonicalClaim`'s own `correlation_groups()` —
+  it has no caller that operates over "the currently usable provider
+  roster" rather than one claim's supporting evidence, because that
+  caller is G2's own `panel.resolve` stage, already deferred out of this
+  build for its own documented reasons (D30-D33). Wiring `GET
+  /api/providers` straight to `arbiter-core::decision::evidence::independence`
+  without `panel.resolve` existing to feed it a real correlation-group
+  partition would be exactly the kind of invented-in-place-of-missing-work
+  this project's own discipline avoids, so the two `independence_*`
+  fields, and `panel_without_keys` itself, stay unbuilt — not silently
+  dropped, but re-attributed here from "blocked on U2" (now false) to
+  "blocked on G2's `panel.resolve`" (still true), so the ledger keeps
+  pointing at the fixture's real remaining dependency.
+
+Verified: `cargo test -p arbiter-cli --test ui` — 11/11 tests passing,
+covering all 5 screens (New Run, Running, Result, History, Keys), the
+5-panel-key-state matrix, the 0-usable-providers disabled-start case, the
+falling estimate, keyboard navigability, the detach note, SSE
+reconnect/resume, override-reason enforcement, and the live-objection
+fallback — run twice at different `--test-threads` values with no
+flakiness observed. Full workspace: `cargo test --workspace` green, `cargo
+fmt --all -- --check` clean, `cargo clippy --workspace --all-targets
+--all-features -- -D warnings` clean.

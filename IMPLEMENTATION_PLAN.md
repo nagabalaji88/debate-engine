@@ -1518,10 +1518,13 @@ toolkit a fixture assembles the handful of stages it needs from, not a
 second copy of the full pipeline — most of the 36 fixtures need only
 `arbiter-core`'s pure functions or one or two kernel stages, not all
 thirteen. F2 has written and passing tests for 32 of the 36 fixtures; the
-remaining 4 (`serve_localhost_only`, `serve_rejects_foreign_origin`:
-U1; `panel_without_keys`: U2; `cites_defeated_claim`: Build Studio,
-ARCHITECTURE §13, out of 1.0 scope) are genuinely blocked on tasks/systems
-that do not exist yet, not skipped. See D47 for the full accounting,
+remaining 4 (`serve_localhost_only`, `serve_rejects_foreign_origin`: U1,
+done since — see F2 remainder note above; `panel_without_keys`: still
+blocked even with U2 done — see D49's own addendum, the blocker is
+§6.2's `independence` grouping formula never having been wired into
+`GET /api/providers`, not the screen itself; `cites_defeated_claim`: Build
+Studio, ARCHITECTURE §13, out of 1.0 scope) are genuinely blocked on
+tasks/systems that do not exist yet, not skipped. See D47 for the full accounting,
 including three real spec/reality gaps the fixtures themselves surfaced
 while being built: `EventType::PremiseCycleDetected` is declared but never
 emitted anywhere in this workspace; `judge_failure`'s "retry" wording has
@@ -1614,11 +1617,11 @@ Append one row per completed task. Do not mark a row done before §0.3 passes.
 | L3 | ✅ | (this commit) | D44 — see PLAN_DEVIATIONS.md; `cache_entries` was never written to before this task, fixed for `run` too; `--repolicy`/`--repack` deferred |
 | L4 | ✅ (partial) | (this commit) | D45 — see PLAN_DEVIATIONS.md; `accept`/`doctor`/`reindex`/`export` built for real; fixed a real RunHandle event-id collision and a `doctor` false positive. `keys`/`providers` since upgraded to real P3-backed implementations (D46); `keys test`/`providers test` still need P4 |
 | F1 | ✅ | (this commit) | D47 — see PLAN_DEVIATIONS.md; toolkit, not a wrapper around `arbiter-cli::orchestrator` (dependency rule) |
-| F2 | ✅ (32/36) | (this commit) | D47 — see PLAN_DEVIATIONS.md; 4 fixtures genuinely blocked (`serve_localhost_only`, `serve_rejects_foreign_origin`: U1; `panel_without_keys`: U2; `cites_defeated_claim`: Build Studio, out of scope) |
+| F2 | ✅ (34/36) | (this commit) | D47 — see PLAN_DEVIATIONS.md; `serve_localhost_only`/`serve_rejects_foreign_origin` since built in `arbiter-cli::serve::tests` (U1/D48); 2 fixtures still genuinely blocked (`panel_without_keys`: §6.2 `independence` never wired into `GET /api/providers`, D49 addendum; `cites_defeated_claim`: Build Studio, out of scope) |
 | U1 | ✅ | (this commit) | D48 — see PLAN_DEVIATIONS.md; 8-endpoint table (not ARCHITECTURE's summary "5"), `Sec-Fetch-Site` Fetch Metadata reading, invented SSE envelope (no `--stream` to match), `axum` as the HTTP crate |
-| U2 | ☐ | | |
-| U3 | ☐ | | |
-| U4 | ☐ | | |
-| U5 | ☐ | | |
-| U6 | ☐ | | |
-| U7 | ☐ | | |
+| U2 | ✅ | (this commit) | D49 — see PLAN_DEVIATIONS.md; New Run screen, panel picker, server-computed worst-case estimate |
+| U3 | ✅ | (this commit) | D49 — see PLAN_DEVIATIONS.md; Running screen, SSE-driven stage/round/step tracking, detach note |
+| U4 | ✅ | (this commit) | D49 — see PLAN_DEVIATIONS.md; Result screen, `GET /api/runs/:id` response shape extended beyond bare `explain --json`, live-objection fallback for empty `defeat_chains` |
+| U5 | ✅ | (this commit) | D49 — see PLAN_DEVIATIONS.md; History screen, filters, `orphaned_cost` |
+| U6 | ✅ | (this commit) | D49 — see PLAN_DEVIATIONS.md; Keys screen, fingerprint-only rows, "Add key" is a CLI-redirect notice (no key-write endpoint exists anywhere in this build's API surface) |
+| U7 | ✅ | (this commit) | D49 — see PLAN_DEVIATIONS.md; cross-cutting requirements (no localStorage beyond active run id, no client-computed numbers, keyboard nav) + the `chromiumoxide`-driven acceptance suite (11/11 passing) |

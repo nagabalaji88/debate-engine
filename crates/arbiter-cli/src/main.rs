@@ -266,7 +266,11 @@ pub(crate) fn mock_panel() -> (Roster, Roster, ProviderId) {
     (panel, judges, provider)
 }
 
-fn resolve_question(arg: &str) -> anyhow::Result<String> {
+/// `pub(crate)`: `serve`'s own `POST /api/runs` (U2's "a file path is
+/// accepted too") resolves the question the same way `arbiter run` does,
+/// through this one function, rather than a second copy of the same
+/// file-vs-literal check.
+pub(crate) fn resolve_question(arg: &str) -> anyhow::Result<String> {
     let path = Path::new(arg);
     if path.is_file() {
         Ok(std::fs::read_to_string(path)?)

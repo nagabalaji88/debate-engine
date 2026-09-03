@@ -39,7 +39,10 @@ use std::time::{Duration, Instant};
 /// (D31 and onward) is a config-supplied flat estimate, never invented
 /// per-provider math; this executor's own literals follow the same
 /// precedent rather than a new one (PLAN_DEVIATIONS.md D42).
-const CALL_COST: Cost = Cost(0.01);
+/// `pub(crate)`, not private: `serve`'s own screen-1 cost estimate (U2,
+/// PLAN_DEVIATIONS.md D49) sizes itself from this exact constant rather
+/// than a second copy of the same number, so the two can never drift.
+pub(crate) const CALL_COST: Cost = Cost(0.01);
 const EXCHANGE_COST: Cost = Cost(0.02);
 const JUDGE_RESERVATION: Cost = Cost(0.05);
 const MAX_CHALLENGES_PER_MODEL: usize = 2;

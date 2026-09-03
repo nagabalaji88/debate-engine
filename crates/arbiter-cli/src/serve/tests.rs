@@ -215,10 +215,11 @@ async fn token_absent_from_store_and_log() {
     );
 }
 
-/// `explain_endpoint_matches_cli_byte_for_byte`: `GET /api/runs/:id`'s body,
-/// once a decision exists, is exactly what `render::build_explain` (the
-/// same function `arbiter explain --json` calls) serializes -- no wrapper,
-/// no reshaping.
+/// `explain_endpoint_matches_cli_byte_for_byte`: `GET /api/runs/:id`'s own
+/// nested `"explain"` field, once a decision exists, is exactly what
+/// `render::build_explain` (the same function `arbiter explain --json`
+/// calls) serializes -- no reshaping of that sub-object, even though the
+/// response as a whole also carries Screen 3's other fields (D49).
 #[tokio::test]
 async fn explain_endpoint_matches_cli_byte_for_byte() {
     let server = start_server().await;
@@ -259,8 +260,8 @@ async fn explain_endpoint_matches_cli_byte_for_byte() {
     let cli_json = serde_json::to_value(&cli_output).unwrap();
 
     assert_eq!(
-        explain_json, cli_json,
-        "the HTTP payload must be byte-for-byte the same as the CLI's own explain --json"
+        explain_json["explain"], cli_json,
+        "the nested explain object must be byte-for-byte the same as the CLI's own explain --json"
     );
 }
 

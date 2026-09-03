@@ -50,7 +50,9 @@ pub fn read_decision_record(reader: &dyn RunReader) -> anyhow::Result<DecisionRe
         .map_err(|e| anyhow::anyhow!("parsing the stored decision record: {e}"))
 }
 
-#[derive(Debug, Clone)]
+/// `Serialize`, not just used internally: `serve`'s own `GET /api/runs/:id`
+/// (U1/U4) embeds it directly in the Result screen's "integrity" object.
+#[derive(Debug, Clone, Serialize)]
 pub struct CompletenessView {
     pub status: String,
     pub reason: Option<String>,

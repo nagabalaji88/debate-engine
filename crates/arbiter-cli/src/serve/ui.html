@@ -2,9 +2,764 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Arbiter</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f7f7f8;
+    --panel: #ffffff;
+    --border: #d0d3d9;
+    --text: #16181d;
+    --muted: #52565f;
+    --accent: #1a4fd6;
+    --accent-contrast: #ffffff;
+    --danger: #a4171f;
+    --danger-bg: #fdeceb;
+    --warn: #7a4b00;
+    --warn-bg: #fff4e0;
+    --ok: #146c2e;
+    --ok-bg: #e8f7ec;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  a { color: var(--accent); }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .container { max-width: 880px; margin: 0 auto; padding: 20px 16px 64px; }
+  nav.topbar {
+    display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  nav.topbar a { text-decoration: none; font-weight: 600; color: var(--text); }
+  nav.topbar a[aria-current="page"] { color: var(--accent); text-decoration: underline; }
+  h1 { font-size: 1.4rem; margin: 0 0 12px; }
+  h2 { font-size: 1.1rem; margin: 24px 0 8px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  label { display: block; font-weight: 600; margin-bottom: 4px; }
+  textarea, input[type=text], input[type=number], select {
+    width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--panel); color: var(--text);
+  }
+  textarea { min-height: 8em; resize: vertical; }
+  button {
+    padding: 8px 16px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel); cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); }
+  button:disabled { opacity: 0.55; cursor: not-allowed; }
+  button.link { border: none; background: none; padding: 0; color: var(--accent); text-decoration: underline; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .row > * { flex: 1 1 200px; }
+  fieldset { border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
+  legend { font-weight: 600; padding: 0 4px; }
+  .panel-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #eee; }
+  .panel-row:last-child { border-bottom: none; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; display: inline-block; }
+  .dot.ok { background: var(--ok); }
+  .dot.warn { background: var(--warn); }
+  .dot.off { background: #9aa0aa; }
+  .state-label { font-size: 0.85rem; color: var(--muted); }
+  .banner {
+    padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; border: 1px solid transparent;
+  }
+  .banner.warn { background: var(--warn-bg); color: var(--warn); border-color: #eccb8a; }
+  .banner.danger { background: var(--danger-bg); color: var(--danger); border-color: #f0b3b7; }
+  .banner.ok { background: var(--ok-bg); color: var(--ok); border-color: #a9dcb8; }
+  .tag {
+    display: inline-block; padding: 3px 10px; border-radius: 999px; font-weight: 700;
+    font-size: 0.8rem; letter-spacing: 0.02em; border: 1px solid var(--border);
+  }
+  .tag.CONSENSUS { background: var(--ok-bg); color: var(--ok); border-color: #a9dcb8; }
+  .tag.MAJORITY_WITH_DISSENT { background: var(--warn-bg); color: var(--warn); border-color: #eccb8a; }
+  .tag.SPLIT_DECISION { background: var(--warn-bg); color: var(--warn); border-color: #eccb8a; }
+  .tag.INSUFFICIENT_EVIDENCE { background: var(--danger-bg); color: var(--danger); border-color: #f0b3b7; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #eee; font-size: 0.92rem; }
+  th { color: var(--muted); font-weight: 600; }
+  .muted { color: var(--muted); }
+  .log { max-height: 320px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 0.82rem; background: #f2f2f4; border-radius: 6px; padding: 8px; }
+  .log div { padding: 2px 0; border-bottom: 1px solid #e5e5e8; }
+  .spinner {
+    width: 18px; height: 18px; border-radius: 50%; border: 3px solid #cfd4dd;
+    border-top-color: var(--accent); display: inline-block; animation: spin 0.8s linear infinite;
+    vertical-align: -4px; margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+  .skeleton { background: linear-gradient(90deg,#eceef1,#f6f7f8,#eceef1); background-size: 200% 100%; border-radius: 6px; height: 1em; margin: 6px 0; }
+  .field-error { color: var(--danger); font-size: 0.85rem; margin-top: 4px; }
+  [hidden] { display: none !important; }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap;
+  }
+</style>
 </head>
 <body>
-<p>Arbiter UI placeholder — built out in U2-U7.</p>
+<nav class="topbar" aria-label="Arbiter">
+  <a href="#/new">Arbiter</a>
+  <a href="#/new" id="nav-new">New run</a>
+  <a href="#/history" id="nav-history">History</a>
+  <a href="#/keys" id="nav-keys">Keys</a>
+</nav>
+<div id="app" class="container" role="main" aria-live="polite"></div>
+<script>
+(function () {
+  "use strict";
+
+  // ---- token: read once from the URL --open prints, kept in memory only.
+  // Never localStorage -- U7's own "no localStorage beyond the active run
+  // id" rule; the token is exactly the one thing that must not persist.
+  var params = new URLSearchParams(location.search);
+  var TOKEN = params.get("token") || "";
+
+  function activeRunId() {
+    try { return localStorage.getItem("arbiter_active_run_id") || ""; } catch (e) { return ""; }
+  }
+  function setActiveRunId(id) {
+    try { localStorage.setItem("arbiter_active_run_id", id); } catch (e) { /* private mode etc: fine, URL still carries it */ }
+  }
+
+  function h(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function money(n) { return "$" + Number(n).toFixed(3); }
+  function pct(n) { return (Number(n) * 100).toFixed(0) + "%"; }
+
+  var app = document.getElementById("app");
+
+  function setScreen(html) {
+    app.innerHTML = html;
+    var heading = app.querySelector("h1");
+    if (heading) { heading.setAttribute("tabindex", "-1"); heading.focus(); }
+  }
+
+  // ---- fetch wrapper: every request carries the token; a 403 or a network
+  // failure gets exactly one message, never a silent hang or a forever spinner.
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = Object.assign({ "X-Arbiter-Token": TOKEN }, opts.headers || {});
+    if (opts.body) headers["Content-Type"] = "application/json";
+    return fetch(path, {
+      method: opts.method || "GET",
+      headers: headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    }).then(function (resp) {
+      if (resp.status === 403) {
+        var err = new Error("stale-page");
+        err.stale = true;
+        throw err;
+      }
+      return resp.text().then(function (text) {
+        var data = null;
+        try { data = text ? JSON.parse(text) : null; } catch (e) { /* non-JSON body */ }
+        if (!resp.ok) {
+          var e2 = new Error((data && data.error) || ("HTTP " + resp.status));
+          e2.status = resp.status;
+          e2.data = data;
+          throw e2;
+        }
+        return data;
+      });
+    }).catch(function (e) {
+      if (e.stale || e.status) throw e;
+      var e3 = new Error("unreachable");
+      e3.unreachable = true;
+      throw e3;
+    });
+  }
+
+  function errorBanner(e, onRetry) {
+    if (e && e.stale) {
+      return '<div class="banner danger" role="alert">This page is stale — reopen it from the terminal (the access token rotates every time <code>arbiter serve</code> starts).</div>';
+    }
+    if (e && e.unreachable) {
+      return '<div class="banner danger" role="alert">Cannot reach the arbiter server. Check that <code>arbiter serve</code> is still running.'
+        + (onRetry ? ' <button class="link" data-retry>Retry</button>' : "") + "</div>";
+    }
+    return '<div class="banner danger" role="alert">' + h((e && e.message) || "Something went wrong") + "</div>";
+  }
+
+  // =====================================================================
+  // Router
+  // =====================================================================
+  function route() {
+    var hash = location.hash.replace(/^#/, "") || "/new";
+    var parts = hash.split("/").filter(Boolean);
+    updateNav(parts[0]);
+    if (parts[0] === "running" && parts[1]) return screenRunning(parts[1]);
+    if (parts[0] === "result" && parts[1]) return screenResult(parts[1]);
+    if (parts[0] === "history") return screenHistory();
+    if (parts[0] === "keys") return screenKeys();
+    return screenNew();
+  }
+  function updateNav(current) {
+    ["new", "history", "keys"].forEach(function (name) {
+      var el = document.getElementById("nav-" + name);
+      if (!el) return;
+      if (name === current || (name === "new" && !current)) el.setAttribute("aria-current", "page");
+      else el.removeAttribute("aria-current");
+    });
+  }
+  window.addEventListener("hashchange", route);
+
+  // =====================================================================
+  // Screen 1 — New run
+  // =====================================================================
+  function screenNew() {
+    setScreen('<h1>New run</h1><div class="card"><div class="skeleton" style="width:60%"></div><div class="skeleton"></div><div class="skeleton" style="width:40%"></div></div>');
+
+    api("/api/providers").then(function (data) {
+      var providers = data.providers || [];
+      var usable = providers.filter(function (p) { return p.usable; });
+      if (providers.length === 0) {
+        location.hash = "#/keys";
+        return;
+      }
+      renderNewForm(providers, usable, data.estimates || {});
+    }).catch(function (e) {
+      setScreen('<h1>New run</h1>' + errorBanner(e, true));
+      var retry = app.querySelector("[data-retry]");
+      if (retry) retry.addEventListener("click", screenNew);
+    });
+  }
+
+  function panelRowHtml(p) {
+    var dotClass = "off", label = "no key";
+    if (p.state === "not_required" || p.state === "verified") { dotClass = "ok"; label = p.state === "verified" ? "ready" : "ready (no key needed)"; }
+    else if (p.state === "present") { dotClass = "warn"; label = "key set, not checked"; }
+    else if (p.state === "rejected") { dotClass = "warn"; label = "key rejected" + (p.status ? " · " + p.status : ""); }
+    else if (p.state === "unreachable") { label = "provider unreachable"; }
+    else { label = "no key"; }
+    var action = "";
+    if (p.state === "rejected" || p.state === "missing") action = '<a href="#/keys">' + (p.state === "rejected" ? "Fix" : "Add") + "</a>";
+    else if (p.state === "unreachable") action = '<button class="link" type="button" data-recheck="' + h(p.id) + '">Re-check</button>';
+    return '<li class="panel-row">'
+      + '<input type="checkbox" checked disabled aria-label="' + h(p.id) + '">'
+      + '<span class="dot ' + dotClass + '" aria-hidden="true"></span>'
+      + "<strong>" + h(p.id) + "</strong>"
+      + '<span class="state-label">' + h(label) + "</span>"
+      + '<span style="margin-left:auto">' + action + "</span>"
+      + "</li>";
+  }
+
+  function renderNewForm(providers, usable, estimates) {
+    var body =
+      '<h1>New run</h1>' +
+      '<form id="new-run-form" class="card" novalidate>' +
+      '<label for="question">Question</label>' +
+      '<textarea id="question" name="question" autofocus required placeholder="Should we adopt a modular monolith or microservices? Paste a paragraph, or a path to a file."></textarea>' +
+      (usable.length < 3
+        ? '<div class="banner warn" role="status">Only ' + usable.length + ' independent provider' + (usable.length === 1 ? "" : "s") + ' usable — correlated failures between models from the same source will not be caught by cross-checking. <a href="#/keys">Add more keys</a>.</div>'
+        : "") +
+      '<h2>Panel</h2>' +
+      '<ul style="list-style:none;padding:0;margin:0">' + providers.map(panelRowHtml).join("") + "</ul>" +
+      '<div class="row" style="margin-top:16px">' +
+      '<div><label for="depth">Depth</label>' +
+      '<select id="depth" name="depth">' +
+      '<option value="standard">standard — 1 round</option>' +
+      '<option value="deep">deep — up to 3 rounds</option>' +
+      "</select></div>" +
+      '<div><label for="budget">Budget cap</label>' +
+      '<input type="number" id="budget" name="budget" min="0" step="0.01" value="2.00"></div>' +
+      "</div>" +
+      '<p id="estimate" class="muted" style="margin-top:12px" aria-live="polite"></p>' +
+      '<p><a href="#/keys">Manage keys</a></p>' +
+      '<div id="submit-error"></div>' +
+      '<button type="submit" class="primary" id="start-btn"' + (usable.length === 0 ? " disabled" : "") + ">Start</button>" +
+      "</form>";
+    setScreen(body);
+
+    function updateEstimate() {
+      var depth = document.getElementById("depth").value;
+      var est = estimates[depth];
+      var el = document.getElementById("estimate");
+      if (!est) { el.textContent = ""; return; }
+      el.textContent = "Estimate: up to " + money(est.cost) + " · " + est.calls + " calls · up to " + est.wall_clock_secs + "s · " + est.model_count + " model" + (est.model_count === 1 ? "" : "s") + " (falls as models become unusable)";
+    }
+    document.getElementById("depth").addEventListener("change", updateEstimate);
+    updateEstimate();
+
+    var form = document.getElementById("new-run-form");
+    var submitting = false;
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      if (submitting) return; // double-submit impossible
+      var question = document.getElementById("question").value;
+      if (!question.trim()) {
+        document.getElementById("submit-error").innerHTML = '<p class="field-error">The question must not be empty.</p>';
+        return;
+      }
+      submitting = true;
+      var btn = document.getElementById("start-btn");
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Starting…';
+      document.getElementById("submit-error").innerHTML = "";
+      api("/api/runs", {
+        method: "POST",
+        body: {
+          question: question,
+          depth: document.getElementById("depth").value,
+          budget: parseFloat(document.getElementById("budget").value) || undefined,
+        },
+      }).then(function (data) {
+        setActiveRunId(data.run_id);
+        location.hash = "#/running/" + encodeURIComponent(data.run_id);
+      }).catch(function (e) {
+        submitting = false;
+        btn.disabled = usable.length === 0;
+        btn.textContent = "Start";
+        document.getElementById("submit-error").innerHTML =
+          '<p class="field-error">' + h((e.data && e.data.error) || e.message) + "</p>" +
+          '<p class="muted">Your question is still here — nothing was lost.</p>';
+      });
+    });
+  }
+
+  // =====================================================================
+  // Screen 2 — Running
+  // =====================================================================
+  // ARCHITECTURE §5's own 15-named-stage pipeline (init, panel.resolve,
+  // ... build.*); this build never implements panel.resolve or build.*
+  // (D42/scope notes throughout), so the visible counter only ever
+  // reaches step 14 here -- kept at "of 15" to match the plan's own
+  // literal wording (IMPLEMENTATION_PLAN.md U3) rather than inventing a
+  // different total (PLAN_DEVIATIONS.md D49).
+  var STAGE_ORDER = [
+    "init", "panel.resolve", "positions.generate", "claims.extract", "claims.normalize",
+    "options.cluster", "relations.analyze", "disputes.rank", "challenge.plan", "challenge.run",
+    "rebuttal.run", "controller.decide", "judge.evaluate", "decision.synthesize", "build.*",
+  ];
+
+  function screenRunning(runId) {
+    setActiveRunId(runId);
+    var startedAt = Date.now();
+    var events = [];
+    var lastStage = "init";
+    var round = 1;
+    var source = null;
+    var elapsedTimer = null;
+    var paused = false;
+
+    setScreen(
+      '<h1>Running</h1>' +
+      '<p class="muted">Run <code>' + h(runId) + "</code></p>" +
+      '<div class="banner warn">Closing this page does not stop the run.</div>' +
+      '<div id="conn-banner"></div>' +
+      '<div class="card">' +
+      '<p id="stage-line">Connecting…</p>' +
+      '<p id="progress-line"></p>' +
+      '<p>Spend: <span id="spend-line">$0.000 of $2.00</span></p>' +
+      '<p>Claims: <span id="claims-line">0</span></p>' +
+      '<p>Elapsed: <span id="elapsed-line">0s</span></p>' +
+      '<button type="button" id="stop-btn">Stop</button>' +
+      "</div>" +
+      '<h2>Event log</h2>' +
+      '<div class="log" id="event-log" tabindex="0" aria-label="Event log, newest first"></div>'
+    );
+
+    elapsedTimer = setInterval(function () {
+      var el = document.getElementById("elapsed-line");
+      if (el) el.textContent = Math.round((Date.now() - startedAt) / 1000) + "s";
+    }, 1000);
+
+    var logEl = document.getElementById("event-log");
+    logEl.addEventListener("mouseenter", function () { paused = true; });
+    logEl.addEventListener("mouseleave", function () { paused = false; renderLog(); });
+
+    function renderLog() {
+      logEl.innerHTML = events.slice().reverse().map(function (e) {
+        return "<div>" + h(e.timestamp) + " · " + h(e.event_type) + " · " + h(JSON.stringify(e.payload)) + "</div>";
+      }).join("");
+      if (!paused) logEl.scrollTop = 0;
+    }
+
+    function stageIndex(name) {
+      var i = STAGE_ORDER.indexOf(name);
+      return i === -1 ? 0 : i;
+    }
+
+    function applyEvent(e) {
+      events.push(e);
+      // `EventType`'s own wire form is SCREAMING_SNAKE_CASE
+      // (`arbiter-kernel/src/event.rs`'s `#[serde(rename_all = ...)]`) --
+      // matched literally here, not guessed at.
+      if (e.event_type === "STAGE_STARTED" || e.event_type === "STAGE_COMPLETED") {
+        lastStage = e.stage;
+      }
+      if (e.stage === "challenge.plan" && e.event_type === "STAGE_STARTED") round += 1;
+      var stageLine = document.getElementById("stage-line");
+      if (stageLine) stageLine.textContent = "Stage: " + lastStage + " · round " + round + " of up to 3 · step " + (stageIndex(lastStage) + 1) + " of " + STAGE_ORDER.length;
+      var progressLine = document.getElementById("progress-line");
+      if (progressLine) progressLine.textContent = "Progress: " + pct((stageIndex(lastStage) + 1) / STAGE_ORDER.length);
+      var claimsLine = document.getElementById("claims-line");
+      if (claimsLine && e.payload && typeof e.payload.claims === "number") claimsLine.textContent = String(e.payload.claims);
+
+      if (e.event_type === "CALL_ORPHANED") {
+        var banner = document.getElementById("conn-banner");
+        if (banner && banner.innerHTML.indexOf("ORPHANED") === -1) {
+          banner.innerHTML += '<div class="banner warn" role="alert">A provider call went ORPHANED — its status will be reconciled, surfaced here rather than waiting for the result screen.</div>';
+        }
+      }
+      if (e.event_type === "RUN_COMPLETED") {
+        clearInterval(elapsedTimer);
+        location.hash = "#/result/" + encodeURIComponent(runId);
+      }
+      if (e.event_type === "RUN_FAILED") {
+        clearInterval(elapsedTimer);
+        document.getElementById("conn-banner").innerHTML =
+          '<div class="banner danger" role="alert">Run failed: ' + h((e.payload && e.payload.error) || "unknown error") +
+          '. What was kept is still viewable. <a href="#/result/' + encodeURIComponent(runId) + '">View</a></div>';
+      }
+      renderLog();
+    }
+
+    // First, confirm the run isn't already finished (a refresh/direct link
+    // to an already-completed or unknown run must not show a frozen stream).
+    api("/api/runs/" + encodeURIComponent(runId)).then(function (data) {
+      if (data.status === "complete") { location.hash = "#/result/" + encodeURIComponent(runId); return; }
+      if (data.status === "failed") {
+        document.getElementById("conn-banner").innerHTML = '<div class="banner danger" role="alert">This run failed. <a href="#/result/' + encodeURIComponent(runId) + '">View what was kept</a></div>';
+        return;
+      }
+      connect();
+    }).catch(function (e) {
+      if (e.status === 404) {
+        setScreen('<h1>Not found</h1><p>No run with id <code>' + h(runId) + "</code> is known to this server.</p>");
+        return;
+      }
+      document.getElementById("conn-banner").innerHTML = errorBanner(e);
+    });
+
+    function connect() {
+      var url = "/api/runs/" + encodeURIComponent(runId) + "/events?token=" + encodeURIComponent(TOKEN);
+      source = new EventSource(url);
+      document.getElementById("stage-line").textContent = "Connecting…";
+      source.onopen = function () {
+        document.getElementById("conn-banner").innerHTML = "";
+      };
+      source.onmessage = function (msg) {
+        try { applyEvent(JSON.parse(msg.data)); } catch (e) { /* skip a malformed line rather than crash the stream */ }
+      };
+      source.onerror = function () {
+        document.getElementById("conn-banner").innerHTML = '<div class="banner warn" role="alert">Connection lost — reconnecting…</div>';
+      };
+    }
+
+    document.getElementById("stop-btn").addEventListener("click", function () {
+      if (source) source.close();
+      if (elapsedTimer) clearInterval(elapsedTimer);
+      location.hash = "#/history";
+    });
+  }
+
+  // =====================================================================
+  // Screen 3 — Result
+  // =====================================================================
+  // `ClaimStanding`'s own wire form is lowercase `snake_case`
+  // (`arbiter-core/src/claim.rs`'s `#[serde(rename_all = "snake_case")]`):
+  // "agreed" / "disputed" / "unresolved" / "defeated".
+  function claimPill(standing) {
+    return '<span class="tag ' + (standing === "agreed" ? "CONSENSUS" : standing === "defeated" ? "INSUFFICIENT_EVIDENCE" : "MAJORITY_WITH_DISSENT") + '">' + h(standing) + "</span>";
+  }
+
+  function screenResult(runId) {
+    setActiveRunId(runId);
+    setScreen('<h1>Result</h1><div class="card"><div class="skeleton" style="width:50%"></div><div class="skeleton"></div></div>');
+
+    api("/api/runs/" + encodeURIComponent(runId)).then(function (data) {
+      if (data.status === "running") { location.hash = "#/running/" + encodeURIComponent(runId); return; }
+      if (data.status === "failed") {
+        setScreen('<h1>Result</h1><div class="banner danger" role="alert">This run failed before reaching a decision. Nothing further to show.</div>');
+        return;
+      }
+      renderResult(runId, data);
+    }).catch(function (e) {
+      if (e.status === 404) { setScreen('<h1>Not found</h1><p>No run with id <code>' + h(runId) + "</code> is known to this server.</p>"); return; }
+      setScreen('<h1>Result</h1>' + errorBanner(e));
+    });
+  }
+
+  function renderResult(runId, data) {
+    var explain = data.explain;
+    var integrity = data.integrity || {};
+    var isConsensus = data.outcome === "Consensus";
+    var outcomeSlug = { Consensus: "CONSENSUS", MajorityWithDissent: "MAJORITY_WITH_DISSENT", SplitDecision: "SPLIT_DECISION", InsufficientEvidence: "INSUFFICIENT_EVIDENCE" }[data.outcome] || h(data.outcome);
+
+    var banners = "";
+    if (integrity.completeness && integrity.completeness.status === "truncated") {
+      banners += '<div class="banner warn" role="alert">This decision was synthesised from the evidence gathered before the budget ran out, and is marked truncated' + (integrity.completeness.reason ? " (" + h(integrity.completeness.reason) + ")" : "") + ".</div>";
+    }
+    if (integrity.fixpoint_converged === false) {
+      banners += '<div class="banner warn" role="alert">The argument graph did not converge within the iteration cap — the 0.05 convergence penalty below reflects this.</div>';
+    }
+    if (integrity.chain_verified === false) {
+      banners += '<div class="banner danger" role="alert"><strong>Chain break detected.</strong> This run\'s event log could not be verified and its record may be incomplete or tampered with.</div>';
+    }
+
+    // "MAJORITY_WITH_DISSENT means something survived. A layout that hides
+    // it lies." (U4) -- every non-CONSENSUS outcome gets this banner, not
+    // only the ones with a disputed claim to name: a SplitDecision can
+    // come purely from fragmented option shares with every claim already
+    // Agreed (`defeat_chains` genuinely empty in that case), and that is
+    // exactly as much "something survived" as a live dissenting claim is.
+    var liveObjection = "";
+    if (!isConsensus && explain.defeat_chains && explain.defeat_chains.length) {
+      var top = explain.defeat_chains[0];
+      liveObjection = '<div class="banner warn" role="alert"><strong>Live objection:</strong> claim <code>' + h(top.claim_id) + '</code> (standing ' + Number(top.standing).toFixed(2) + ") remains unresolved.</div>";
+    } else if (!isConsensus) {
+      var ranked = explain.options.slice().sort(function (a, b) { return b.share - a.share; });
+      var margin = ranked.length > 1 ? ranked[0].share - ranked[1].share : 1;
+      liveObjection = '<div class="banner warn" role="alert"><strong>Live objection:</strong> no single option has a clear majority — ' +
+        h(ranked[0] ? ranked[0].label : "the leading option") + " leads by only " + pct(margin) + ", not a settled win.</div>";
+    }
+
+    var optionsRows = (data.recommendation ? explain.options : explain.options).map(function (o) {
+      var below = o.share < 0.20;
+      return "<tr><td>" + h(o.label) + (data.recommendation && data.recommendation.option_id === o.id ? ' <strong>(winner)</strong>' : "") + "</td><td>" + pct(o.share) + "</td><td>" + o.supported_by.length + "</td><td>" + o.opposed_by.length + "</td><td>" + (below ? '<span class="tag SPLIT_DECISION">below floor</span>' : "") + "</td></tr>";
+    }).join("");
+
+    var dims = explain.confidence.dimensions.map(function (d) {
+      return "<tr><td>" + h(d.name) + "</td><td>" + Number(d.value).toFixed(2) + "</td><td>" + Number(d.weight).toFixed(2) + "</td><td>" + (d.contribution >= 0 ? "+" : "") + Number(d.contribution).toFixed(4) + "</td></tr>";
+    }).join("");
+    var pens = explain.confidence.penalties.map(function (p) {
+      return "<tr><td>" + h(p.name) + (p.note ? ' <span class="muted">(' + h(p.note) + ")</span>" : "") + "</td><td>" + Number(p.contribution).toFixed(4) + "</td></tr>";
+    }).join("");
+
+    var claimsAll = data.claims || [];
+    var triggers = (explain.change_triggers || []).map(function (t) {
+      return "<li><code>" + h(t.claim_id) + "</code>: " + h(t.direction) + " → " + h(t.new_winner || "(none)") + "</li>";
+    }).join("");
+
+    setScreen(
+      '<h1>Result</h1>' + banners + liveObjection +
+      '<div class="card">' +
+      '<span class="tag ' + outcomeSlug + '">' + outcomeSlug.replace(/_/g, " ") + "</span>" +
+      "<h2 style=\"margin-top:8px\">" + (data.recommendation ? h(data.recommendation.label) : "No recommendation") + "</h2>" +
+      "<p>Confidence " + Number(explain.confidence.total).toFixed(2) + " · " + claimsAll.length + " claims</p>" +
+      "<p>Policy version: <code>" + h(data.policy_version) + "</code></p>" +
+      "</div>" +
+
+      "<h2>Options</h2>" +
+      '<table><thead><tr><th>Option</th><th>Share</th><th>Supports</th><th>Opposes</th><th></th></tr></thead><tbody>' + optionsRows + "</tbody></table>" +
+
+      "<h2>Confidence breakdown</h2>" +
+      '<table><thead><tr><th>Dimension</th><th>Value</th><th>Weight</th><th>Contribution</th></tr></thead><tbody>' + dims + "</tbody></table>" +
+      '<table style="margin-top:8px"><thead><tr><th>Penalty</th><th>Contribution</th></tr></thead><tbody>' + pens + "</tbody></table>" +
+      "<p>Total: <strong>" + Number(explain.confidence.total).toFixed(4) + "</strong> (base " + Number(explain.confidence.base).toFixed(4) + ")</p>" +
+
+      "<h2>Claims</h2>" +
+      '<div class="filters">' +
+      '<label for="claim-filter" class="visually-hidden">Filter claims</label>' +
+      '<select id="claim-filter"><option value="">Show all</option><option value="disputed">Disputed</option><option value="unresolved">Unresolved</option></select>' +
+      "</div>" +
+      '<table id="claims-table"><thead><tr><th>Claim</th><th>Kind</th><th>Standing</th></tr></thead><tbody></tbody></table>' +
+
+      (triggers ? "<h2>Change triggers</h2><ul>" + triggers + "</ul>" : "") +
+
+      "<h2>Run integrity</h2>" +
+      "<ul>" +
+      "<li>Chain: " + (integrity.chain_verified ? '<span class="dot ok" aria-hidden="true"></span> verified' : '<span class="dot warn" aria-hidden="true"></span> NOT verified') + "</li>" +
+      "<li>Fixpoint: " + (integrity.fixpoint_converged ? '<span class="dot ok" aria-hidden="true"></span> converged' : '<span class="dot warn" aria-hidden="true"></span> not converged') + "</li>" +
+      "<li>Completeness: " + h((integrity.completeness && integrity.completeness.status) || "unknown") + "</li>" +
+      (integrity.orphaned_cost ? "<li>Orphaned spend: " + money(integrity.orphaned_cost) + "</li>" : "") +
+      "</ul>" +
+
+      '<div class="card" id="accept-card">' +
+      '<h2 style="margin-top:0">Accept</h2>' +
+      '<div id="accept-area"></div>' +
+      "</div>" +
+
+      '<p><button type="button" id="export-json">Export JSON</button> <button type="button" id="export-md">Export Markdown</button></p>'
+    );
+
+    function renderClaims(filter) {
+      var tbody = document.querySelector("#claims-table tbody");
+      var rows = claimsAll.filter(function (c) { return !filter || c.standing === filter; });
+      tbody.innerHTML = rows.map(function (c) {
+        return "<tr><td>" + h(c.text) + "</td><td>" + h(c.kind) + "</td><td>" + claimPill(c.standing) + "</td></tr>";
+      }).join("") || '<tr><td colspan="3" class="muted">(no claims match)</td></tr>';
+    }
+    document.getElementById("claim-filter").addEventListener("change", function (e) { renderClaims(e.target.value); });
+    renderClaims("");
+
+    document.getElementById("export-json").addEventListener("click", function () { downloadFile(runId + ".json", JSON.stringify(data, null, 2), "application/json"); });
+    document.getElementById("export-md").addEventListener("click", function () {
+      var md = "# Arbiter decision — " + runId + "\n\n" +
+        "Outcome: " + outcomeSlug + "\n\n" +
+        "Recommendation: " + (data.recommendation ? data.recommendation.label : "none") + "\n\n" +
+        "Confidence: " + Number(explain.confidence.total).toFixed(4) + "\n";
+      downloadFile(runId + ".md", md, "text/markdown");
+    });
+
+    renderAcceptArea(runId, data);
+  }
+
+  function downloadFile(name, content, type) {
+    var blob = new Blob([content], { type: type });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function renderAcceptArea(runId, data) {
+    var area = document.getElementById("accept-area");
+    area.innerHTML =
+      '<div id="override-rows"></div>' +
+      '<button type="button" class="link" id="add-override">+ Add override</button><br><br>' +
+      '<button type="button" class="primary" id="accept-btn">Accept</button>' +
+      '<div id="accept-result"></div>';
+
+    var rows = [];
+    function renderOverrideRows() {
+      document.getElementById("override-rows").innerHTML = rows.map(function (_, i) {
+        return '<fieldset style="margin-bottom:8px"><legend>Override ' + (i + 1) + '</legend>' +
+          '<label for="ov-path-' + i + '">Field path</label><input id="ov-path-' + i + '" data-idx="' + i + '" data-k="path">' +
+          '<label for="ov-to-' + i + '">New value</label><input id="ov-to-' + i + '" data-idx="' + i + '" data-k="to">' +
+          '<label for="ov-reason-' + i + '">Reason (required)</label><input id="ov-reason-' + i + '" data-idx="' + i + '" data-k="reason" required>' +
+          "</fieldset>";
+      }).join("");
+    }
+    document.getElementById("add-override").addEventListener("click", function () { rows.push({}); renderOverrideRows(); });
+
+    document.getElementById("accept-btn").addEventListener("click", function () {
+      var overrides = [];
+      var missingReason = false;
+      document.querySelectorAll("#override-rows fieldset").forEach(function (fs, i) {
+        var path = fs.querySelector('[data-k="path"]').value;
+        var to = fs.querySelector('[data-k="to"]').value;
+        var reason = fs.querySelector('[data-k="reason"]').value;
+        if (!path && !to && !reason) return;
+        if (!reason.trim()) missingReason = true;
+        overrides.push({ path: path, to: to, reason: reason });
+      });
+      var resultEl = document.getElementById("accept-result");
+      if (missingReason) {
+        resultEl.innerHTML = '<p class="field-error">Every override needs a reason before it can be accepted.</p>';
+        return;
+      }
+      api("/api/runs/" + encodeURIComponent(runId) + "/accept", { method: "POST", body: { overrides: overrides } })
+        .then(function (acc) {
+          document.getElementById("accept-card").innerHTML =
+            '<h2 style="margin-top:0">Accepted</h2><p>By ' + h(acc.accepted_by) + " at " + h(acc.accepted_at) + "</p>";
+        })
+        .catch(function (e) { resultEl.innerHTML = errorBanner(e); });
+    });
+  }
+
+  // =====================================================================
+  // Screen 4 — History
+  // =====================================================================
+  function screenHistory() {
+    setScreen('<h1>History</h1><div class="card"><div class="skeleton"></div><div class="skeleton"></div></div>');
+    api("/api/runs").then(function (rows) {
+      if (!rows.length) {
+        setScreen('<h1>History</h1><div class="card"><p>No runs yet.</p><p><a href="#/new">Start your first run</a></p></div>');
+        return;
+      }
+      renderHistory(rows);
+    }).catch(function (e) { setScreen('<h1>History</h1>' + errorBanner(e)); });
+  }
+
+  function renderHistory(rows) {
+    var outcomes = Array.from(new Set(rows.map(function (r) { return r.outcome; }).filter(Boolean)));
+    var policies = Array.from(new Set(rows.map(function (r) { return r.policy_version; }).filter(Boolean)));
+    setScreen(
+      '<h1>History</h1>' +
+      '<div class="filters">' +
+      '<label for="f-outcome" class="visually-hidden">Outcome</label>' +
+      '<select id="f-outcome"><option value="">All outcomes</option>' + outcomes.map(function (o) { return '<option value="' + h(o) + '">' + h(o) + "</option>"; }).join("") + "</select>" +
+      '<label for="f-policy" class="visually-hidden">Policy version</label>' +
+      '<select id="f-policy"><option value="">All policy versions</option>' + policies.map(function (p) { return '<option value="' + h(p) + '">' + h(p) + "</option>"; }).join("") + "</select>" +
+      '<span class="muted">Decisions are only ever compared within one policy version — filter by it before comparing runs.</span>' +
+      "</div>" +
+      '<table><thead><tr><th>Question</th><th>Outcome</th><th>Confidence</th><th>Cost</th><th>Date</th></tr></thead><tbody id="history-body"></tbody></table>'
+    );
+    function render() {
+      var o = document.getElementById("f-outcome").value;
+      var p = document.getElementById("f-policy").value;
+      var filtered = rows.filter(function (r) { return (!o || r.outcome === o) && (!p || r.policy_version === p); });
+      document.getElementById("history-body").innerHTML = filtered.map(function (r) {
+        return "<tr><td><a href=\"#/result/" + encodeURIComponent(r.run_id) + "\">" + h(r.question).slice(0, 80) + "</a></td>" +
+          "<td>" + h(r.outcome || r.status) + "</td>" +
+          "<td>" + (r.confidence != null ? Number(r.confidence).toFixed(2) : "—") + "</td>" +
+          "<td>" + money(r.cost || 0) + (r.orphaned_cost ? " <span class=\"muted\">(+" + money(r.orphaned_cost) + " orphaned)</span>" : "") + "</td>" +
+          "<td>" + h(r.started_at) + "</td></tr>";
+      }).join("") || '<tr><td colspan="5" class="muted">(no runs match)</td></tr>';
+    }
+    document.getElementById("f-outcome").addEventListener("change", render);
+    document.getElementById("f-policy").addEventListener("change", render);
+    render();
+  }
+
+  // =====================================================================
+  // Screen 5 — Keys
+  // =====================================================================
+  function screenKeys() {
+    setScreen('<h1>Keys</h1><div class="card"><div class="skeleton"></div></div>');
+    api("/api/providers").then(function (data) {
+      renderKeys(data.providers || []);
+    }).catch(function (e) { setScreen('<h1>Keys</h1>' + errorBanner(e)); });
+  }
+
+  function renderKeys(providers) {
+    var real = providers.filter(function (p) { return p.state !== "not_required"; });
+    var rows = real.map(function (p) {
+      var dot = p.state === "verified" ? "ok" : p.state === "present" ? "warn" : "off";
+      return "<tr><td>" + h(p.id) + "</td>" +
+        "<td><span class=\"dot " + dot + "\" aria-hidden=\"true\"></span> " + h(p.state) + "</td>" +
+        "<td>" + (p.source ? h(p.source) : "—") + "</td>" +
+        "<td>" + (p.fingerprint ? "…" + h(p.fingerprint) : "—") + "</td>" +
+        "<td><button type=\"button\" class=\"link\" data-recheck=\"" + h(p.id) + "\">Re-check (costs one request)</button></td></tr>";
+    }).join("");
+
+    setScreen(
+      '<h1>Keys</h1>' +
+      (real.length === 0
+        ? '<div class="card"><p>No provider keys are configured yet. Add one below, or continue with the built-in mock panel (no key needed).</p></div>'
+        : "") +
+      '<div class="card">' +
+      "<p>Resolution order: 1) <code>ARBITER_&lt;PROVIDER&gt;_API_KEY</code> 2) the provider's own conventional env var 3) the OS keychain.</p>" +
+      "<p>Config files are <strong>never</strong> read for a key — an <code>api_key</code> value found in one fails the run outright.</p>" +
+      '<table><thead><tr><th>Provider</th><th>State</th><th>Source</th><th>Fingerprint</th><th></th></tr></thead><tbody>' + rows + "</tbody></table>" +
+      "</div>" +
+      '<div class="card">' +
+      '<h2 style="margin-top:0">Add a key</h2>' +
+      '<p class="muted">Keys are entered here for convenience only in this build; use <code>arbiter keys set &lt;provider&gt;</code> from a terminal to actually store one in the OS keychain (never sent through this page).</p>' +
+      "</div>"
+    );
+
+    app.querySelectorAll("[data-recheck]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Checking…';
+        api("/api/providers/" + encodeURIComponent(btn.getAttribute("data-recheck")) + "/test", { method: "POST" })
+          .then(screenKeys)
+          .catch(function (e) {
+            btn.disabled = false;
+            btn.textContent = "Re-check (costs one request)";
+            var msg = document.createElement("p");
+            msg.className = "field-error";
+            msg.textContent = (e.status ? "HTTP " + e.status + ": " : "") + e.message;
+            btn.insertAdjacentElement("afterend", msg);
+          });
+      });
+    });
+  }
+
+  route();
+})();
+</script>
 </body>
 </html>

@@ -72,6 +72,12 @@ anyhow = "1"
 # needs a general-purpose RNG.
 axum = { version = "0.8", default-features = false, features = ["json", "query", "tokio", "http1"] }
 getrandom = "0.2"
+# cli tests: U2-U7's own real-browser UI suite (`cargo test -p arbiter-cli
+# --test ui`), driven against the sandbox's pre-installed Chromium via CDP
+# directly -- no Node.js/npm involved, so the suite stays Cargo-native and
+# reproducible in CI the same way every other test here is (PLAN_DEVIATIONS.md
+# D49 covers why this is `chromiumoxide`, not a literal "Playwright" binding).
+chromiumoxide = "0.9"
 
 # plugin host: wasmtime, added when the 1.5 WASM-host task starts (out of
 # this plan's scope, ARCHITECTURE.md §19 / IMPLEMENTATION_PLAN.md §9) —

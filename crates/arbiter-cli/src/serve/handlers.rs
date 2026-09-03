@@ -18,13 +18,26 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use futures_util::stream::Stream;
 use serde::Deserialize;
-use std::convert::Infallible;
 use std::time::Duration;
 
 fn err(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({"error": message.into()}))).into_response()
+}
+
+/// `SqliteRunStore::reader` opens (and, if absent, silently *creates*) a
+/// run's own `run.db` -- exactly what `init` needs the first time a real
+/// run starts, but wrong for every read-only handler here: without this
+/// check, `GET /api/runs/<any-made-up-id>` would open a fresh, genuinely
+/// empty database and read it back as `{"status": "running"}` forever,
+/// rather than `404`. Checked as a plain file existence test, before the
+/// reader is ever opened, so nothing gets created by the act of looking.
+fn run_exists(state: &AppState, run_id: &RunId) -> bool {
+    state
+        .store_root
+        .join(run_id.as_str())
+        .join("run.db")
+        .is_file()
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,7 +70,12 @@ pub(crate) async fn create_run(
         }
     };
 
-    match super::spawn_run(&state, body.question, depth, body.budget) {
+    let question = match crate::resolve_question(&body.question) {
+        Ok(q) => q,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e.to_string()),
+    };
+
+    match super::spawn_run(&state, question, depth, body.budget) {
         Ok(run_id) => (
             StatusCode::ACCEPTED,
             Json(serde_json::json!({"run_id": run_id.as_str()})),
@@ -143,8 +161,20 @@ pub(crate) async fn list_runs(
 /// different shape rather than a reshaping of the one that doesn't exist
 /// yet — the "explain_endpoint_matches_cli_byte_for_byte" acceptance test
 /// only constrains the one case where a payload genuinely exists.
+/// Screen 3's own source (U4) needs more than INTERFACES §22's `explain`
+/// schema carries -- outcome, the winning recommendation, the claim list
+/// with standing, and run-integrity signals (`show`/`claims`/`doctor`'s
+/// own read paths, not `explain`'s). Rather than a second endpoint, this
+/// nests the untouched `build_explain` output under its own `"explain"`
+/// key and adds the rest as sibling fields -- "returns the §22 payload
+/// unchanged" (ARCHITECTURE §17.1) still holds for that nested object
+/// byte-for-byte; nothing about it is reshaped. See PLAN_DEVIATIONS.md
+/// D49.
 pub(crate) async fn get_run(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let run_id = RunId::new(id);
+    if !run_exists(&state, &run_id) {
+        return err(StatusCode::NOT_FOUND, "unknown run");
+    }
     let store = SqliteRunStore::new(&state.store_root);
     let reader = match store.reader(&run_id) {
         Ok(r) => r,
@@ -154,8 +184,37 @@ pub(crate) async fn get_run(State(state): State<AppState>, Path(id): Path<String
     match render::read_decision_record(reader.as_ref()) {
         Ok(record) => match render::read_final_graph(reader.as_ref()) {
             Ok(graph) => {
-                let output = render::build_explain(&record, &graph, None);
-                Json(output).into_response()
+                let explain = render::build_explain(&record, &graph, None);
+                let claims = render::claim_rows(&record, &graph);
+                let completeness = render::read_completeness(reader.as_ref()).ok();
+                let chain_verified = reader
+                    .verify_chain()
+                    .map(|status| matches!(status, arbiter_kernel::store::ChainStatus::Intact))
+                    .unwrap_or(false);
+                let fixpoint_converged = !reader
+                    .events()
+                    .map(|mut events| {
+                        events.any(|e| e.event_type == EventType::FixpointNotConverged)
+                    })
+                    .unwrap_or(false);
+                let orphaned_cost = orphaned_cost_for(&state, &run_id);
+
+                Json(serde_json::json!({
+                    "run_id": run_id.as_str(),
+                    "status": "complete",
+                    "policy_version": record.policy_version.as_str(),
+                    "outcome": record.outcome,
+                    "recommendation": record.recommendation,
+                    "claims": claims,
+                    "integrity": {
+                        "chain_verified": chain_verified,
+                        "fixpoint_converged": fixpoint_converged,
+                        "completeness": completeness,
+                        "orphaned_cost": orphaned_cost,
+                    },
+                    "explain": explain,
+                }))
+                .into_response()
             }
             Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         },
@@ -184,6 +243,27 @@ pub(crate) async fn get_run(State(state): State<AppState>, Path(id): Path<String
     }
 }
 
+/// `run_catalog.orphaned_cost` for one run, best-effort (`None`/`0.0` on
+/// any read failure, the same "a missing catalogue entry costs a display
+/// field, not the run" posture `arbiter history` already takes) --
+/// currently always `0.0` in this build, since nothing yet computes a real
+/// non-zero value for it (D45/D48's own precedent: `run_command` writes
+/// the literal `0.0` too, honestly, not a guess).
+fn orphaned_cost_for(state: &AppState, run_id: &RunId) -> f64 {
+    let Ok(conn) = arbiter_store::catalog::open_history_db(
+        &crate::history_db_path(&state.store_root),
+        env!("CARGO_PKG_VERSION"),
+        &arbiter_store::now_rfc3339(),
+    ) else {
+        return 0.0;
+    };
+    arbiter_store::catalog::list_runs(&conn, &arbiter_store::catalog::HistoryFilter::default())
+        .ok()
+        .and_then(|rows| rows.into_iter().find(|r| r.run_id == run_id.as_str()))
+        .map(|r| r.orphaned_cost)
+        .unwrap_or(0.0)
+}
+
 /// `GET /api/runs/:id/events` — SSE, each `data:` line one event envelope
 /// (`arbiter show --transcript --json`'s own per-event shape, reused
 /// rather than inventing a second one — see PLAN_DEVIATIONS.md D48 for why
@@ -196,8 +276,11 @@ pub(crate) async fn run_events(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: axum::http::HeaderMap,
-) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+) -> Response {
     let run_id = RunId::new(id);
+    if !run_exists(&state, &run_id) {
+        return err(StatusCode::NOT_FOUND, "unknown run");
+    }
     let last_seen: u64 = headers
         .get("last-event-id")
         .and_then(|v| v.to_str().ok())
@@ -231,7 +314,10 @@ pub(crate) async fn run_events(
                     );
                     let payload = serde_json::to_string(next).unwrap_or_default();
                     let sse = SseEvent::default().id(seq.to_string()).data(payload);
-                    return Some((Ok(sse), (state, run_id, seq, terminal)));
+                    return Some((
+                        Ok::<_, std::convert::Infallible>(sse),
+                        (state, run_id, seq, terminal),
+                    ));
                 }
 
                 tokio::time::sleep(Duration::from_millis(150)).await;
@@ -239,7 +325,9 @@ pub(crate) async fn run_events(
         },
     );
 
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -277,6 +365,9 @@ pub(crate) async fn accept_run(
         }
     }
 
+    if !run_exists(&state, &run_id) {
+        return err(StatusCode::NOT_FOUND, "unknown run");
+    }
     let store = SqliteRunStore::new(&state.store_root);
     let reader = match store.reader(&run_id) {
         Ok(r) => r,
@@ -400,7 +491,69 @@ pub(crate) async fn list_providers() -> Response {
         })
         .collect();
 
-    Json(rows).into_response()
+    let usable_count = rows
+        .iter()
+        .filter(|r| r["usable"].as_bool().unwrap_or(false))
+        .count();
+
+    Json(serde_json::json!({
+        "providers": rows,
+        "estimates": {
+            "standard": run_estimate(Depth::Standard, usable_count),
+            "deep": run_estimate(Depth::Deep, usable_count),
+        },
+    }))
+    .into_response()
+}
+
+/// Screen 1's own "shown before the button, recomputed when the panel ...
+/// changes" (U2) — computed here, server-side, so the page itself never
+/// computes a number (U7's own hard requirement) even though no
+/// `Stage::cost_estimate` can run yet (every one of them needs real
+/// upstream input this endpoint doesn't have before a run exists). A
+/// worst-case call count built from the exact same flat per-call
+/// constants `spawn_run`'s own pipeline construction uses
+/// (`CALL_COST`/`EXCHANGE_COST`/`JUDGE_RESERVATION`, `orchestrator.rs`),
+/// not re-derived arithmetic of its own -- see PLAN_DEVIATIONS.md D49 for
+/// why this is an approximation, not a literal replay of what a run will
+/// actually spend.
+///
+/// `usable_count`, not `mock_panel().len()` unconditionally: only mock is
+/// ever usable in this build (no P4 adapters, D46), so today `usable_count`
+/// is always either 0 or 1, but sizing the estimate from it rather than a
+/// hardcoded constant is what makes "the estimate ... must fall when
+/// models are unusable" (U2) a real, testable behaviour instead of an
+/// aspiration nothing in this build's own data flow could ever falsify.
+/// `mock`'s own fixed 3-model panel is the per-usable-provider unit until
+/// a real per-provider model count exists to read instead.
+fn run_estimate(depth: Depth, usable_count: usize) -> serde_json::Value {
+    let (panel, judges, _) = crate::mock_panel();
+    let model_count = if usable_count == 0 { 0 } else { panel.len() };
+    let panel_len = model_count as f64;
+    let judges_len = if model_count == 0 {
+        0.0
+    } else {
+        judges.len() as f64
+    };
+    let bounds = arbiter_kernel::bounds::Bounds::for_depth(depth);
+    let rounds = bounds.max_rounds as f64;
+
+    let calls = panel_len // positions.generate
+        + panel_len * 2.0 // claims.extract: extraction + worst-case repair
+        + (if panel_len > 0.0 { 1.0 } else { 0.0 }) // claims.normalize (a single batch, the common case)
+        + panel_len + (if panel_len > 0.0 { 1.0 } else { 0.0 }) // options.cluster: one cluster call + attach batches
+        + (if panel_len > 0.0 { 1.0 } else { 0.0 }) // relations.analyze
+        + rounds * (panel_len * 2.0) // per round: challenge.run + rebuttal.run
+        + judges_len; // judge.evaluate, once, after the round loop
+
+    let cost = calls * crate::orchestrator::CALL_COST.0;
+
+    serde_json::json!({
+        "cost": cost,
+        "calls": calls as u64,
+        "wall_clock_secs": bounds.max_wall_time_secs,
+        "model_count": model_count,
+    })
 }
 
 fn describe_source(source: &arbiter_providers::keys::KeySource) -> String {

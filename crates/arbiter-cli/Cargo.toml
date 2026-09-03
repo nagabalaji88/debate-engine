@@ -30,6 +30,8 @@ futures-util = { workspace = true }
 
 [dev-dependencies]
 reqwest = { workspace = true }
+chromiumoxide = { workspace = true }
+futures-util = { workspace = true }
 
 [lints.rust]
 missing_debug_implementations = "warn"
