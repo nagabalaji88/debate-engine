@@ -1134,23 +1134,34 @@
   // well as a live one.
   function screenFlow() {
     setStatus("Ready", false);
-    var runId = activeRunId();
-    if (!runId) {
-      setScreen(
-        '<h1>Flow</h1>' +
-        '<p class="sub">The pipeline a debate walks, stage by stage. Start one and this fills in.</p>' +
-        '<div class="card flow-wrap">' + stepperHtml(-1, false) + "</div>" +
-        '<div class="card panel section-gap"><p class="empty-note">No debate has run in this browser yet. <a href="#/new">Start one</a>, or pick a past run from <a href="#/history">History</a>.</p></div>'
-      );
-      return;
-    }
     setScreen('<h1>Flow</h1><div class="card panel"><div class="skeleton"></div></div>');
+    var runId = activeRunId();
+    (runId
+      ? Promise.resolve(runId)
+      : api("/api/runs").then(function (rows) {
+          return rows && rows.length ? rows[0].run_id : "";
+        }).catch(function () { return ""; })
+    ).then(function (id) {
+      if (!id) {
+        setScreen(
+          '<h1>Flow</h1>' +
+          '<p class="sub">The pipeline a debate walks, stage by stage. Start one and this fills in.</p>' +
+          '<div class="card flow-wrap">' + stepperHtml(-1, false) + "</div>" +
+          '<div class="card panel section-gap"><p class="empty-note">No debates yet. <a href="#/new">Start one</a> and its stages appear here.</p></div>'
+        );
+        return;
+      }
+      showFlow(id);
+    });
+  }
+
+  function showFlow(runId) {
     api("/api/runs/" + encodeURIComponent(runId)).then(function (data) {
       if (data.status === "running") { location.hash = "#/running/" + encodeURIComponent(runId); return; }
       renderFlow(runId, data);
     }).catch(function (e) {
       if (e.status === 404) {
-        setScreen('<h1>Flow</h1><div class="card panel"><p class="empty-note">The last run this browser knew about is no longer in the store. <a href="#/history">Pick another</a>.</p></div>');
+        setScreen('<h1>Flow</h1><div class="card panel"><p class="empty-note">That run is no longer in the store. <a href="#/history">Pick another</a>.</p></div>');
         return;
       }
       setScreen('<h1>Flow</h1>' + errorBanner(e));

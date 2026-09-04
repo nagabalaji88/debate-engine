@@ -1,3 +1,8 @@
 /target
 **/*.rs.bk
 
+# `arbiter serve`'s default store: `run-arbiter.{sh,bat}` pass
+# `--store .arbiter/runs`, so every launch writes run databases and the
+# history catalogue here. Local data, never source -- without this line the
+# first launch leaves `git status` dirty for everyone who runs the app.
+/.arbiter
