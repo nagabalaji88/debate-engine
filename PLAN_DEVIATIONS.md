@@ -2576,3 +2576,101 @@ lib --deny warnings` on the platform-specific functions in isolation — clean.
 Full workspace: `cargo test --workspace` green, `cargo fmt --all -- --check`
 clean, `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 clean, all on the Linux host.
+
+## D51 — P4/P4b: the real provider adapters, `--panel` resolution, and a swallowed-error defect the first real key exposed
+
+P4 in the plan is one line ("real provider adapters"). Implementing it turned
+up four things worth writing down, three of which are corrections to code the
+plan had already signed off.
+
+- **Non-streaming JSON, per adapter, deliberately.**
+  `Provider::call` returns one `ProviderResponse` carrying final
+  `prompt_tokens`/`completion_tokens`. A streamed body would have to be
+  reassembled into exactly that shape, and every one of these vendors reports
+  usage more reliably on the non-streamed response than mid-stream. Streaming
+  in this product is `arbiter serve`'s SSE, which streams *events from the
+  store*, not tokens from a vendor. `eventsource-stream` stays a dependency for
+  that, not for these.
+
+- **`idempotency: None` for Anthropic and Gemini is load-bearing, not a TODO.**
+  Neither documents an idempotency header for its generate endpoint. Declaring
+  one anyway would let the kernel retry a call that may already have been
+  billed; `None` sends that call to ORPHANED instead, which is exactly what
+  ARCHITECTURE §8.4 asks for. Only the OpenAI-compatible family declares
+  `Header("Idempotency-Key")`, and the header is sent only when the kernel
+  actually supplies a key.
+
+- **A named provider with no key is a hard error, not a silent drop** (`panel.rs`).
+  §6.2's independence term is computed over the panel that *ran*. Quietly
+  running an operator's three-model panel as two would inflate confidence
+  against a panel nobody approved. The error names the env var and offers
+  `--panel mock`.
+
+- **The defect P4 exposed, and the fix.** `positions_generate.rs` discarded the
+  provider's error at `Err(_) => return None`, and every sibling stage did the
+  same at `.ok()?`. With `mock` this path never fired. With a real key it fired
+  immediately: a revoked key produced `Outcome: InsufficientEvidence /
+  Completeness: complete` with 0 claims, no failure event, and no
+  `BUDGET_RELEASED` — a confident-looking empty decision with nothing in the
+  transcript to explain it. Three changes, all inside existing spec:
+  - `generate_one` returns `Result<Position, PositionSkip>`; the reason rides
+    `STAGE_COMPLETED`'s payload. No new `EventType` variant — INTERFACES §13's
+    enum is authoritative and ARCHITECTURE §8.4 gives FAILED no event of its
+    own (its Event column is "—").
+  - **Zero positions from a non-empty panel is now `StageError`**, emitting
+    `STAGE_FAILED`. INTERFACES §6's `SkipItem` covers "the debate continues
+    with four positions and the record says so"; it does not cover continuing
+    with zero. `k2_provider_timeout`'s 3-of-4 case is untouched and still
+    passes — the two halves of that rule now have a test each.
+  - `BUDGET_RELEASED` is emitted (shared `stages::emit_budget_released`) on
+    every path that abandons a reservation, in all 8 provider stages.
+    `ReservationGuard::drop` does the ledger half but holds no event sink, so
+    the release had never once reached a transcript.
+
+- **`rustls-tls-native-roots`, not `rustls-tls`** (workspace `Cargo.toml`).
+  Plain `rustls-tls` trusts only the Mozilla roots compiled into
+  `webpki-roots` and ignores the machine's trust store, so every provider call
+  fails `UnknownIssuer` behind a corporate TLS-inspecting proxy — a
+  configuration a desktop CLI meets routinely and an operator cannot fix
+  without recompiling. Found by hitting it in this sandbox.
+
+- **Screen 1's panel checkboxes became real** (`ui.html`, `handlers.rs`).
+  They had been `checked disabled` decoration, correct only while `mock` was
+  the sole runnable panel: with the adapters shipped, `arbiter serve` would
+  otherwise have kept running mock forever while the CLI ran real models.
+  What is ticked is now `POST /api/runs`'s `panel`, resolved through the same
+  `panel::resolve` the CLI uses. Real providers with keys are the default
+  selection and `mock` is left unticked when any exist — a panel mixing
+  synthetic answers with real ones produces a §6.2 independence figure that
+  means nothing.
+- **The estimate stopped assuming a 3-model panel.** `run_estimate` borrowed
+  `mock_panel().len()` whenever *anything* was usable, which was accurate only
+  while every panel was the mock panel. It now takes the model count directly,
+  and `GET /api/providers` returns one precomputed estimate per possible panel
+  size (`estimates.per_model_count`) so ticking a box changes which row the
+  page *reads*. U7 forbids the page computing a number; summing each row's own
+  `models` field to index that table is the only arithmetic it does, and
+  `models` comes from `panel::models_contributed_by` — the same function that
+  knows `mock` is three models behind one name — so the two cannot drift.
+- **A test-suite flake fixed at the cause** (`tests/ui.rs`). Each UI test spawns
+  a real `arbiter serve` *and* a real Chromium, and `cargo test` defaults
+  `--test-threads` to the core count; 11 at once starved the container and 4
+  tests failed that pass every time in isolation. A semaphore caps concurrent
+  browsers at 2 rather than lengthening timeouts again or requiring every
+  future runner to remember `--test-threads=1`. The suite is also *faster*
+  this way (16s vs 25s serial).
+
+Verified end to end against the live Anthropic API with a deliberately invalid
+key: `Error: positions.generate: every model in the panel failed to produce a
+position (1 of 1): anthropic/claude-sonnet-4-5: anthropic HTTP 401
+Unauthorized: {"type":"error","error":{"type":"authentication_error",
+"message":"API key is invalid."}...}`, with the event log reading
+`RUN_STARTED → STAGE_STARTED → POSITION_STARTED → BUDGET_RESERVED →
+CALL_STARTED → BUDGET_RELEASED → STAGE_FAILED → RUN_FAILED`. `--panel mock`
+still runs fully offline and unchanged.
+
+What is *not* verified: no successful real completion from any vendor — that
+needs a valid key, which this session does not have. The adapters' wire format
+is covered instead by `tests/http_round_trip.rs`, which serves each request
+from a local socket and asserts the auth header, URL, and body that actually
+went out.

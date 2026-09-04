@@ -33,7 +33,14 @@ time = { version = "0.3", features = ["formatting"] }
 # kernel: async runtime + HTTPS + SSE parsing for provider streaming. "net" is
 # `arbiter serve`'s own addition (U1) -- the loopback-only TCP listener.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "net"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+# `rustls-tls-native-roots`, not plain `rustls-tls`: the latter trusts only
+# the Mozilla roots compiled into webpki-roots and ignores the machine's own
+# trust store, so every provider call fails with `UnknownIssuer` behind a
+# corporate TLS-inspecting proxy -- a configuration a desktop CLI meets
+# routinely, and one the operator cannot fix without recompiling. Reading the
+# OS store makes an administrator-installed root work the way it does for
+# curl and every browser on the same machine.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "stream"] }
 eventsource-stream = "0.2"
 # kernel: manifest.toml for prompt packs (ARCHITECTURE §15, INTERFACES §23)
 toml = "0.8"

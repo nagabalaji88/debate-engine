@@ -225,6 +225,15 @@
         location.hash = "#/keys";
         return;
       }
+      // Default selection: every real provider that has a key. `mock` is
+      // only pre-selected when nothing real is available, because a panel
+      // mixing synthetic answers with real ones is a debate whose result
+      // means nothing -- and silently including it would be exactly the
+      // "panel the operator never approved" that panel resolution refuses.
+      var realUsable = usable.filter(function (p) { return p.id !== "mock"; });
+      providers.forEach(function (p) {
+        p.checked = p.usable && (realUsable.length > 0 ? p.id !== "mock" : true);
+      });
       renderNewForm(providers, usable, data.estimates || {});
     }).catch(function (e) {
       setScreen('<h1>New run</h1>' + errorBanner(e, true));
@@ -243,8 +252,14 @@
     var action = "";
     if (p.state === "rejected" || p.state === "missing") action = '<a href="#/keys">' + (p.state === "rejected" ? "Fix" : "Add") + "</a>";
     else if (p.state === "unreachable") action = '<button class="link" type="button" data-recheck="' + h(p.id) + '">Re-check</button>';
+    // Before P4 this box was `checked disabled` decoration: `mock` was the
+    // only panel this build could run, so there was nothing to choose. It is
+    // now the actual panel selection -- checked by default when the provider
+    // is usable, disabled only when it has no key to run with.
     return '<li class="panel-row">'
-      + '<input type="checkbox" checked disabled aria-label="' + h(p.id) + '">'
+      + '<input type="checkbox" class="panel-pick" data-provider="' + h(p.id) + '"'
+      + (p.checked ? " checked" : "") + (p.usable ? "" : " disabled")
+      + ' aria-label="' + h(p.id) + '">'
       + '<span class="dot ' + dotClass + '" aria-hidden="true"></span>'
       + "<strong>" + h(p.id) + "</strong>"
       + '<span class="state-label">' + h(label) + "</span>"
@@ -279,14 +294,42 @@
       "</form>";
     setScreen(body);
 
+    function selectedProviders() {
+      var out = [];
+      var boxes = document.querySelectorAll(".panel-pick");
+      for (var i = 0; i < boxes.length; i++) {
+        if (boxes[i].checked && !boxes[i].disabled) out.push(boxes[i].getAttribute("data-provider"));
+      }
+      return out;
+    }
+
+    // Models, not boxes: `mock` is a three-model synthetic roster behind one
+    // name, so the server sends each row's own contribution and this only
+    // adds them up. Summing integers is not "computing an estimate" (U7) --
+    // every figure shown still comes from the table the server precomputed.
+    function selectedModelCount() {
+      var byId = {};
+      providers.forEach(function (p) { byId[p.id] = p.models || 1; });
+      return selectedProviders().reduce(function (n, id) { return n + (byId[id] || 1); }, 0);
+    }
+
     function updateEstimate() {
       var depth = document.getElementById("depth").value;
-      var est = estimates[depth];
+      // A lookup, never a calculation: the server precomputed one estimate
+      // per possible panel size, so ticking a box changes which row is read
+      // and the page still computes no number of its own (U7). An older
+      // response with no table falls back to the whole-roster figure.
+      var table = (estimates.per_model_count || {})[depth];
+      var n = selectedModelCount();
+      var est = (table && n < table.length) ? table[n] : estimates[depth];
       var el = document.getElementById("estimate");
       if (!est) { el.textContent = ""; return; }
       el.textContent = "Estimate: up to " + money(est.cost) + " · " + est.calls + " calls · up to " + est.wall_clock_secs + "s · " + est.model_count + " model" + (est.model_count === 1 ? "" : "s") + " (falls as models become unusable)";
     }
     document.getElementById("depth").addEventListener("change", updateEstimate);
+    Array.prototype.forEach.call(document.querySelectorAll(".panel-pick"), function (box) {
+      box.addEventListener("change", updateEstimate);
+    });
     updateEstimate();
 
     var form = document.getElementById("new-run-form");
@@ -297,6 +340,11 @@
       var question = document.getElementById("question").value;
       if (!question.trim()) {
         document.getElementById("submit-error").innerHTML = '<p class="field-error">The question must not be empty.</p>';
+        return;
+      }
+      var panel = selectedProviders();
+      if (panel.length === 0) {
+        document.getElementById("submit-error").innerHTML = '<p class="field-error">Pick at least one model for the panel.</p>';
         return;
       }
       submitting = true;
@@ -310,6 +358,7 @@
           question: question,
           depth: document.getElementById("depth").value,
           budget: parseFloat(document.getElementById("budget").value) || undefined,
+          panel: panel.join(","),
         },
       }).then(function (data) {
         setActiveRunId(data.run_id);

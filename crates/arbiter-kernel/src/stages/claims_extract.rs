@@ -350,7 +350,22 @@ impl ClaimsExtract {
         );
         guard.mark_sent();
 
-        let response = provider.call(request).await.ok()?;
+        let response = match provider.call(request).await {
+            Ok(r) => r,
+            Err(e) => {
+                // The reservation is released by the guard's Drop, but the
+                // event and the provider's own message have to be raised
+                // here or this call vanishes from the record entirely.
+                super::emit_budget_released(
+                    ctx,
+                    &self.name(),
+                    &reservation_id,
+                    self.estimated_cost_per_call,
+                    &e.to_string(),
+                );
+                return None;
+            }
+        };
         if let Some(request_id) = &response.request_id {
             ctx.events.emit(
                 EventType::CallRequestId,

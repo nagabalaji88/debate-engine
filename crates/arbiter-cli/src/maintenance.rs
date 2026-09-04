@@ -327,8 +327,18 @@ fn render_markdown(record: &arbiter_core::DecisionRecord) -> String {
 /// `pub(crate)`: `serve`'s own `GET /api/providers` (U1) reports the same
 /// roster this command does, so the CLI and the loopback UI never name a
 /// different set of providers.
+/// Every provider this build can name: the synthetic one, plus each real
+/// adapter P4 shipped. Sourced from `arbiter-providers` itself rather than a
+/// second hand-maintained list, so adding an adapter shows up in `keys list`,
+/// `providers list`, and the UI's panel picker without touching this file.
 pub(crate) fn known_providers() -> Vec<ProviderId> {
-    vec![ProviderId::new("mock"), ProviderId::new("anthropic")]
+    std::iter::once(ProviderId::new("mock"))
+        .chain(
+            arbiter_providers::REAL_PROVIDER_IDS
+                .iter()
+                .map(|id| ProviderId::new(*id)),
+        )
+        .collect()
 }
 
 pub(crate) fn credential_sources() -> (EnvCredentialSource, KeychainCredentialSource) {

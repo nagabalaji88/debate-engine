@@ -144,9 +144,10 @@ pub(crate) fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Spawns `run_pipeline` in the background against the fixed synthetic mock
-/// panel (the only panel this codebase can actually run today, matching
-/// `arbiter run --panel mock`'s own constraint, D42) and returns the fresh
+/// Spawns `run_pipeline` in the background against `panel_spec` — the same
+/// spec `arbiter run --panel` takes, resolved through the same
+/// [`crate::panel::resolve`], so the UI and the CLI can never disagree about
+/// what a panel string means. Returns the fresh
 /// `RunId` once `init` has durably recorded `RUN_STARTED` — the caller can
 /// return `202` the instant this returns, since the run genuinely exists
 /// in the store from that point on, even though `run_pipeline` itself is
@@ -156,8 +157,17 @@ pub(crate) fn spawn_run(
     question: String,
     depth: Depth,
     budget: Option<f64>,
+    panel_spec: &str,
 ) -> anyhow::Result<RunId> {
-    let (panel, judges, provider_id) = crate::mock_panel();
+    // P4: the panel is whatever the caller asked for, credential-resolved
+    // here so an unusable provider fails the request outright rather than
+    // failing mid-run, once money has already been spent on the models that
+    // did resolve.
+    let crate::panel::ResolvedPanel {
+        panel,
+        judges,
+        providers,
+    } = crate::panel::resolve(panel_spec)?;
 
     let mut bounds = Bounds::for_depth(depth);
     if let Some(b) = budget {
@@ -234,7 +244,7 @@ pub(crate) fn spawn_run(
             pack,
             panel,
             judges,
-            provider_id,
+            providers,
             bounds,
             policy,
             rng_seed,
@@ -256,18 +266,13 @@ async fn run_to_completion(
     pack: PromptPack,
     panel: Vec<(arbiter_core::ModelId, arbiter_core::ProviderId)>,
     judges: Vec<(arbiter_core::ModelId, arbiter_core::ProviderId)>,
-    provider_id: arbiter_core::ProviderId,
+    providers: ProviderRegistry,
     bounds: Bounds,
     policy: Policy,
     rng_seed: u64,
     question: String,
     depth: Depth,
 ) {
-    let mut providers = ProviderRegistry::new();
-    providers.register(Box::new(crate::synthetic::SyntheticProvider::new(
-        provider_id,
-    )));
-
     let cfg = crate::orchestrator::PipelineConfig {
         run_id: run_id.clone(),
         question,

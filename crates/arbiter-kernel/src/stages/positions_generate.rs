@@ -95,6 +95,38 @@ fn position_json(p: &Position) -> serde_json::Value {
     })
 }
 
+/// Why one panel member produced no position. INTERFACES §6 makes a single
+/// member's failure `SkipItem`, but "skip" was being read as "say nothing":
+/// the provider's own error was discarded at the `match`, so a whole panel of
+/// bad API keys reported `InsufficientEvidence / complete` with a silent,
+/// empty transcript. ARCHITECTURE §8.4 gives FAILED no event of its own
+/// (its Event column is "—"), so the reason rides `STAGE_COMPLETED`'s payload
+/// rather than a new `EventType` variant that INTERFACES §13 does not name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PositionSkip {
+    model: ModelId,
+    provider: ProviderId,
+    reason: String,
+}
+
+impl PositionSkip {
+    fn new(model: &ModelId, provider: &ProviderId, reason: impl Into<String>) -> Self {
+        Self {
+            model: model.clone(),
+            provider: provider.clone(),
+            reason: reason.into(),
+        }
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "model": self.model.as_str(),
+            "provider": self.provider.as_str(),
+            "reason": self.reason,
+        })
+    }
+}
+
 /// `positions.generate`. Constructed with the resolved panel (`panel.resolve`'s
 /// output — not yet implemented, D30/G2 scope note; a caller supplies the list
 /// directly until it exists) and the loaded `positions.generate` template.
@@ -131,14 +163,16 @@ impl PositionsGenerate {
         model: ModelId,
         provider_id: ProviderId,
         ctx: &StageContext<'_>,
-    ) -> Option<Position> {
+    ) -> Result<Position, PositionSkip> {
         if ctx.cancel.is_cancelled() {
-            return None;
+            return Err(PositionSkip::new(&model, &provider_id, "run cancelled"));
         }
 
         let mut vars = BTreeMap::new();
         vars.insert("question".to_string(), question.text.clone());
-        let rendered = self.template.render(&vars).ok()?;
+        let rendered = self.template.render(&vars).map_err(|e| {
+            PositionSkip::new(&model, &provider_id, format!("prompt render failed: {e}"))
+        })?;
         let prompt_hash = self.template.prompt_hash(&rendered).to_string();
 
         ctx.events.emit(
@@ -172,7 +206,7 @@ impl PositionsGenerate {
                 &self.name(),
                 serde_json::json!({"model": model.as_str(), "cache_hit": true}),
             );
-            return Some(Position {
+            return Ok(Position {
                 id: position_id,
                 model,
                 provider: provider_id,
@@ -191,13 +225,20 @@ impl PositionsGenerate {
             .reserve(reservation_id.clone(), self.estimated_cost_per_call)
         {
             Ok(guard) => guard,
-            Err(_) => {
+            Err(e) => {
                 ctx.events.emit(
                     EventType::BudgetExhausted,
                     &self.name(),
                     serde_json::json!({"model": model.as_str()}),
                 );
-                return None;
+                return Err(PositionSkip::new(
+                    &model,
+                    &provider_id,
+                    format!(
+                        "budget exhausted: needed {:.6}, {:.6} available",
+                        e.requested.0, e.available.0
+                    ),
+                ));
             }
         };
         ctx.events.emit(
@@ -211,8 +252,20 @@ impl PositionsGenerate {
 
         let Some(provider) = ctx.providers.get(&provider_id) else {
             // No provider registered for this panel member: SkipItem. The
-            // reservation is released by ReservationGuard's own Drop.
-            return None;
+            // reservation is released by ReservationGuard's own Drop; the
+            // event has to be emitted here, because Drop cannot reach the sink.
+            super::emit_budget_released(
+                ctx,
+                &self.name(),
+                &reservation_id,
+                self.estimated_cost_per_call,
+                "no provider registered for this panel member",
+            );
+            return Err(PositionSkip::new(
+                &model,
+                &provider_id,
+                "no provider registered for this panel member",
+            ));
         };
 
         let call_id = CallId::new(format!(
@@ -244,10 +297,23 @@ impl PositionsGenerate {
         let response: Result<ProviderResponse, _> = provider.call(request).await;
         let response = match response {
             Ok(r) => r,
-            Err(_) => {
+            Err(e) => {
                 // A clean provider error (not a never-arrived response) --
-                // FAILED, not ORPHANED. Drop releases the reservation.
-                return None;
+                // FAILED, not ORPHANED. Drop releases the reservation, but the
+                // release event and the provider's own message both have to be
+                // raised here: an unauthorised key is the single most likely
+                // reason a real panel produces nothing, and swallowing it left
+                // the operator with an empty transcript and a cheerful
+                // "InsufficientEvidence / complete".
+                let reason = e.to_string();
+                super::emit_budget_released(
+                    ctx,
+                    &self.name(),
+                    &reservation_id,
+                    self.estimated_cost_per_call,
+                    &reason,
+                );
+                return Err(PositionSkip::new(&model, &provider_id, reason));
             }
         };
 
@@ -297,7 +363,7 @@ impl PositionsGenerate {
             serde_json::json!({"model": model.as_str(), "cache_hit": false}),
         );
 
-        Some(Position {
+        Ok(Position {
             id: position_id,
             model,
             provider: provider_id,
@@ -343,24 +409,69 @@ impl Stage for PositionsGenerate {
             serde_json::json!({"panel_size": self.panel.len()}),
         );
 
-        let mut results: Vec<Position> = futures_util::stream::iter(self.panel.iter().cloned())
-            .map(|(model, provider_id)| {
-                let question = &input;
-                async move { self.generate_one(question, model, provider_id, ctx).await }
-            })
-            .buffer_unordered(self.max_parallelism)
-            .filter_map(std::future::ready)
-            .collect()
-            .await;
+        let outcomes: Vec<Result<Position, PositionSkip>> =
+            futures_util::stream::iter(self.panel.iter().cloned())
+                .map(|(model, provider_id)| {
+                    let question = &input;
+                    async move { self.generate_one(question, model, provider_id, ctx).await }
+                })
+                .buffer_unordered(self.max_parallelism)
+                .collect()
+                .await;
+
+        let mut results: Vec<Position> = Vec::new();
+        let mut skipped: Vec<PositionSkip> = Vec::new();
+        for outcome in outcomes {
+            match outcome {
+                Ok(position) => results.push(position),
+                Err(skip) => skipped.push(skip),
+            }
+        }
 
         results.sort_by(|a, b| {
             (a.provider.as_str(), a.model.as_str()).cmp(&(b.provider.as_str(), b.model.as_str()))
         });
+        skipped.sort_by(|a, b| {
+            (a.provider.as_str(), a.model.as_str()).cmp(&(b.provider.as_str(), b.model.as_str()))
+        });
+
+        // Every member failed on a panel that had members. INTERFACES §6's
+        // `SkipItem` covers "the debate continues with four positions and the
+        // record says so"; it does not cover continuing with zero. Three of
+        // four models failing is a degraded debate, and the fixture
+        // `k2_provider_timeout` requires that it proceed. None of N succeeding
+        // is not a debate at all: every stage after this one would read an
+        // empty panel as "the models had nothing to say" and synthesise a
+        // confident-looking `InsufficientEvidence`, hiding the real cause.
+        if results.is_empty() && !self.panel.is_empty() {
+            let detail = skipped
+                .iter()
+                .map(|s| format!("{}/{}: {}", s.provider.as_str(), s.model.as_str(), s.reason))
+                .collect::<Vec<_>>()
+                .join("; ");
+            ctx.events.emit(
+                EventType::StageFailed,
+                &self.name(),
+                serde_json::json!({
+                    "panel_size": self.panel.len(),
+                    "positions": 0,
+                    "skipped": skipped.iter().map(PositionSkip::to_json).collect::<Vec<_>>(),
+                }),
+            );
+            return Err(StageError::Other(format!(
+                "every model in the panel failed to produce a position ({} of {}): {detail}",
+                skipped.len(),
+                self.panel.len()
+            )));
+        }
 
         ctx.events.emit(
             EventType::StageCompleted,
             &self.name(),
-            serde_json::json!({"positions": results.len()}),
+            serde_json::json!({
+                "positions": results.len(),
+                "skipped": skipped.iter().map(PositionSkip::to_json).collect::<Vec<_>>(),
+            }),
         );
 
         Ok(Positions(results))
@@ -550,26 +661,37 @@ mod tests {
 
     #[tokio::test]
     async fn an_unregistered_provider_is_skipped_not_fatal() {
-        let registry = ProviderRegistry::default();
+        let mock = ScriptedProvider::new(ProviderId::new("mock"));
+        mock.script_text("the registered member still answers");
+
+        let mut registry = ProviderRegistry::default();
+        registry.register(Box::new(mock));
         let budget = BudgetLedger::unbounded();
         let cache = ResponseCache::new();
         let sink = RecordingSink::default();
         let ctx = stage_ctx(&registry, &budget, &cache, &sink);
 
-        let panel = vec![(
-            ModelId::new("model-a"),
-            ProviderId::new("nobody-registered"),
-        )];
-        let stage = PositionsGenerate::new(panel, template(), Cost(0.01), 1);
+        let panel = vec![
+            (
+                ModelId::new("model-a"),
+                ProviderId::new("nobody-registered"),
+            ),
+            (ModelId::new("model-b"), ProviderId::new("mock")),
+        ];
+        let stage = PositionsGenerate::new(panel, template(), Cost(0.01), 2);
         let question = Question {
             text: "Q".to_string(),
         };
         let out = stage.run(question, &ctx).await.unwrap();
         assert_eq!(
             out.0.len(),
-            0,
+            1,
             "an unregistered provider must be skipped, not fatal"
         );
+        // Abandoning the reservation has to say so: Drop performs the ledger
+        // half silently, so without this event the transcript shows a reserve
+        // with no matching release.
+        assert_eq!(sink.count(EventType::BudgetReleased), 1);
     }
 
     #[tokio::test]
@@ -608,18 +730,24 @@ mod tests {
 
         let mut registry = ProviderRegistry::default();
         registry.register(Box::new(mock));
-        let budget = BudgetLedger::new(Some(Cost(0.0))); // zero budget: every reserve fails
+        // Room for exactly one of the two calls: the second reservation is
+        // refused, which is a skip, not a stage failure.
+        let budget = BudgetLedger::new(Some(Cost(1.0)));
         let cache = ResponseCache::new();
         let sink = RecordingSink::default();
         let ctx = stage_ctx(&registry, &budget, &cache, &sink);
 
-        let panel = vec![(ModelId::new("model-a"), ProviderId::new("mock"))];
+        let panel = vec![
+            (ModelId::new("model-a"), ProviderId::new("mock")),
+            (ModelId::new("model-b"), ProviderId::new("mock")),
+        ];
+        // Serially, so the first call commits before the second reserves.
         let stage = PositionsGenerate::new(panel, template(), Cost(1.0), 1);
         let question = Question {
             text: "Q".to_string(),
         };
         let out = stage.run(question, &ctx).await.unwrap();
-        assert_eq!(out.0.len(), 0);
+        assert_eq!(out.0.len(), 1);
         assert_eq!(sink.count(EventType::BudgetExhausted), 1);
     }
 
@@ -673,6 +801,104 @@ mod tests {
     /// Proves the actual shipped `positions.generate.md` (not this test
     /// module's own minimal fixture) loads and renders -- the real content
     /// G1 deferred to whichever stage first needed one.
+    /// The defect this stage shipped with: a panel whose every member failed
+    /// returned `Ok(Positions([]))`, so the run carried on and synthesised
+    /// `InsufficientEvidence / complete` from nothing. An operator with a
+    /// revoked API key saw a confident-looking empty decision and no reason.
+    #[tokio::test]
+    async fn a_panel_where_every_member_fails_is_a_stage_failure_naming_the_reason() {
+        let mock = ScriptedProvider::new(ProviderId::new("mock"));
+        mock.script_error("401 Unauthorized: invalid x-api-key");
+        mock.script_error("401 Unauthorized: invalid x-api-key");
+
+        let mut registry = ProviderRegistry::default();
+        registry.register(Box::new(mock));
+        let budget = BudgetLedger::unbounded();
+        let cache = ResponseCache::new();
+        let sink = RecordingSink::default();
+        let ctx = stage_ctx(&registry, &budget, &cache, &sink);
+
+        let panel = vec![
+            (ModelId::new("model-a"), ProviderId::new("mock")),
+            (ModelId::new("model-b"), ProviderId::new("mock")),
+        ];
+        let stage = PositionsGenerate::new(panel, template(), Cost(0.01), 2);
+        let err = stage
+            .run(
+                Question {
+                    text: "Q".to_string(),
+                },
+                &ctx,
+            )
+            .await
+            .expect_err("zero positions from a non-empty panel is not a debate");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("invalid x-api-key"),
+            "the provider's own words must survive to the operator: {message}"
+        );
+        assert!(message.contains("model-a"), "{message}");
+        assert_eq!(sink.count(EventType::StageFailed), 1);
+        // Both reservations were abandoned, and both said so.
+        assert_eq!(sink.count(EventType::BudgetReleased), 2);
+        assert_eq!(sink.count(EventType::BudgetCommitted), 0);
+    }
+
+    /// The other half of the same rule, and the one INTERFACES §6 states
+    /// outright: three of four is a degraded debate that continues. The
+    /// `k2_provider_timeout` fixture depends on exactly this.
+    #[tokio::test]
+    async fn a_partly_failing_panel_still_produces_a_debate_and_records_who_dropped_out() {
+        let mock = ScriptedProvider::new(ProviderId::new("mock"));
+        mock.script_error("upstream timed out after 120s");
+        mock.script_text("b answers");
+        mock.script_text("c answers");
+
+        let mut registry = ProviderRegistry::default();
+        registry.register(Box::new(mock));
+        let budget = BudgetLedger::unbounded();
+        let cache = ResponseCache::new();
+        let sink = RecordingSink::default();
+        let ctx = stage_ctx(&registry, &budget, &cache, &sink);
+
+        let panel = vec![
+            (ModelId::new("model-a"), ProviderId::new("mock")),
+            (ModelId::new("model-b"), ProviderId::new("mock")),
+            (ModelId::new("model-c"), ProviderId::new("mock")),
+        ];
+        // Serially, so `model-a` is the one that draws the scripted error.
+        let stage = PositionsGenerate::new(panel, template(), Cost(0.01), 1);
+        let out = stage
+            .run(
+                Question {
+                    text: "Q".to_string(),
+                },
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(out.0.len(), 2);
+        assert_eq!(sink.count(EventType::StageFailed), 0);
+
+        // "the debate continues with four positions and the record says so" --
+        // the saying-so is this payload. Without it the transcript shows three
+        // CALL_STARTED and two positions with nothing to explain the gap.
+        let emitted = sink.emitted.lock().unwrap();
+        let (_, payload) = emitted
+            .iter()
+            .find(|(t, _)| *t == EventType::StageCompleted)
+            .expect("stage completed");
+        let skipped = payload["skipped"].as_array().expect("skipped array");
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0]["model"], "model-a");
+        assert!(
+            skipped[0]["reason"].as_str().unwrap().contains("timed out"),
+            "{payload}"
+        );
+    }
+
     #[test]
     fn the_shipped_prompt_pack_loads_and_renders() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../prompts/default/v1");

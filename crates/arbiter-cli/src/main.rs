@@ -4,23 +4,22 @@
 mod accept;
 mod maintenance;
 mod orchestrator;
+mod panel;
 mod render;
 mod resume_replay;
 mod run_handle;
 mod serve;
 mod synthetic;
 
-use arbiter_core::{ModelId, Policy, ProviderId, RunId};
+use arbiter_core::{Policy, RunId};
 use arbiter_kernel::bounds::{Bounds, Depth};
 use arbiter_kernel::prompt::PromptPack;
-use arbiter_kernel::stage::ProviderRegistry;
 use arbiter_kernel::store::{Cost as KernelCost, Manifest, RunStore};
 use arbiter_store::sqlite_store::SqliteRunStore;
 use clap::{Parser, Subcommand};
 use orchestrator::{PipelineConfig, run_pipeline};
 use run_handle::RunHandle;
 use std::path::{Path, PathBuf};
-use synthetic::SyntheticProvider;
 
 #[derive(Parser, Debug)]
 #[command(name = "arbiter", version, about = "The AI debate & decision engine")]
@@ -35,10 +34,11 @@ enum Command {
     /// file containing one).
     Run {
         question: String,
-        /// Comma-separated model names, or the literal `mock` to run the
-        /// whole pipeline against a synthetic in-process panel with no
-        /// network access at all (real provider adapters are P3/P4,
-        /// deferred — see PLAN_DEVIATIONS.md D42).
+        /// Comma-separated providers, each optionally pinning a model
+        /// (`anthropic,openai:gpt-4o,gemini`), or the literal `mock` to run
+        /// the whole pipeline against a synthetic in-process panel with no
+        /// keys and no network at all. A named provider with no resolvable
+        /// key is an error, never a silent drop.
         #[arg(long, default_value = "mock")]
         panel: String,
         #[arg(long, value_enum, default_value = "standard")]
@@ -152,12 +152,12 @@ enum Command {
         #[arg(long, default_value = ".arbiter/runs")]
         store: PathBuf,
     },
-    /// Credential sources -- P3 is not implemented in this build.
+    /// Credential sources: which providers have a key, and from where.
     Keys {
         #[command(subcommand)]
         action: KeysAction,
     },
-    /// The provider roster -- P4 is not implemented in this build.
+    /// The provider roster and its per-provider key state.
     Providers {
         #[command(subcommand)]
         action: ProvidersAction,
@@ -247,24 +247,11 @@ impl From<DepthArg> for Depth {
     }
 }
 
-/// A model/provider roster, as used for both the debate panel and the judge
-/// panel.
-type Roster = Vec<(ModelId, ProviderId)>;
-
-/// A fixed, deterministic three-model synthetic panel — real credential
-/// resolution and provider adapters (P3/P4) are out of scope for this task
-/// (PLAN_DEVIATIONS.md D42); `--panel mock` is the one panel this binary can
-/// actually run today.
-pub(crate) fn mock_panel() -> (Roster, Roster, ProviderId) {
-    let provider = ProviderId::new("mock");
-    let panel = vec![
-        (ModelId::new("model-a"), provider.clone()),
-        (ModelId::new("model-b"), provider.clone()),
-        (ModelId::new("model-c"), provider.clone()),
-    ];
-    let judges = vec![(ModelId::new("judge-1"), provider.clone())];
-    (panel, judges, provider)
-}
+/// The fixed, deterministic three-model synthetic panel. Still here and still
+/// the default, because every CI fixture, `replay`, and every offline demo
+/// depends on it — but no longer the *only* panel: P4's real adapters made
+/// `--panel anthropic,openai,...` work, resolved by [`panel::resolve`].
+pub(crate) use panel::mock_panel;
 
 /// `pub(crate)`: `serve`'s own `POST /api/runs` (U2's "a file path is
 /// accepted too") resolves the question the same way `arbiter run` does,
@@ -412,13 +399,12 @@ async fn run_command(
     stream: bool,
     store_root: PathBuf,
 ) -> anyhow::Result<()> {
-    if panel_arg != "mock" {
-        anyhow::bail!(
-            "only `--panel mock` is implemented in this build -- real provider adapters \
-             (P3/P4) are not yet wired (PLAN_DEVIATIONS.md D42)"
-        );
-    }
-    let (panel, judges, provider_id) = mock_panel();
+    // P4: any provider with a resolvable key is runnable now, not just mock.
+    let panel::ResolvedPanel {
+        panel,
+        judges,
+        providers,
+    } = panel::resolve(&panel_arg)?;
 
     let question = resolve_question(&question_arg)?;
 
@@ -501,9 +487,6 @@ async fn run_command(
         );
     }
     let run_started_at = std::time::Instant::now();
-
-    let mut providers = ProviderRegistry::new();
-    providers.register(Box::new(SyntheticProvider::new(provider_id)));
 
     let cfg = PipelineConfig {
         run_id: run_id.clone(),

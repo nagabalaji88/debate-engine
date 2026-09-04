@@ -47,6 +47,11 @@ pub(crate) struct CreateRunBody {
     depth: Option<String>,
     #[serde(default)]
     budget: Option<f64>,
+    /// Same spec `arbiter run --panel` takes (`mock`, or
+    /// `anthropic,openai:gpt-4o,...`). Absent means `mock`, so a request
+    /// written before P4 still behaves exactly as it did.
+    #[serde(default)]
+    panel: Option<String>,
 }
 
 /// `POST /api/runs` — `202`, **spends money**. The one endpoint whose whole
@@ -75,7 +80,8 @@ pub(crate) async fn create_run(
         Err(e) => return err(StatusCode::BAD_REQUEST, e.to_string()),
     };
 
-    match super::spawn_run(&state, question, depth, body.budget) {
+    let panel_spec = body.panel.clone().unwrap_or_else(|| "mock".to_string());
+    match super::spawn_run(&state, question, depth, body.budget, &panel_spec) {
         Ok(run_id) => (
             StatusCode::ACCEPTED,
             Json(serde_json::json!({"run_id": run_id.as_str()})),
@@ -450,6 +456,7 @@ pub(crate) async fn list_providers() -> Response {
     let rows: Vec<serde_json::Value> = crate::maintenance::known_providers()
         .into_iter()
         .map(|provider| {
+            let models = crate::panel::models_contributed_by(&provider);
             if provider.as_str() == "mock" {
                 return serde_json::json!({
                     "id": provider.as_str(),
@@ -457,6 +464,10 @@ pub(crate) async fn list_providers() -> Response {
                     "source": null,
                     "fingerprint": null,
                     "usable": true,
+                    // `mock` is a whole synthetic roster behind one name, so
+                    // ticking its box adds 3 models, not 1. Screen 1 sums this
+                    // to index the estimate table.
+                    "models": models,
                 });
             }
             let mut resolved = None;
@@ -474,10 +485,12 @@ pub(crate) async fn list_providers() -> Response {
                         "state": "present",
                         "source": describe_source(&key_source),
                         "fingerprint": &fp[fp.len().saturating_sub(4)..],
-                        // P4's real adapters don't exist in this build
-                        // (PLAN_DEVIATIONS.md D46) -- a key being present is
-                        // not the same as a key ever having been verified.
-                        "usable": false,
+                        // P4 shipped the real adapters, so a resolvable key is
+                        // now genuinely runnable. Still `present`, not
+                        // `verified`: nothing has spent a request to prove the
+                        // key works — that is what `providers test` is for.
+                        "usable": true,
+                        "models": models,
                     })
                 }
                 None => serde_json::json!({
@@ -486,21 +499,44 @@ pub(crate) async fn list_providers() -> Response {
                     "source": null,
                     "fingerprint": null,
                     "usable": false,
+                    "models": models,
                 }),
             }
         })
         .collect();
 
-    let usable_count = rows
+    // Models, not providers: `mock` alone is a three-model panel, so counting
+    // ticked boxes would under-state every estimate it appears in.
+    let usable_models: usize = rows
         .iter()
         .filter(|r| r["usable"].as_bool().unwrap_or(false))
-        .count();
+        .map(|r| r["models"].as_u64().unwrap_or(1) as usize)
+        .sum();
+
+    // One estimate per possible panel size, 0..=usable, rather than a single
+    // number for the whole roster. Screen 1 lets the operator pick which
+    // providers sit on the panel (P4b), and U7 forbids the page computing a
+    // number of its own — so the server precomputes every answer the picker
+    // can produce and the page does a lookup. `estimates.standard`/`.deep`
+    // stay exactly as they were: the whole-roster figure, shown before any
+    // box is touched.
+    let table = |depth: Depth| -> serde_json::Value {
+        serde_json::Value::Array(
+            (0..=usable_models)
+                .map(|n| run_estimate(depth, n))
+                .collect(),
+        )
+    };
 
     Json(serde_json::json!({
         "providers": rows,
         "estimates": {
-            "standard": run_estimate(Depth::Standard, usable_count),
-            "deep": run_estimate(Depth::Deep, usable_count),
+            "standard": run_estimate(Depth::Standard, usable_models),
+            "deep": run_estimate(Depth::Deep, usable_models),
+            "per_model_count": {
+                "standard": table(Depth::Standard),
+                "deep": table(Depth::Deep),
+            },
         },
     }))
     .into_response()
@@ -526,15 +562,15 @@ pub(crate) async fn list_providers() -> Response {
 /// aspiration nothing in this build's own data flow could ever falsify.
 /// `mock`'s own fixed 3-model panel is the per-usable-provider unit until
 /// a real per-provider model count exists to read instead.
-fn run_estimate(depth: Depth, usable_count: usize) -> serde_json::Value {
-    let (panel, judges, _) = crate::mock_panel();
-    let model_count = if usable_count == 0 { 0 } else { panel.len() };
+fn run_estimate(depth: Depth, model_count: usize) -> serde_json::Value {
+    // The panel is however many models will actually run, not the mock
+    // panel's fixed 3: before P4 every panel *was* the mock panel, so
+    // borrowing its length was accurate; a real roster of 2 or 5 makes that
+    // figure wrong in whichever direction costs the operator more.
     let panel_len = model_count as f64;
-    let judges_len = if model_count == 0 {
-        0.0
-    } else {
-        judges.len() as f64
-    };
+    // One judge, and only if anything is running at all (`panel.resolve`
+    // gives the judge seat to the first-listed provider).
+    let judges_len = if model_count == 0 { 0.0 } else { 1.0 };
     let bounds = arbiter_kernel::bounds::Bounds::for_depth(depth);
     let rounds = bounds.max_rounds as f64;
 

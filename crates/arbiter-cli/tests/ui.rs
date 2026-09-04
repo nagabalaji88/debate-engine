@@ -127,12 +127,42 @@ fn start_server(label: &str) -> Server {
     }
 }
 
+/// How many of these tests may hold a live Chromium at once.
+///
+/// Every test in this file spawns a real `arbiter serve` subprocess *and* a
+/// real browser, and `cargo test` defaults `--test-threads` to the core count.
+/// Eleven of those at once starves a modest container: launches that would
+/// have succeeded time out in `wait_for`, and the suite fails intermittently
+/// on tests that pass every time in isolation. Capping the browsers -- rather
+/// than lengthening the timeouts again, or asking every future runner to
+/// remember `--test-threads=1` -- fixes the cause: two run concurrently, the
+/// rest queue on the permit, and the wall-clock cost is small because each
+/// test is dominated by its own page waits.
+const MAX_CONCURRENT_BROWSERS: usize = 2;
+
+fn browser_permits() -> &'static tokio::sync::Semaphore {
+    static PERMITS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    PERMITS.get_or_init(|| tokio::sync::Semaphore::new(MAX_CONCURRENT_BROWSERS))
+}
+
+/// Keeps a launched browser's CDP handler pumping and its concurrency permit
+/// held for as long as the test holds the guard. Every call site binds it as
+/// `_guard`, so it lives to the end of the test body and releases there.
+struct BrowserGuard {
+    _handler: tokio::task::JoinHandle<()>,
+    _permit: tokio::sync::SemaphorePermit<'static>,
+}
+
 /// Each call gets its own `--user-data-dir`: chromiumoxide otherwise
 /// defaults every launch to the same shared profile directory, which two
 /// tests running concurrently (this suite's own default) collide over via
 /// Chrome's own single-instance lock file, killing the second launch
 /// outright rather than just serializing it.
-async fn browser(label: &str) -> (Browser, tokio::task::JoinHandle<()>) {
+async fn browser(label: &str) -> (Browser, BrowserGuard) {
+    let permit = browser_permits()
+        .acquire()
+        .await
+        .expect("browser permits are never closed");
     let profile = temp_store(&format!("chrome_profile_{label}"));
     let config = BrowserConfig::builder()
         .chrome_executable("/opt/pw-browsers/chromium")
@@ -141,8 +171,14 @@ async fn browser(label: &str) -> (Browser, tokio::task::JoinHandle<()>) {
         .build()
         .unwrap();
     let (browser, mut handler) = Browser::launch(config).await.expect("launching chromium");
-    let handle = tokio::spawn(async move { while handler.next().await.is_some() {} });
-    (browser, handle)
+    let handler = tokio::spawn(async move { while handler.next().await.is_some() {} });
+    (
+        browser,
+        BrowserGuard {
+            _handler: handler,
+            _permit: permit,
+        },
+    )
 }
 
 /// Waits (polling `evaluate`) until `js_bool` evaluates truthy, or panics.
@@ -165,6 +201,31 @@ async fn wait_for(page: &Page, js_bool: &str, what: &str) {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     panic!("timed out waiting for: {what}");
+}
+
+/// [`wait_for`], plus whatever the page is currently saying about itself.
+async fn wait_for_explained(page: &Page, js_bool: &str, what: &str) {
+    for _ in 0..300 {
+        let result: bool = page
+            .evaluate(js_bool)
+            .await
+            .ok()
+            .and_then(|r| r.into_value().ok())
+            .unwrap_or(false);
+        if result {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let state: String = page
+        .evaluate(
+            "JSON.stringify({ hash: location.hash,              submitError: (document.getElementById('submit-error') || {}).textContent || '',              banner: (document.querySelector('.banner') || {}).textContent || '',              body: document.body.innerText.slice(0, 400) })",
+        )
+        .await
+        .ok()
+        .and_then(|r| r.into_value().ok())
+        .unwrap_or_else(|| "<page unreachable>".to_string());
+    panic!("timed out waiting for: {what}\npage state: {state}");
 }
 
 async fn text_of(page: &Page, selector: &str) -> String {
@@ -205,7 +266,12 @@ async fn run_to_result(page: &Page, server: &Server) {
         .click()
         .await
         .unwrap();
-    wait_for(
+    // On a timeout here, say *why* the page never navigated: a refused
+    // submit (an empty panel, an empty question) leaves its reason in
+    // `#submit-error`, and a server-side failure leaves one in the banner.
+    // Without this the failure reads only "timed out", which is true of every
+    // possible cause and therefore diagnostic of none.
+    wait_for_explained(
         page,
         "location.hash.startsWith('#/result/')",
         "auto-navigation to the result screen",
@@ -228,7 +294,7 @@ async fn run_to_result(page: &Page, server: &Server) {
 #[tokio::test]
 async fn all_5_panel_key_states_render() {
     let server = start_server("panel_states");
-    let (browser, _handle) = browser("panel_states").await;
+    let (browser, _guard) = browser("panel_states").await;
     let page = browser.new_page("about:blank").await.unwrap();
 
     page.evaluate_on_new_document(
@@ -291,6 +357,95 @@ async fn all_5_panel_key_states_render() {
     }
 }
 
+/// `the_panel_picker_chooses_who_actually_runs`: before P4 the panel
+/// checkboxes were `checked disabled` decoration, because `mock` was the only
+/// panel this build could run. They now carry the run: what is ticked becomes
+/// `POST /api/runs`'s `panel`, and ticking nothing is refused client-side
+/// rather than silently falling back to a panel the operator did not pick.
+#[tokio::test]
+async fn the_panel_picker_chooses_who_actually_runs() {
+    let server = start_server("panel_picker");
+    let (browser, _guard) = browser("panel_picker").await;
+    let page = browser.new_page(server.url("")).await.unwrap();
+    wait_for(
+        &page,
+        "!!document.querySelector('.panel-pick')",
+        "the panel checkboxes to render",
+    )
+    .await;
+
+    // Nothing real has a key in the test environment, so `mock` is both the
+    // only usable provider and the default selection.
+    let checked: String = page
+        .evaluate(
+            "Array.prototype.filter.call(document.querySelectorAll('.panel-pick'),              function (b) { return b.checked; }).map(function (b) {              return b.getAttribute('data-provider'); }).join(',')",
+        )
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert_eq!(
+        checked, "mock",
+        "mock must be the default panel with no keys set"
+    );
+
+    // The unusable providers are offered but not selectable: a box you cannot
+    // tick says "add a key", where a missing row would say nothing at all.
+    let disabled: u32 = page
+        .evaluate("document.querySelectorAll('.panel-pick[disabled]').length")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert!(
+        disabled > 0,
+        "keyless providers must render as disabled rows"
+    );
+
+    // Untick everything and the run is refused before any request goes out.
+    page.evaluate(
+        "Array.prototype.forEach.call(document.querySelectorAll('.panel-pick'),          function (b) { b.checked = false; });",
+    )
+    .await
+    .unwrap();
+    page.find_element("#question")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap()
+        .type_str("Should we adopt a modular monolith or microservices?")
+        .await
+        .unwrap();
+    page.find_element("#start-btn")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    wait_for(
+        &page,
+        "!!document.querySelector('#submit-error .field-error')",
+        "an empty panel to be refused client-side",
+    )
+    .await;
+    let message = text_of(&page, "#submit-error .field-error").await;
+    assert!(
+        message.to_lowercase().contains("at least one"),
+        "the refusal must say what to do about it: {message}"
+    );
+    let hash: String = page
+        .evaluate("location.hash")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert!(
+        !hash.contains("/running/"),
+        "a refused submit must not navigate to a run: {hash}"
+    );
+}
+
 /// `estimate_falls_when_a_model_is_unusable`: the estimate shown on screen
 /// 1 is server-computed from the usable-provider count (`serve/handlers.rs`
 /// own `run_estimate`) -- mocking zero usable providers must show a
@@ -299,7 +454,7 @@ async fn all_5_panel_key_states_render() {
 #[tokio::test]
 async fn estimate_falls_when_a_model_is_unusable() {
     let server = start_server("estimate_falls");
-    let (browser, _handle) = browser("estimate_falls").await;
+    let (browser, _guard) = browser("estimate_falls").await;
 
     // First, the real roster (mock usable) for a baseline.
     let page1 = browser.new_page(server.url("")).await.unwrap();
@@ -363,7 +518,7 @@ async fn estimate_falls_when_a_model_is_unusable() {
 #[tokio::test]
 async fn start_disabled_with_0_usable_models() {
     let server = start_server("start_disabled");
-    let (browser, _handle) = browser("start_disabled").await;
+    let (browser, _guard) = browser("start_disabled").await;
     let page = browser.new_page("about:blank").await.unwrap();
     page.evaluate_on_new_document(
         r#"
@@ -403,7 +558,7 @@ async fn start_disabled_with_0_usable_models() {
 #[tokio::test]
 async fn the_detach_note_is_present() {
     let server = start_server("detach_note");
-    let (browser, _handle) = browser("detach_note").await;
+    let (browser, _guard) = browser("detach_note").await;
     let page = browser.new_page(server.url("")).await.unwrap();
     wait_for(
         &page,
@@ -488,7 +643,7 @@ async fn fetch_event_ids(
 #[tokio::test]
 async fn sse_reconnect_resumes_without_duplicate_events() {
     let server = start_server("sse_resume");
-    let (browser, _handle) = browser("sse_resume").await;
+    let (browser, _guard) = browser("sse_resume").await;
     let page = browser.new_page(server.url("")).await.unwrap();
     run_to_result(&page, &server).await;
 
@@ -541,7 +696,7 @@ async fn sse_reconnect_resumes_without_duplicate_events() {
 #[tokio::test]
 async fn a_non_consensus_result_shows_the_live_objection_above_the_fold() {
     let server = start_server("live_objection");
-    let (browser, _handle) = browser("live_objection").await;
+    let (browser, _guard) = browser("live_objection").await;
     let page = browser.new_page(server.url("")).await.unwrap();
     run_to_result(&page, &server).await;
 
@@ -577,7 +732,7 @@ async fn a_non_consensus_result_shows_the_live_objection_above_the_fold() {
 #[tokio::test]
 async fn the_breakdown_lists_5_penalties() {
     let server = start_server("breakdown_penalties");
-    let (browser, _handle) = browser("breakdown_penalties").await;
+    let (browser, _guard) = browser("breakdown_penalties").await;
     let page = browser.new_page(server.url("")).await.unwrap();
     run_to_result(&page, &server).await;
 
@@ -601,7 +756,7 @@ async fn the_breakdown_lists_5_penalties() {
 #[tokio::test]
 async fn override_requires_a_reason() {
     let server = start_server("override_reason");
-    let (browser, _handle) = browser("override_reason").await;
+    let (browser, _guard) = browser("override_reason").await;
     let page = browser.new_page(server.url("")).await.unwrap();
     run_to_result(&page, &server).await;
 
@@ -666,7 +821,7 @@ async fn override_requires_a_reason() {
 #[tokio::test]
 async fn history_is_empty_stated() {
     let server = start_server("history_empty");
-    let (browser, _handle) = browser("history_empty").await;
+    let (browser, _guard) = browser("history_empty").await;
     let page = browser.new_page(server.url("#/history")).await.unwrap();
     wait_for(
         &page,
@@ -686,7 +841,7 @@ async fn history_is_empty_stated() {
 #[tokio::test]
 async fn keys_screen_never_renders_a_key() {
     let server = start_server("keys_no_render");
-    let (browser, _handle) = browser("keys_no_render").await;
+    let (browser, _guard) = browser("keys_no_render").await;
     let page = browser.new_page(server.url("#/keys")).await.unwrap();
     wait_for(
         &page,
@@ -714,7 +869,7 @@ async fn keys_screen_never_renders_a_key() {
 #[tokio::test]
 async fn every_screen_is_keyboard_navigable() {
     let server = start_server("keyboard_nav");
-    let (browser, _handle) = browser("keyboard_nav").await;
+    let (browser, _guard) = browser("keyboard_nav").await;
 
     for hash in ["", "#/history", "#/keys"] {
         let page = browser.new_page(server.url(hash)).await.unwrap();
