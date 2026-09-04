@@ -14,6 +14,7 @@
 //! whether that run exists or not.
 
 mod admission;
+mod compare;
 mod handlers;
 mod page;
 
@@ -133,6 +134,9 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/api/runs/{id}/events", get(handlers::run_events))
         .route("/api/runs/{id}/accept", post(handlers::accept_run))
         .route("/api/providers", get(handlers::list_providers))
+        // Screen 6. Like `POST /api/runs` this one spends money, so it sits
+        // behind the same admission middleware as everything else below.
+        .route("/api/compare", post(compare::compare))
         .route(
             "/api/providers/{provider}/test",
             post(handlers::test_provider),

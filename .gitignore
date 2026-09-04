@@ -1,6 +1,3 @@
 /target
 **/*.rs.bk
 
-# tools/multiplex (Node.js companion tool, not part of the Cargo workspace)
-tools/multiplex/node_modules/
-tools/multiplex/.env

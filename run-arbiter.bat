@@ -13,7 +13,7 @@ cd /d "%~dp0"
 echo(
 echo  ARBITER -- the debate ^& decision engine ^(Rust^)
 echo  =============================================
-echo  Not the multi-model comparison app. For that, run run-multiplex.bat
+echo  Debates, and side-by-side model comparison, in one app.
 echo  Working directory: %CD%
 echo(
 

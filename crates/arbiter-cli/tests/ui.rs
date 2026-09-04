@@ -815,6 +815,106 @@ async fn override_requires_a_reason() {
     );
 }
 
+/// `compare_renders_one_card_per_model`: screen 6 replaces the standalone
+/// Node app that used to live in `tools/multiplex/`. With no keys configured
+/// -- the test environment's own state -- every model must still get a card
+/// saying *why* it did not answer, and the run must terminate rather than
+/// spinning forever on models that were never called.
+#[tokio::test]
+async fn compare_renders_one_card_per_model() {
+    let server = start_server("compare");
+    let (browser, _guard) = browser("compare").await;
+    let page = browser.new_page(server.url("")).await.unwrap();
+    page.evaluate("location.hash = '#/compare'").await.unwrap();
+    wait_for(
+        &page,
+        "!!document.getElementById('compare-form')",
+        "the compare form to render",
+    )
+    .await;
+
+    // An empty prompt is refused before any request goes out -- this endpoint
+    // spends money, so the page must not send a request it knows is invalid.
+    page.find_element("#compare-btn")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    wait_for(
+        &page,
+        "!!document.querySelector('#compare-error .field-error')",
+        "an empty prompt to be refused client-side",
+    )
+    .await;
+    assert_eq!(
+        page.evaluate("document.querySelectorAll('.resp-card').length")
+            .await
+            .unwrap()
+            .into_value::<u32>()
+            .unwrap(),
+        0,
+        "a refused submit must not render any answer cards"
+    );
+
+    page.find_element("#compare-prompt")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap()
+        .type_str("Which database should we use?")
+        .await
+        .unwrap();
+    page.find_element("#compare-btn")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+
+    wait_for(
+        &page,
+        "document.getElementById('compare-total').textContent.length > 0",
+        "the comparison to finish",
+    )
+    .await;
+
+    let cards: u32 = page
+        .evaluate("document.querySelectorAll('.resp-card').length")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert_eq!(
+        cards, 5,
+        "every provider this build can reach needs a card, answered or not"
+    );
+    let skipped: u32 = page
+        .evaluate("document.querySelectorAll('.resp-card.is-skipped').length")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert_eq!(cards, skipped, "with no keys, every card must be a skip");
+
+    let body = text_of(&page, "#compare-results").await;
+    assert!(
+        body.contains("no key configured"),
+        "a skipped model must say why: {body}"
+    );
+    // The spinner has to stop even though nothing was ever called.
+    assert_eq!(
+        page.evaluate("document.querySelectorAll('#compare-results .spinner').length")
+            .await
+            .unwrap()
+            .into_value::<u32>()
+            .unwrap(),
+        0,
+        "no card should still be spinning once the run is done"
+    );
+}
+
 /// `history_is_empty_stated`: a brand-new store, never having run
 /// anything, shows an explicit empty state and a way to start a run --
 /// never a bare, silent empty table.

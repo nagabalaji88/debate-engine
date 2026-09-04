@@ -9,6 +9,7 @@ mod http;
 pub mod keys;
 pub mod mock;
 pub mod openai_compatible;
+pub mod pricing;
 
 use arbiter_core::{ModelId, ProviderId};
 use arbiter_kernel::provider::{Provider, ProviderError};

@@ -2674,3 +2674,63 @@ needs a valid key, which this session does not have. The adapters' wire format
 is covered instead by `tests/http_round_trip.rs`, which serves each request
 from a local socket and asserts the auth header, URL, and body that actually
 went out.
+
+## D52 — Screen 6 (`Compare`), a published-price table, and the retirement of `tools/multiplex/`
+
+No plan section describes a Compare screen; U2–U7 name five. It exists
+because this repository briefly held two applications: Arbiter, which could
+reason but could not call a model, and `tools/multiplex/`, a Node app that
+could call five models but could not reason about the answers. P4 gave
+Arbiter the adapters, which made the second application's only remaining
+advantage — showing several answers side by side — a screen this one was
+missing rather than a reason for a second program. It is now
+`arbiter serve`'s sixth screen, and `tools/multiplex/` plus
+`run-multiplex.{bat,sh}` are deleted: one binary, one UI, one launcher.
+
+- **`POST /api/compare` deliberately breaks three of the pipeline's rules,
+  because a comparison is not a run.**
+  - *A missing key is a skip, not an error.* `panel::resolve` refuses a panel
+    it cannot run in full (D51), because §6.2 computes independence over the
+    panel that ran. Compare asserts nothing about the answers beyond "here is
+    what each one said", so a keyless provider gets a greyed card reading
+    `no key configured` and the rest proceed — which is also what an operator
+    asking "who can answer this?" means by the question.
+  - *Nothing is stored.* No `RunId`, no event chain, no artifacts. Writing a
+    comparison into the run store would put a row in `arbiter history` that
+    no `explain` could account for.
+  - *No budget ledger.* §8.3's reservation protocol exists so a run can be
+    resumed and reconciled after a crash; a single unstored call has nothing
+    to resume. `ProviderRequest` still needs a `ReservationId`, so a
+    comparison's is prefixed `compare_` and can never be mistaken for a real
+    reservation in a log the two share.
+- **Per model, not per token.** Multiplex streamed vendor deltas.
+  `Provider::call` returns one finished `ProviderResponse` (D51's reasoning),
+  so a card fills in when its model finishes. The fastest model still lands
+  first, which is the part of a side-by-side race worth watching; token-level
+  streaming would mean changing the provider seam, which nothing else wants.
+- **`arbiter-providers::pricing`** ports Multiplex's list-price table so an
+  answer can show what it cost. It is **not** wired into the budget path:
+  §8.3's ledger is authoritative about money and reconciled against a
+  vendor's usage export, and a stale constant must never be able to move a
+  reservation. A provider with no entry returns `None`, rendered as
+  "cost unknown" — a `0.0` would read as "this one was free". `money()`'s
+  three decimals were also wrong here: a real $0.00004 answer displayed as
+  `$0.000`, so sub-tenth-of-a-cent figures now show two significant digits.
+- **`SSE` over a streamed `fetch`, not `EventSource`.** `EventSource` cannot
+  issue a POST, and the prompt does not belong in a URL where a proxy's
+  access log would keep it. The frames use the same `event:`/`data:` shape
+  the run stream uses, so the page has one framing to understand rather
+  than two.
+- **Compare is the one screen that widens the container** (880px → 1400px, via
+  a `body.compare` class). At 880px only two answers fit side by side, and two
+  is not much of a comparison; every other screen reads better narrow.
+
+Verified: `POST /api/compare` driven over HTTP against the real endpoint with
+one provider keyed — `model-skipped` ×4, then `model-start`, then
+`model-error` carrying the live API's own `401 ... "API key is invalid."` and
+an elapsed time, then `run-done`. The screen itself was driven in a real
+browser with a canned stream to confirm the four-across grid, the per-card
+token/cost/latency line, the red-bordered failure card and the greyed skip.
+`compare_renders_one_card_per_model` covers the keyless path end to end in
+CI. What is *not* verified, as in D51: a successful real completion, which
+needs a valid key this environment does not have.
