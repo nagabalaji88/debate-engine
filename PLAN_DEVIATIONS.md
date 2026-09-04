@@ -2734,3 +2734,79 @@ token/cost/latency line, the red-bordered failure card and the greyed skip.
 `compare_renders_one_card_per_model` covers the keyless path end to end in
 CI. What is *not* verified, as in D51: a successful real completion, which
 needs a valid key this environment does not have.
+
+## D53 — the embedded UI rebuilt in Multiplex's design, at the user's direction
+
+D52 folded Multiplex's *function* into `arbiter serve` as a sixth screen but
+kept Arbiter's own plain styling, and made `#/new` the landing route. The user
+was explicit that this was the wrong end of the trade: *"i do not entertain
+arbiter and multiple i should only see multiplex with all functionality in the
+multiplex ui"*. So the design went the other way round — Multiplex's interface
+is now the whole application, and Arbiter's screens live inside it.
+
+- **The shell is Multiplex's**, recovered from `a543bbd:tools/multiplex/public/index.html`
+  before that file was deleted: sticky topbar with the gradient brand mark,
+  pill tabs, a coloured card per model, the response grid, stat tiles, the
+  stage stepper, and its light/dark token set. The brand reads "Multiplex"
+  because that is the application the user wants to see; `arbiter` remains the
+  binary and the CLI, which is what every doc and script already calls.
+- **Six tabs, not four.** Multiplex had Compare / Flow / Usage / Overview, and
+  the last three were mockup-driven with no backend. Here they are Compare /
+  Debate / Flow / Usage / History / Keys, and each is wired to a real endpoint.
+  Flow and Usage are the two that changed meaning: Flow draws §5's 15-stage
+  pipeline from the run's own stored events, and Usage charts the last
+  comparison's real per-model tokens, latency and cost.
+- **Compare is the landing route** (`#/compare`), not `#/new`. It is the screen
+  that works with one key and no setup; a debate needs a panel and a budget.
+  Six UI tests navigated to `""` expecting the debate form and now say `#/new`.
+- **Fonts are embedded, not linked.** Multiplex pulled Sora and IBM Plex Mono
+  from `fonts.googleapis.com` and highlight.js from a CDN. Both are dropped:
+  ARCHITECTURE §17.1 allows no CDN, `arbiter serve` binds loopback and must
+  render identically with no network at all, and a page holding provider API
+  keys should not announce itself to a third party on every load. The two
+  typefaces (SIL OFL 1.1, latin subsets) are inlined as base64 — 72KB, and the
+  syntax highlighter is simply gone.
+
+Two defects the rebuild exposed, both fixed here:
+
+- **`GET /api/runs` 500'd on a fresh install.** `history.db` resolves to the
+  store root's *parent*, a directory nothing creates until the first run, so
+  History and Usage both showed "unable to open database file" where the true
+  answer is an empty list. The handler now creates that directory. The old UI
+  hid this because History was the only screen that called the endpoint and a
+  first-time user rarely opened it before running anything.
+- **`.bar-fill` drew nothing.** The usage bars are `<span>`s, and `width` and
+  `height` do not apply to an inline box; the track escaped it only by being a
+  flex item (which blockifies), while the fill one level deeper stayed inline.
+  Both now declare `display: block`.
+
+Five more the acceptance suite caught in the rebuild, all in code written for
+it, all fixed rather than asserted around:
+
+- **`page.goto` never completes on a fragment-only change.** `run_to_result`
+  reached the debate form with `goto(url("#/new"))`, but every caller already
+  has the app loaded, so that is a same-document navigation and `goto` waits
+  for a load event that never fires. It sets `location.hash` now, the way the
+  app itself navigates. Four tests hung on this.
+- **The skip reason was shouted and clipped.** `.stage-txt` is
+  `text-transform: uppercase`, so "no key configured" rendered as
+  `NO KEY CONFIGURED` across a card header. The status word is now just
+  "skipped" and the reason moved to the card body, beside where an error
+  message already goes.
+- **`table:nth-of-type(3)`** silently matched nothing once each section moved
+  into its own card, because `nth-of-type` counts among shared siblings. The
+  penalties table carries an id now, and the test asserts the requirement
+  ("all five penalty rows render") rather than a position on the page.
+- **The detach note** had been paraphrased into something weaker; U3 names it,
+  so it is restored verbatim.
+- **The keyboard-navigation sweep** asserted the debate question field has
+  `autofocus` on the landing screen — true only while `#/new` was the front
+  door. It now covers `#/new` as well and checks whichever field each screen
+  actually opens with, which is broader than before rather than looser.
+
+Verified: all 13 UI tests pass against the rebuilt page, and every tab was
+driven in a real browser and screenshotted — Compare with five answers (including a
+failed card and a keyless one), Debate with the panel picker and a live
+estimate, Usage with per-model token/latency/cost bars, and Keys. What is not
+verified is unchanged from D51: no successful real completion from any vendor,
+which needs a valid key this environment does not have.

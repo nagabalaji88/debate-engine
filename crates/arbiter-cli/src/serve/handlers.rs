@@ -110,8 +110,23 @@ pub(crate) async fn list_runs(
     State(state): State<AppState>,
     Query(q): Query<ListRunsQuery>,
 ) -> Response {
+    // `history.db` lives beside the store root, in a directory nothing has
+    // necessarily created yet: on a fresh install, before the first run,
+    // opening it failed and both History and Usage showed
+    // "unable to open database file" where the honest answer is an empty
+    // list. Creating the directory here makes "no runs yet" the empty case
+    // it always was, rather than an error.
+    let db_path = crate::history_db_path(&state.store_root);
+    if let Some(dir) = db_path.parent()
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("creating {}: {e}", dir.display()),
+        );
+    }
     let conn = match arbiter_store::catalog::open_history_db(
-        &crate::history_db_path(&state.store_root),
+        &db_path,
         env!("CARGO_PKG_VERSION"),
         &arbiter_store::now_rfc3339(),
     ) {

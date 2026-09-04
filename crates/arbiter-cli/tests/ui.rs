@@ -241,7 +241,14 @@ async fn text_of(page: &Page, selector: &str) -> String {
 /// Runs a run end-to-end from screen 1 and returns once screen 3 (Result)
 /// has loaded -- the shared setup several tests below need.
 async fn run_to_result(page: &Page, server: &Server) {
-    page.goto(server.url("")).await.unwrap();
+    // Compare is the landing tab now, so the debate form is one hash away.
+    // Reached by setting the hash rather than `goto`: every caller already
+    // has the app loaded, and changing only the fragment is a same-document
+    // navigation, so `goto` waits for a load event that never arrives.
+    let _ = server;
+    page.evaluate("if (location.hash !== '#/new') { location.hash = '#/new'; }")
+        .await
+        .unwrap();
     wait_for(
         page,
         "!!document.getElementById('new-run-form')",
@@ -323,7 +330,7 @@ async fn all_5_panel_key_states_render() {
     .await
     .unwrap();
 
-    page.goto(server.url("")).await.unwrap();
+    page.goto(server.url("#/new")).await.unwrap();
     wait_for(
         &page,
         "document.querySelectorAll('.panel-row').length === 6",
@@ -366,7 +373,7 @@ async fn all_5_panel_key_states_render() {
 async fn the_panel_picker_chooses_who_actually_runs() {
     let server = start_server("panel_picker");
     let (browser, _guard) = browser("panel_picker").await;
-    let page = browser.new_page(server.url("")).await.unwrap();
+    let page = browser.new_page(server.url("#/new")).await.unwrap();
     wait_for(
         &page,
         "!!document.querySelector('.panel-pick')",
@@ -457,7 +464,7 @@ async fn estimate_falls_when_a_model_is_unusable() {
     let (browser, _guard) = browser("estimate_falls").await;
 
     // First, the real roster (mock usable) for a baseline.
-    let page1 = browser.new_page(server.url("")).await.unwrap();
+    let page1 = browser.new_page(server.url("#/new")).await.unwrap();
     wait_for(
         &page1,
         "!!document.getElementById('estimate')",
@@ -493,7 +500,7 @@ async fn estimate_falls_when_a_model_is_unusable() {
         )
         .await
         .unwrap();
-    page2.goto(server.url("")).await.unwrap();
+    page2.goto(server.url("#/new")).await.unwrap();
     wait_for(
         &page2,
         "document.getElementById('start-btn') && document.getElementById('start-btn').disabled",
@@ -538,7 +545,7 @@ async fn start_disabled_with_0_usable_models() {
     )
     .await
     .unwrap();
-    page.goto(server.url("")).await.unwrap();
+    page.goto(server.url("#/new")).await.unwrap();
     wait_for(
         &page,
         "!!document.getElementById('start-btn')",
@@ -559,7 +566,7 @@ async fn start_disabled_with_0_usable_models() {
 async fn the_detach_note_is_present() {
     let server = start_server("detach_note");
     let (browser, _guard) = browser("detach_note").await;
-    let page = browser.new_page(server.url("")).await.unwrap();
+    let page = browser.new_page(server.url("#/new")).await.unwrap();
     wait_for(
         &page,
         "!!document.getElementById('new-run-form')",
@@ -737,7 +744,7 @@ async fn the_breakdown_lists_5_penalties() {
     run_to_result(&page, &server).await;
 
     let penalty_rows: u32 = page
-        .evaluate("document.querySelectorAll('table:nth-of-type(3) tbody tr').length")
+        .evaluate("document.querySelectorAll('#penalties-table tbody tr').length")
         .await
         .unwrap()
         .into_value()
@@ -925,7 +932,7 @@ async fn history_is_empty_stated() {
     let page = browser.new_page(server.url("#/history")).await.unwrap();
     wait_for(
         &page,
-        "document.body.innerText.indexOf('No runs yet') !== -1",
+        "document.body.innerText.indexOf('No debates yet') !== -1",
         "the empty-history state",
     )
     .await;
@@ -971,7 +978,7 @@ async fn every_screen_is_keyboard_navigable() {
     let server = start_server("keyboard_nav");
     let (browser, _guard) = browser("keyboard_nav").await;
 
-    for hash in ["", "#/history", "#/keys"] {
+    for hash in ["", "#/new", "#/history", "#/keys"] {
         let page = browser.new_page(server.url(hash)).await.unwrap();
         wait_for(
             &page,
@@ -1014,20 +1021,29 @@ async fn every_screen_is_keyboard_navigable() {
             "screen '{hash}' must expose at least one real, keyboard-focusable control"
         );
 
-        // Screen 1's own question field declares `autofocus` -- checked as
-        // a static attribute, not as headless Chromium's actual runtime
-        // focus state, which (unlike a real browser window) does not
-        // reliably honor `autofocus` on an inactive/offscreen target.
-        if hash.is_empty() {
+        // Whichever screen you land on, its own primary text field declares
+        // `autofocus` -- Compare's prompt on the landing tab, the debate
+        // question on `#/new`. Checked as a static attribute, not as headless
+        // Chromium's actual runtime focus state, which (unlike a real browser
+        // window) does not reliably honor `autofocus` on an inactive or
+        // offscreen target.
+        let autofocus_field = match hash {
+            "" => Some("compare-prompt"),
+            "#/new" => Some("question"),
+            _ => None,
+        };
+        if let Some(field) = autofocus_field {
             let has_autofocus: bool = page
-                .evaluate("document.getElementById('question') && document.getElementById('question').hasAttribute('autofocus')")
+                .evaluate(format!(
+                    "!!document.getElementById('{field}') && document.getElementById('{field}').hasAttribute('autofocus')"
+                ))
                 .await
                 .unwrap()
                 .into_value()
                 .unwrap();
             assert!(
                 has_autofocus,
-                "the question textarea must declare autofocus on screen 1"
+                "#{field} must declare autofocus on screen '{hash}'"
             );
         }
     }
