@@ -11,8 +11,9 @@ rem ============================================================
 
 cd /d "%~dp0"
 echo(
-echo  Arbiter setup
-echo  =============
+echo  ARBITER -- the debate ^& decision engine ^(Rust^)
+echo  =============================================
+echo  Not the multi-model comparison app. For that, run run-multiplex.bat
 echo  Working directory: %CD%
 echo(
 
@@ -163,7 +164,7 @@ target\release\arbiter.exe serve --open
 goto :end
 
 rem ---- WSL delegation --------------------------------------------
-rem install_and_run.sh does the same three steps (Rust check, release
+rem run-arbiter.sh does the same three steps (Rust check, release
 rem build, launch) against a real Linux kernel. Only used as a fallback
 rem now -- the native Windows build above is expected to work.
 :run_via_wsl
@@ -173,14 +174,14 @@ set "WSLDIR="
 for /f "usebackq delims=" %%W in (`wsl wslpath -a "%CD%"`) do set "WSLDIR=%%W"
 if not defined WSLDIR (
     echo [ERROR] Could not resolve a WSL path for this folder. Open a WSL
-    echo         terminal yourself and run: bash install_and_run.sh
+    echo         terminal yourself and run: bash run-arbiter.sh
     goto :fail
 )
-if not exist "install_and_run.sh" (
-    echo [ERROR] install_and_run.sh is missing from this folder.
+if not exist "run-arbiter.sh" (
+    echo [ERROR] run-arbiter.sh is missing from this folder.
     goto :fail
 )
-wsl bash "%WSLDIR%/install_and_run.sh"
+wsl bash "%WSLDIR%/run-arbiter.sh"
 echo(
 echo Note: --open likely couldn't find a browser inside WSL. If nothing
 echo opened, copy the "Open: http://127.0.0.1:<port>/?token=..." line

@@ -6,15 +6,16 @@
 # arbiter_store::lease has a real liveness check for each
 # (crates/arbiter-store/src/lease.rs) -- so this script is not the only
 # way to run this project anymore, just the Linux-native one.
-# install_and_run.bat falls back to this script under WSL only if a
+# run-arbiter.bat falls back to this script under WSL only if a
 # native Windows build has trouble.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 echo
-echo " Arbiter setup"
-echo " ============="
+echo " ARBITER -- the debate & decision engine (Rust)"
+echo " ============================================="
+echo " Not the multi-model comparison app. For that, run ./run-multiplex.sh"
 echo " Working directory: $(pwd)"
 echo
 

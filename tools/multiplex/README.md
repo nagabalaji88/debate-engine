@@ -46,9 +46,17 @@ npm start
 which opens **http://localhost:8787** in your default browser
 automatically (set `NO_OPEN=1` to skip that).
 
-Or use the launcher for your OS — `./install_and_run.sh` (macOS/Linux)
-or double-click `install_and_run.bat` (Windows) — which installs
-dependencies and starts the server, browser included, for you.
+Or use a launcher, which installs dependencies and starts the server,
+browser included:
+
+- **From the repo root** (easiest): `./run-multiplex.sh` (macOS/Linux)
+  or double-click `run-multiplex.bat` (Windows).
+- **From this folder**: `./install_and_run.sh` or `install_and_run.bat`.
+
+Note the repo root also has `run-arbiter.*` — that starts the Arbiter
+debate engine, a completely different app. If you see a page titled
+"New run" asking about panels, depth and budget caps, you launched
+Arbiter, not Multiplex.
 
 ## How it works
 
