@@ -43,11 +43,12 @@ Then:
 npm start
 ```
 
-and open **http://localhost:8787**.
+which opens **http://localhost:8787** in your default browser
+automatically (set `NO_OPEN=1` to skip that).
 
 Or use the launcher for your OS — `./install_and_run.sh` (macOS/Linux)
 or double-click `install_and_run.bat` (Windows) — which installs
-dependencies and starts the server for you.
+dependencies and starts the server, browser included, for you.
 
 ## How it works
 

@@ -2,6 +2,7 @@
 require("dotenv").config();
 const express = require("express");
 const path = require("path");
+const { exec } = require("child_process");
 
 const PROVIDERS = [
   require("./providers/claude"),
@@ -102,11 +103,25 @@ app.post("/api/run", async (req, res) => {
   });
 });
 
+// No browser-launching package is a dependency here (Arbiter's own
+// `arbiter serve --open` makes the same call, for the same reason: a
+// single best-effort shell-out doesn't earn a new dependency). A
+// failure here is silently ignored -- the URL is already printed
+// either way, and `NO_OPEN=1` skips this if you'd rather it stayed
+// closed (e.g. always launching from a script).
+function openBrowser(url) {
+  const cmd =
+    process.platform === "darwin" ? `open "${url}"` : process.platform === "win32" ? `start "" "${url}"` : `xdg-open "${url}"`;
+  exec(cmd, () => {});
+}
+
 const PORT = process.env.PORT || 8787;
 app.listen(PORT, () => {
-  console.log(`Multiplex running at http://localhost:${PORT}`);
+  const url = `http://localhost:${PORT}`;
+  console.log(`Multiplex running at ${url}`);
   const missing = PROVIDERS.filter((p) => !p.hasKey()).map((p) => p.name);
   if (missing.length) {
     console.log(`No key configured for: ${missing.join(", ")} (they'll show as unavailable)`);
   }
+  if (!process.env.NO_OPEN) openBrowser(url);
 });
