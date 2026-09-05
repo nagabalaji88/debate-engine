@@ -19,6 +19,7 @@ use arbiter_providers::keys::{
     CredentialSource, EnvCredentialSource, KeychainCredentialSource, SecretString,
     VerificationCache, VerifyResult,
 };
+use arbiter_providers::probe::KeyProbe;
 use arbiter_providers::{build_provider, default_model_for};
 
 /// The shortest prompt that still forces a real completion. Deliberately not
@@ -69,6 +70,10 @@ pub(crate) enum Verification {
     Blocked {
         status: u16,
         message: String,
+        /// How many models the key listed before the completion was refused,
+        /// when the free probe ran. Present means "the vendor accepted this
+        /// key moments ago" — evidence, not inference, that the key is fine.
+        authenticated_models: Option<usize>,
     },
     /// No response at all: DNS, TLS, a proxy, a timeout.
     Unreachable {
@@ -102,7 +107,28 @@ impl Verification {
             Verification::Rejected { .. } => {
                 format!("{provider} refused this key. Replace it.")
             }
-            Verification::Blocked { status, .. } => {
+            Verification::Blocked {
+                status,
+                authenticated_models,
+                ..
+            } => {
+                // When the free listing call ran, say so. "Your key works" is
+                // an assertion; "it just listed 47 models" is evidence, and it
+                // is what reconciles this screen with any other tool that
+                // checks a key by listing alone.
+                let proof = match authenticated_models {
+                    Some(n) if *n > 0 => {
+                        format!(
+                            " The key authenticated against {provider}'s model list ({n} models) moments ago, so it is valid."
+                        )
+                    }
+                    Some(_) => {
+                        format!(
+                            " The key authenticated against {provider}'s model list moments ago, so it is valid."
+                        )
+                    }
+                    None => String::new(),
+                };
                 let because = match status {
                     // The two the vendors actually use for "you are out of
                     // credit": Anthropic answers 400 with a billing message,
@@ -113,7 +139,7 @@ impl Verification {
                     500..=599 => "the provider is having trouble at their end, not yours",
                     _ => "check that account's billing, plan or limits",
                 };
-                format!("Your key works. {provider} refused the request — {because}.")
+                format!("Your key works. {provider} refused the request — {because}.{proof}")
             }
             Verification::Unreachable { .. } => {
                 format!(
@@ -192,6 +218,41 @@ pub(crate) async fn verify(provider: &ProviderId) -> Verification {
         };
     }
 
+    // Ask the free question first: does this key authenticate at all?
+    //
+    // This is the difference between two tools disagreeing about the same key.
+    // A model-listing call needs a valid key and nothing else, so an account
+    // with an exhausted balance passes it and fails a completion — one tool
+    // reports the key as working, another as failing, and both are right about
+    // the question they asked. Asking both, in order, is what lets this say
+    // which of the two is true. It also means a genuinely bad key is caught
+    // without spending a paid request.
+    let probe = arbiter_providers::probe::probe_key(provider, &secret).await;
+    let authenticated_models = match &probe {
+        Some(KeyProbe::Rejected { status, message }) => {
+            cache().put(
+                provider.as_str(),
+                model.as_str(),
+                &fingerprint,
+                VerifyResult::Rejected { status: *status },
+                now_unix(),
+            );
+            return Verification::Rejected {
+                status: *status,
+                message: message.clone(),
+            };
+        }
+        Some(KeyProbe::Unreachable { message }) => {
+            return Verification::Unreachable {
+                message: message.clone(),
+            };
+        }
+        Some(KeyProbe::Authenticated { models }) => Some(*models),
+        // Inconclusive, or a provider with no listing endpoint: fall through
+        // to the completion, which is the question that actually matters.
+        _ => None,
+    };
+
     let adapter = match build_provider(provider, secret) {
         Ok(a) => a,
         Err(e) => {
@@ -244,7 +305,11 @@ pub(crate) async fn verify(provider: &ProviderId) -> Verification {
         // failed. Never cached — topping up a balance or waiting out a rate
         // limit changes the answer immediately, and a 24-hour cache would go
         // on reporting a problem the operator had already fixed.
-        Err(ProviderError::Http { status, message }) => Verification::Blocked { status, message },
+        Err(ProviderError::Http { status, message }) => Verification::Blocked {
+            status,
+            message,
+            authenticated_models,
+        },
         // Never reached the vendor at all: DNS, TLS, a proxy, a timeout. Not
         // the key's fault, and never cached.
         Err(e) => Verification::Unreachable {
@@ -292,6 +357,7 @@ mod tests {
         let blocked = Verification::Blocked {
             status: 400,
             message: "anthropic HTTP 400 Bad Request: Your credit balance is too low".to_string(),
+            authenticated_models: Some(12),
         };
         assert_eq!(blocked.state(), "blocked");
         assert_eq!(blocked.status(), Some(400));
@@ -322,6 +388,7 @@ mod tests {
             let headline = Verification::Blocked {
                 status,
                 message: String::new(),
+                authenticated_models: None,
             }
             .headline("anthropic");
             assert!(
@@ -343,7 +410,8 @@ mod tests {
             assert_eq!(
                 Verification::Blocked {
                     status,
-                    message: String::new()
+                    message: String::new(),
+                    authenticated_models: None,
                 }
                 .state(),
                 "blocked",

@@ -2961,3 +2961,35 @@ Verified: `ARBITER_ANTHROPIC_API_KEY=` now reports `missing` where it reported
 resolves to the real key rather than the blank one. Six new tests cover blank
 and whitespace-only values, the shadowing case, whitespace trimming, the
 per-status headlines, and that every runnable provider has a console URL.
+
+## D56 — verification asks the free question first
+
+A user's Anthropic key worked in `master-prompt-generator` and was reported
+`blocked` here, and both tools were right. MPG checks a key with
+`GET /v1/models`; this checked it with a completion. A listing call needs a
+valid key and nothing else, so an account with an exhausted balance passes it
+and fails the completion — one tool says the key works, the other says it does
+not, and an operator holding both has no way to tell which question each
+answered.
+
+`probe::probe_key` now asks the listing question first, for every provider
+(endpoints taken from MPG's own `model_discovery`). Three consequences:
+
+- **A bad key costs nothing to find.** 401 on the listing call returns
+  immediately; the paid completion is never made. D54 chose a completion over a
+  models-list on the grounds that listing "proves less" — true, and the answer
+  is to do both in order rather than to pick one.
+- **A blocked account can prove its key is fine.** The headline now cites the
+  evidence — "The key authenticated against anthropic's model list (47 models)
+  moments ago, so it is valid" — instead of asserting it, which is what
+  reconciles this screen with any tool that checks by listing alone.
+- **It degrades correctly.** A provider with no known listing endpoint, or a
+  listing call that fails for some non-auth reason, falls through to the
+  completion — the question that actually matters. Nothing depends on the
+  probe succeeding.
+
+Verified: a deliberately invalid Anthropic key is now reported `rejected` by
+the listing call alone, with the vendor's own "API key is invalid." and no
+completion spent. The `blocked`-with-proof path cannot be exercised here — it
+needs a valid key on an account without credit, which is precisely the state
+this session has no access to.

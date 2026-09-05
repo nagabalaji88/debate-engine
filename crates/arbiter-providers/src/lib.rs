@@ -10,6 +10,7 @@ pub mod keys;
 pub mod mock;
 pub mod openai_compatible;
 pub mod pricing;
+pub mod probe;
 
 use arbiter_core::{ModelId, ProviderId};
 use arbiter_kernel::provider::{Provider, ProviderError};
