@@ -214,7 +214,24 @@ enum KeysAction {
 #[derive(Subcommand, Debug)]
 enum ProvidersAction {
     List,
-    Test { provider: Option<String> },
+    Test {
+        provider: Option<String>,
+    },
+    /// What one key can actually run, read live from the provider's own
+    /// catalogue. Free, and it spends no completion.
+    Models {
+        provider: String,
+        /// Only models the vendor prices at zero whose weights are published.
+        #[arg(long)]
+        free: bool,
+        /// Print those as a ready-to-paste `--panel` argument instead of a
+        /// list, one model per family.
+        #[arg(long)]
+        panel: bool,
+        /// How many entries `--panel` prints.
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+    },
 }
 
 #[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
@@ -367,6 +384,12 @@ async fn main() -> anyhow::Result<()> {
             ProvidersAction::Test { provider } => {
                 maintenance::providers_test_command(provider).await
             }
+            ProvidersAction::Models {
+                provider,
+                free,
+                panel,
+                limit,
+            } => maintenance::providers_models_command(provider, free, panel, limit).await,
         },
         Command::Serve {
             bind,

@@ -390,10 +390,10 @@ async fn a_panel_can_hold_five_models_behind_fewer_keys() {
           window.fetch = function (url, opts) {
             const u = String(url);
             if (u.indexOf('/api/providers') !== -1 && (!opts || !opts.method || opts.method === 'GET')) {
-              const row = function (id) { return { id: id, state: 'present', source: 'keychain', fingerprint: 'abcd', usable: true, models: 1 }; };
+              const row = function (id, dflt) { return { id: id, state: 'present', source: 'keychain', fingerprint: 'abcd', usable: true, models: 1, default_model: dflt }; };
               const table = function (n) { const out = []; for (let i = 0; i <= n; i++) out.push({ cost: i * 0.1, calls: i * 10, wall_clock_secs: 300, model_count: i }); return out; };
               return Promise.resolve(new Response(JSON.stringify({
-                providers: [row('openrouter'), row('groq')],
+                providers: [row('openrouter', 'deepseek/deepseek-chat'), row('groq', 'llama-3.3-70b-versatile')],
                 estimates: {
                   standard: { cost: 0.2, calls: 20, wall_clock_secs: 300, model_count: 2 },
                   deep: { cost: 0.4, calls: 40, wall_clock_secs: 300, model_count: 2 },
@@ -494,14 +494,165 @@ async fn a_panel_can_hold_five_models_behind_fewer_keys() {
     let panel = sent["panel"].as_str().unwrap();
     assert_eq!(
         panel,
-        "openrouter,\
+        "openrouter:deepseek/deepseek-chat,\
          openrouter:meta-llama/llama-3.3-70b-instruct,\
          openrouter:qwen/qwen-2.5-72b-instruct,\
          openrouter:deepseek/deepseek-chat-v3-0324:free,\
-         groq",
+         groq:llama-3.3-70b-versatile",
         "the spec must name five models across the two keys"
     );
     assert_eq!(panel.split(',').count(), 5, "{panel}");
+}
+
+/// `free_open_weight_models_can_be_picked_from_the_live_catalogue`: an
+/// operator who wants five free open-weight models should not have to know an
+/// aggregator's model ids by heart -- that catalogue turns over weekly, and a
+/// mistyped id surfaces as a 404 from the vendor part-way through a paid run.
+///
+/// So the ids come from the vendor, read live with the operator's own key.
+/// What this pins down is what the screen does with them: it replaces the
+/// provider's *billed* default line rather than adding to it (otherwise a
+/// panel the operator just asked to make free still carries a paid model),
+/// fills only up to the target, and keeps saying that licences differ --
+/// "open weights" is a family label this build infers from the id, not a
+/// licence audit.
+#[tokio::test]
+async fn free_open_weight_models_can_be_picked_from_the_live_catalogue() {
+    let server = start_server("panel_free_models");
+    let (browser, _guard) = browser("panel_free_models").await;
+    let page = browser.new_page("about:blank").await.unwrap();
+
+    page.evaluate_on_new_document(
+        r#"
+        (function () {
+          window.__catalogueCalls = 0;
+          const real = window.fetch.bind(window);
+          window.fetch = function (url, opts) {
+            const u = String(url);
+            if (u.indexOf('/api/providers/openrouter/models') !== -1) {
+              window.__catalogueCalls += 1;
+              return Promise.resolve(new Response(JSON.stringify({
+                provider: 'openrouter',
+                models: [
+                  { id: 'deepseek/deepseek-chat', free: false, open_weights: true, context_length: 64000 },
+                  { id: 'meta-llama/llama-3.3-70b-instruct:free', free: true, open_weights: true, context_length: 65536 },
+                  { id: 'qwen/qwen-2.5-72b-instruct:free', free: true, open_weights: true, context_length: 32768 },
+                  { id: 'mistralai/mistral-small-3.2-24b-instruct:free', free: true, open_weights: true, context_length: 96000 },
+                ],
+                suggested: ['meta-llama/llama-3.3-70b-instruct:free',
+                            'qwen/qwen-2.5-72b-instruct:free',
+                            'mistralai/mistral-small-3.2-24b-instruct:free'],
+                suggested_target: 5,
+              }), { status: 200, headers: { 'content-type': 'application/json' } }));
+            }
+            if (u.indexOf('/api/providers') !== -1 && (!opts || !opts.method || opts.method === 'GET')) {
+              return Promise.resolve(new Response(JSON.stringify({
+                providers: [
+                  { id: 'openrouter', state: 'present', source: 'keychain', fingerprint: 'abcd', usable: true, models: 1, default_model: 'deepseek/deepseek-chat' },
+                  { id: 'groq', state: 'present', source: 'keychain', fingerprint: 'ef01', usable: true, models: 1, default_model: 'llama-3.3-70b-versatile' },
+                ],
+                estimates: {
+                  standard: { cost: 0.2, calls: 20, wall_clock_secs: 300, model_count: 2 },
+                  deep: { cost: 0.4, calls: 40, wall_clock_secs: 300, model_count: 2 },
+                },
+              }), { status: 200, headers: { 'content-type': 'application/json' } }));
+            }
+            return real(url, opts);
+          };
+        })();
+        "#,
+    )
+    .await
+    .unwrap();
+
+    page.goto(server.url("#/new")).await.unwrap();
+    wait_for(
+        &page,
+        "!!document.querySelector('[data-free-models=\"openrouter\"]')",
+        "the panel to render",
+    )
+    .await;
+
+    // Each provider starts on its default model, and that default is visible
+    // and editable rather than an invisible fallback.
+    let start: String = page
+        .evaluate(
+            "Array.prototype.map.call(document.querySelectorAll('[data-models-for=\"openrouter\"] input[type=text]'), function (i) { return i.value; }).join(',')",
+        )
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert_eq!(
+        start, "deepseek/deepseek-chat",
+        "the billed default is shown"
+    );
+
+    page.find_element("[data-free-models=\"openrouter\"]")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    wait_for(
+        &page,
+        "document.querySelectorAll('[data-models-for=\"openrouter\"] input[type=text]').length === 3",
+        "the free models to fill in",
+    )
+    .await;
+
+    let filled: String = page
+        .evaluate(
+            "Array.prototype.map.call(document.querySelectorAll('[data-models-for=\"openrouter\"] input[type=text]'), function (i) { return i.value; }).join(',')",
+        )
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert_eq!(
+        filled,
+        "meta-llama/llama-3.3-70b-instruct:free,\
+         qwen/qwen-2.5-72b-instruct:free,\
+         mistralai/mistral-small-3.2-24b-instruct:free",
+        "the billed default must be replaced, not kept alongside the free ones"
+    );
+    assert!(
+        !filled.contains("deepseek/deepseek-chat,"),
+        "a panel asked to be free must not still carry the paid default: {filled}"
+    );
+
+    // Four models now: three free ones plus groq's own default.
+    wait_for(
+        &page,
+        "document.getElementById('panel-count').textContent.indexOf('4 models') !== -1",
+        "the count to follow the fill",
+    )
+    .await;
+
+    // "Open weights" is a family label inferred from the id, so the screen
+    // says licences differ rather than letting the button imply it checked.
+    let note = text_of(&page, "[data-note-for=\"openrouter\"]").await;
+    assert!(
+        note.contains("licences differ"),
+        "the note must not let this read as a licence audit: {note}"
+    );
+
+    // The catalogue is fetched once and reused: this screen must not re-ask a
+    // vendor for a list it already holds.
+    page.find_element("[data-free-models=\"openrouter\"]")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    wait_for(&page, "window.__catalogueCalls >= 1", "the catalogue call").await;
+    let calls: u32 = page
+        .evaluate("window.__catalogueCalls")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert_eq!(calls, 1, "the catalogue must be cached per provider");
 }
 
 /// `the_panel_picker_chooses_who_actually_runs`: before P4 the panel

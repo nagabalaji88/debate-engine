@@ -483,6 +483,9 @@ pub(crate) async fn list_providers() -> Response {
                     // ticking its box adds 3 models, not 1. Screen 1 sums this
                     // to index the estimate table.
                     "models": models,
+                    // Its roster is fixed and synthetic, so there is no one
+                    // model to name and nothing to swap it for.
+                    "default_model": null,
                 });
             }
             let mut resolved = None;
@@ -506,6 +509,14 @@ pub(crate) async fn list_providers() -> Response {
                         // key works — that is what `providers test` is for.
                         "usable": true,
                         "models": models,
+                        // What `--panel <provider>` with no colon resolves to.
+                        // Sent so the panel can show it as an editable line
+                        // rather than an invisible default: a bare provider
+                        // entry is a real model with a real price, and an
+                        // operator building an all-free panel has to be able
+                        // to see it and replace it.
+                        "default_model": arbiter_providers::default_model_for(&provider)
+                            .map(|m| m.as_str().to_string()),
                     })
                 }
                 None => serde_json::json!({
@@ -515,6 +526,8 @@ pub(crate) async fn list_providers() -> Response {
                     "fingerprint": null,
                     "usable": false,
                     "models": models,
+                    "default_model": arbiter_providers::default_model_for(&provider)
+                        .map(|m| m.as_str().to_string()),
                     "console_url": arbiter_providers::console_url_for(&provider),
                 }),
             }
@@ -650,6 +663,83 @@ pub(crate) async fn test_provider(Path(provider): Path<String>) -> Response {
         "status": outcome.status(),
     }))
     .into_response()
+}
+
+/// How many models the Debate screen's one-click picker aims for. Five is the
+/// operator's own figure, and it is a reasonable one: `positions.generate`
+/// mints one position per member, and the disputes, challenges and rebuttals
+/// that follow are drawn from disagreements *between* positions, so a panel
+/// of two produces one pairing to argue over where a panel of five produces
+/// ten. This is the picker's target, not a limit — `--panel` takes any list.
+const SUGGESTED_PANEL_MODELS: usize = 5;
+
+/// `GET /api/providers/:p/models` — what this key can actually run.
+///
+/// The panel's extra-model rows used to be a bare text box: the operator had
+/// to know an aggregator's model ids by heart, and a typo surfaced as a 404
+/// from the vendor part-way through a paid run. This is where the list comes
+/// from instead — the vendor's own, read live with the operator's own key,
+/// because an aggregator's catalogue turns over faster than any list written
+/// into this binary could keep up with.
+///
+/// `free` is the vendor's published price; `open_weights` is a family label
+/// this build infers from the id and not a licence audit (see
+/// `arbiter_providers::catalogue`). `suggested` is the two of them together:
+/// free, open-weight, and one per family, which is what a panel of five on a
+/// single key should look like.
+pub(crate) async fn list_provider_models(Path(provider): Path<String>) -> Response {
+    let provider = arbiter_core::ProviderId::new(provider.trim());
+    let (env, keychain) = crate::maintenance::credential_sources();
+    let sources: [&dyn CredentialSource; 2] = [&env, &keychain];
+    let Some((secret, _source)) = sources.iter().find_map(|s| s.resolve(&provider)) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("no key configured for `{provider}` — add one on the Keys screen"),
+            })),
+        )
+            .into_response();
+    };
+
+    match arbiter_providers::catalogue::list_models(&provider, &secret).await {
+        Ok(models) => {
+            let suggested = arbiter_providers::catalogue::free_open_weight_panel(
+                &models,
+                SUGGESTED_PANEL_MODELS,
+            );
+            let rows: Vec<serde_json::Value> = models
+                .iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "id": m.id,
+                        "name": m.name,
+                        // `null`, not false: "this listing quoted no price" is
+                        // not "this model is billed", and a screen that
+                        // renders the two the same way is guessing for the
+                        // reader.
+                        "free": m.free,
+                        "open_weights": m.open_weights,
+                        "context_length": m.context_length,
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({
+                "provider": provider.as_str(),
+                "models": rows,
+                "suggested": suggested,
+                "suggested_target": SUGGESTED_PANEL_MODELS,
+            }))
+            .into_response()
+        }
+        // 502, not 500: this build reached the vendor and the vendor is what
+        // said no. The message is the vendor's own sentence, so an expired key
+        // reads as an expired key rather than as "something went wrong".
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]

@@ -141,6 +141,13 @@ pub(crate) fn router(state: AppState) -> Router {
             "/api/providers/{provider}/test",
             post(handlers::test_provider),
         )
+        // Free to call and free to answer: a model list costs nothing at any
+        // vendor, which is the same property that makes it the first half of
+        // key verification.
+        .route(
+            "/api/providers/{provider}/models",
+            get(handlers::list_provider_models),
+        )
         .route(
             "/api/providers/{provider}/key",
             post(handlers::set_provider_key),

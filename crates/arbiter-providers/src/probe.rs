@@ -47,14 +47,23 @@ pub enum KeyProbe {
 /// Where each provider lists its models, and how it wants to be authenticated.
 /// `None` for a provider with no listing endpoint this build knows — the
 /// caller then falls back to the completion alone rather than guessing a URL.
-fn listing_request(
+/// `brief` asks for the smallest answer that still proves the key works --
+/// key verification wants one row, not a catalogue. [`crate::catalogue`]
+/// passes `false` and reads the whole list from the same URLs, so the two
+/// callers can never end up pointed at different endpoints.
+pub(crate) fn listing_request(
     client: &reqwest::Client,
     provider: &ProviderId,
     key: &SecretString,
+    brief: bool,
 ) -> Option<reqwest::RequestBuilder> {
     Some(match provider.as_str() {
         "anthropic" => client
-            .get("https://api.anthropic.com/v1/models?limit=1")
+            .get(if brief {
+                "https://api.anthropic.com/v1/models?limit=1"
+            } else {
+                "https://api.anthropic.com/v1/models?limit=1000"
+            })
             .header("x-api-key", key.expose())
             .header("anthropic-version", "2023-06-01"),
         "openai" => client
@@ -75,7 +84,11 @@ fn listing_request(
         // Gemini takes the key in a header, never the query string, for the
         // same reason the adapter does: a URL lands in logs.
         "gemini" => client
-            .get("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1")
+            .get(if brief {
+                "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1"
+            } else {
+                "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
+            })
             .header("x-goog-api-key", key.expose()),
         _ => return None,
     })
@@ -103,7 +116,7 @@ pub async fn probe_key(provider: &ProviderId, key: &SecretString) -> Option<KeyP
         .timeout(Duration::from_secs(PROBE_TIMEOUT_SECS))
         .build()
         .ok()?;
-    let request = listing_request(&client, provider, key)?;
+    let request = listing_request(&client, provider, key, true)?;
 
     let response = match request.send().await {
         Ok(r) => r,
@@ -145,7 +158,7 @@ mod tests {
         let key = SecretString::new("k");
         for id in crate::REAL_PROVIDER_IDS {
             assert!(
-                listing_request(&client, &ProviderId::new(id), &key).is_some(),
+                listing_request(&client, &ProviderId::new(id), &key, true).is_some(),
                 "{id} has no free way to check its key, so a bad one would cost a paid request"
             );
         }
@@ -155,7 +168,13 @@ mod tests {
     fn mock_has_no_listing_endpoint_and_is_never_probed() {
         let client = reqwest::Client::new();
         assert!(
-            listing_request(&client, &ProviderId::new("mock"), &SecretString::new("k")).is_none()
+            listing_request(
+                &client,
+                &ProviderId::new("mock"),
+                &SecretString::new("k"),
+                true
+            )
+            .is_none()
         );
     }
 

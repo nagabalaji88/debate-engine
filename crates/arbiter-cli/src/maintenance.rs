@@ -476,6 +476,110 @@ pub fn providers_list_command() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `arbiter providers models <provider>` — what this key can actually run.
+///
+/// The same live catalogue the Debate screen reads, for operators who never
+/// open a browser. `--free` narrows it to models the vendor itself prices at
+/// zero *and* whose weights are published, and `--panel` prints those as a
+/// ready-to-paste `--panel` argument rather than making anyone retype a dozen
+/// slash-separated ids by hand.
+///
+/// Free-ness is the vendor's own published price. "Open weights" is a family
+/// label inferred from the model id, not a licence audit -- Llama's community
+/// licence and Gemma's terms both carry conditions -- so the footer says to
+/// read the vendor's licence rather than letting this flag stand in for it.
+pub async fn providers_models_command(
+    provider: String,
+    free_only: bool,
+    as_panel: bool,
+    limit: usize,
+) -> anyhow::Result<()> {
+    let provider = ProviderId::new(provider.trim());
+    let (env, keychain) = credential_sources();
+    let sources: [&dyn CredentialSource; 2] = [&env, &keychain];
+    let (secret, _source) = sources
+        .iter()
+        .find_map(|s| s.resolve(&provider))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no API key for `{provider}`. Set ARBITER_{}_API_KEY (or that provider's own \
+                 variable), or run `arbiter keys set {provider}`.",
+                provider.as_str().to_uppercase()
+            )
+        })?;
+
+    let models = arbiter_providers::catalogue::list_models(&provider, &secret)
+        .await
+        .map_err(|e| anyhow::anyhow!("{provider} would not list its models: {e}"))?;
+
+    if as_panel {
+        let picked = arbiter_providers::catalogue::free_open_weight_panel(&models, limit);
+        if picked.is_empty() {
+            anyhow::bail!(
+                "{provider} lists no free open-weight models on this key — \
+                 `arbiter providers models {provider}` shows what it does list"
+            );
+        }
+        // One line, straight onto a command line. Each entry is fully
+        // qualified, so it can be pasted next to entries from another
+        // provider without ambiguity about which key serves what.
+        println!(
+            "{}",
+            picked
+                .iter()
+                .map(|id| format!("{}:{id}", provider.as_str()))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        return Ok(());
+    }
+
+    let shown: Vec<&arbiter_providers::catalogue::ModelListing> = models
+        .iter()
+        .filter(|m| !free_only || (m.open_weights && m.free == Some(true)))
+        .collect();
+
+    if shown.is_empty() {
+        println!(
+            "{} lists {} models, none of them free and open-weight.",
+            provider.as_str(),
+            models.len()
+        );
+        return Ok(());
+    }
+
+    for model in &shown {
+        let price = match model.free {
+            Some(true) => "free",
+            Some(false) => "billed",
+            // The listing quoted no price. Not "free", and not "billed".
+            None => "price not listed",
+        };
+        let weights = if model.open_weights {
+            "open weights"
+        } else {
+            "closed weights"
+        };
+        println!("{}", model.id);
+        match model.context_length {
+            Some(n) => println!("  {price} · {weights} · {n} token context"),
+            None => println!("  {price} · {weights}"),
+        }
+    }
+    println!();
+    println!(
+        "{} of {} models shown. `--panel` prints the free open-weight ones as a \
+         --panel argument.",
+        shown.len(),
+        models.len()
+    );
+    println!(
+        "\"Open weights\" is read from the model's name, not its licence: Llama, Gemma and \
+         others carry conditions. Check the vendor's terms before relying on one."
+    );
+    Ok(())
+}
+
 /// `arbiter providers test` is `keys test` under the roster's name -- the same
 /// one minimal request, reported the same way. Kept as its own command because
 /// the plan names both.

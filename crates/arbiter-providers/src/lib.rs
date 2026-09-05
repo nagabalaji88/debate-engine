@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod anthropic;
+pub mod catalogue;
 pub mod gemini;
 mod http;
 pub mod keys;

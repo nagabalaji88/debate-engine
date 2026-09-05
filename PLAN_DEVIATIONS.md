@@ -3092,3 +3092,56 @@ lied:
 
 The judge seat is unchanged: it rides the first entry in the panel, so listing
 the provider you want judging first still decides it.
+
+## D59 — Model ids come from the vendor, not from this binary
+
+D58 made a panel able to hold five models. It left the operator typing the ids
+from memory, which is the wrong place to put that knowledge: an aggregator's
+catalogue turns over weekly, and a mistyped id does not fail at submit — it
+fails as a 404 from the vendor part-way through a paid run, which is the most
+expensive place to discover a typo.
+
+So `arbiter_providers::catalogue` reads the list live, through the same
+model-listing endpoints `probe` already uses for key verification (`probe`
+asks for one row, the catalogue for all of them; one set of URLs, so the two
+can never point at different endpoints). `GET /api/providers/:p/models` and
+`arbiter providers models <p>` are the two ways to see it, and neither spends
+a completion — listing is free at every vendor, which is the same property
+that made it the right first question for key verification.
+
+Two properties come back, and they are **not the same kind of claim**:
+
+- `free` is the vendor's own published price. OpenRouter quotes
+  `pricing.prompt` and `pricing.completion` per model; both zero means free
+  *by the vendor's statement*. A listing that quotes no price reports `None`,
+  which renders as blank — never as free. A model whose input is free and
+  whose output is billed is `false`, not `true`.
+- `open_weights` is inferred from the model's name and is a **family label,
+  not a licence audit**. It says "this belongs to a family whose weights are
+  published", which is a fact about Llama, DeepSeek, Qwen, Mistral, Gemma and
+  the rest. It does not say the licence is OSI-approved: Llama's community
+  licence and Gemma's terms carry conditions, and `command-r`'s weights are
+  non-commercial. Both the UI note and the CLI footer say to read the vendor's
+  licence, rather than letting the flag stand in for having done so.
+
+The name test is not a vendor-prefix rule, because two vendors ship both kinds
+under one prefix: `google/gemma-*` is open and `google/gemini-*` is not,
+`openai/gpt-oss-*` is open and every other `openai/*` is not. The model half of
+the id decides, and is checked for prefixed and bare ids alike (Groq's carry no
+prefix at all).
+
+`free_open_weight_panel` picks **one model per family**. Five fine-tunes of one
+base model fail together on exactly the questions that base model is weak on —
+five positions and one opinion — and §6.2's independence term is about members
+that fail together. Llama, then DeepSeek, then Qwen, then Mistral, then Gemma
+is the most independence a single aggregator key can buy, and it is still not
+five independent providers; the panel warning continues to say so.
+
+One consequence worth naming: every usable provider now shows its default model
+as a **visible, editable line** rather than an invisible fallback.
+`--panel openrouter` and `--panel openrouter:<its default>` are the same run,
+but only one of them can be read off the screen — and that default is a
+*billed* model, so an operator building a free panel has to be able to see it
+and replace it. The one-click free picker replaces those lines rather than
+adding to them, for exactly that reason: a panel asked to be free must not
+still be carrying the paid default.

@@ -194,6 +194,7 @@
   .panel-model { display: flex; align-items: center; gap: 7px; padding: 2px 0; }
   .panel-model input[type=text] { flex: 1; min-width: 0; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; padding: 5px 8px; border-radius: 7px; }
   .panel-add { font-size: 12px; padding-top: 3px; }
+  .cat-note { font-size: 11.5px; color: var(--ink-muted); margin-left: 7px; }
 
   .banner { padding: 11px 14px; border-radius: 10px; font-size: 12.5px; margin-bottom: 14px; border: 1px solid transparent; line-height: 1.5; }
   .banner.warn { background: color-mix(in srgb, var(--warn) 12%, var(--surface)); border-color: color-mix(in srgb, var(--warn) 35%, var(--border)); color: var(--ink); }
@@ -628,7 +629,13 @@
     // many as its key will serve.
     var extras = p.usable && p.id !== "mock"
       ? '<div class="panel-models" data-models-for="' + h(p.id) + '">'
-        + '<div class="panel-add"><button type="button" class="link" data-add-model="' + h(p.id) + '">+ another model on this key</button></div>'
+        + '<datalist id="models-' + h(p.id) + '"></datalist>'
+        + '<div class="panel-add">'
+        + '<button type="button" class="link" data-add-model="' + h(p.id) + '">+ another model</button>'
+        + ' <span class="state-label">·</span> '
+        + '<button type="button" class="link" data-free-models="' + h(p.id) + '">use free open-weight models</button>'
+        + '<span class="cat-note" data-note-for="' + h(p.id) + '"></span>'
+        + "</div>"
         + "</div>"
       : "";
     return '<li class="panel-entry">'
@@ -703,30 +710,36 @@
       return out;
     }
 
-    // The `--panel` spec, exactly as the CLI takes it: a bare provider means
-    // its default model, `provider:model` pins one. A provider listed several
-    // times is several models on one adapter, which is what makes a five-model
-    // panel reachable from two keys.
+    // The `--panel` spec, exactly as the CLI takes it: `provider:model` for
+    // every line the operator can see, and a bare provider (its default model)
+    // only when a ticked provider has no lines at all. A provider listed
+    // several times is several models on one adapter, which is what makes a
+    // five-model panel reachable from one key.
     function selectedPanelSpec() {
       var out = [];
       selectedProviders().forEach(function (id) {
-        out.push(id);
-        extraModelsFor(id).forEach(function (model) { out.push(id + ":" + model); });
+        var models = extraModelsFor(id);
+        if (models.length === 0) { out.push(id); return; }
+        models.forEach(function (model) { out.push(id + ":" + model); });
       });
       return out;
     }
 
-    // Models, not boxes: `mock` is a three-model synthetic roster behind one
-    // name, so the server sends each row's own contribution and this only
-    // adds them up, plus any extra model lines typed under a ticked provider.
+    // How many models one ticked provider puts on the panel. `mock` is a
+    // three-model synthetic roster behind one name, so the server sends its
+    // own contribution; a real provider is one model per line, or one (its
+    // default) when it has no lines.
+    function modelsFrom(id) {
+      var p = null;
+      providers.forEach(function (row) { if (row.id === id) p = row; });
+      if (p && p.id === "mock") return p.models || 1;
+      return Math.max(1, extraModelsFor(id).length);
+    }
+
     // Summing integers is not "computing an estimate" (U7) -- every figure
     // shown still comes from the table the server precomputed.
     function selectedModelCount() {
-      var byId = {};
-      providers.forEach(function (p) { byId[p.id] = p.models || 1; });
-      return selectedProviders().reduce(function (n, id) {
-        return n + (byId[id] || 1) + extraModelsFor(id).length;
-      }, 0);
+      return selectedProviders().reduce(function (n, id) { return n + modelsFrom(id); }, 0);
     }
 
     // Two different facts, and conflating them is how a panel of five models
@@ -763,12 +776,17 @@
       var row = document.createElement("div");
       row.className = "panel-model";
       row.innerHTML = '<input type="text" spellcheck="false" autocapitalize="off" autocomplete="off"'
-        + ' aria-label="extra model for ' + h(id) + '" placeholder="model id, e.g. ' + h(exampleModelFor(id)) + '">'
+        + ' list="models-' + h(id) + '"'
+        + ' aria-label="model for ' + h(id) + '" placeholder="model id, e.g. ' + h(exampleModelFor(id)) + '">'
         + '<button type="button" class="link" data-drop-model="1" aria-label="remove this model">remove</button>';
       block.insertBefore(row, block.lastElementChild);
       var input = row.querySelector("input");
       if (value) input.value = value;
       input.addEventListener("input", refresh);
+      // Autocomplete costs one free listing call, made the first time someone
+      // means to type here rather than on page load for providers nobody
+      // touches.
+      input.addEventListener("focus", function () { loadCatalogue(id).catch(function () {}); });
       row.querySelector("[data-drop-model]").addEventListener("click", function () {
         row.parentNode.removeChild(row);
         refresh();
@@ -812,17 +830,100 @@
     Array.prototype.forEach.call(document.querySelectorAll(".panel-pick"), function (box) {
       box.addEventListener("change", refresh);
     });
+    function tick(id) {
+      var box = document.querySelector('.panel-pick[data-provider="' + id + '"]');
+      if (box && !box.disabled) box.checked = true;
+    }
+
     Array.prototype.forEach.call(document.querySelectorAll("[data-add-model]"), function (btn) {
       btn.addEventListener("click", function () {
-        var input = addModelRow(btn.getAttribute("data-add-model"));
-        // A new line adds nothing until it is filled in, so the count does
-        // not move yet -- but tick the provider it belongs to, since adding a
-        // model to a panel you are not running is never what was meant.
-        var box = document.querySelector('.panel-pick[data-provider="' + btn.getAttribute("data-add-model") + '"]');
-        if (box && !box.disabled) box.checked = true;
+        var id = btn.getAttribute("data-add-model");
+        var input = addModelRow(id);
+        // A blank line is not a model yet, so the count does not move -- but
+        // tick the provider it belongs to, since adding a model to a panel you
+        // are not running is never what was meant.
+        tick(id);
         refresh();
         if (input) input.focus();
       });
+    });
+
+    // The catalogue, once per provider per page: the vendor's own model list,
+    // read with the operator's own key. Cached because it is the same answer
+    // for every button press and this screen should not re-ask a vendor for a
+    // list it already has.
+    var catalogues = {};
+    function loadCatalogue(id) {
+      if (catalogues[id]) return Promise.resolve(catalogues[id]);
+      return api("/api/providers/" + encodeURIComponent(id) + "/models").then(function (data) {
+        catalogues[id] = data;
+        // Autocomplete for the lines typed by hand, so a model id can be
+        // picked rather than remembered -- a typo here is a 404 from the
+        // vendor part-way through a paid run.
+        var list = document.getElementById("models-" + id);
+        if (list) {
+          list.innerHTML = (data.models || []).map(function (m) {
+            var note = m.free === true ? " · free" : "";
+            return '<option value="' + h(m.id) + '">' + h(m.id + note) + "</option>";
+          }).join("");
+        }
+        return data;
+      });
+    }
+
+    Array.prototype.forEach.call(document.querySelectorAll("[data-free-models]"), function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-free-models");
+        var note = document.querySelector('[data-note-for="' + id + '"]');
+        var label = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "asking " + id + "…";
+        if (note) note.textContent = "";
+        loadCatalogue(id).then(function (data) {
+          btn.disabled = false;
+          btn.textContent = label;
+          var free = data.suggested || [];
+          if (free.length === 0) {
+            if (note) note.textContent = "· " + id + " lists no free open-weight models on this key";
+            return;
+          }
+          tick(id);
+          // Fill this provider up to whatever the rest of the panel is short
+          // of the target, so the button reaches five models rather than
+          // adding five more on top of what is already there.
+          var target = data.suggested_target || 5;
+          var others = selectedProviders().reduce(function (n, other) {
+            return other === id ? n : n + modelsFrom(other);
+          }, 0);
+          var want = Math.max(1, Math.min(free.length, target - others));
+          // Replaces this provider's lines rather than appending to them: the
+          // line already there is its default model, which is a *billed* one,
+          // and leaving it in place would quietly put a paid model on a panel
+          // the operator just asked to make free.
+          var block = document.querySelector('[data-models-for="' + id + '"]');
+          Array.prototype.forEach.call(block.querySelectorAll(".panel-model"), function (row) {
+            row.parentNode.removeChild(row);
+          });
+          free.slice(0, want).forEach(function (model) { addModelRow(id, model); });
+          if (note) {
+            note.textContent = "· " + want + " free open-weight model" + (want === 1 ? "" : "s")
+              + ", one per family — licences differ, check the vendor's";
+          }
+          refresh();
+        }).catch(function (e) {
+          btn.disabled = false;
+          btn.textContent = label;
+          if (note) note.textContent = "· " + (e && e.message ? e.message : "could not read the model list");
+        });
+      });
+    });
+
+    // Every usable provider starts with its default model on a visible line,
+    // not as an invisible fallback. `--panel openrouter` and
+    // `--panel openrouter:<its default>` are the same run, but only one of
+    // them can be read off the screen and swapped for something free.
+    providers.forEach(function (p) {
+      if (p.usable && p.id !== "mock" && p.default_model) addModelRow(p.id, p.default_model);
     });
     refresh();
 
