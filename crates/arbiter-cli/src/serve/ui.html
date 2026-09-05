@@ -184,9 +184,16 @@
 
   .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
   .dot.ok { background: var(--good); } .dot.warn { background: var(--warn); } .dot.off { background: var(--ink-muted); }
-  .panel-row { display: flex; align-items: center; gap: 9px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
-  .panel-row:last-child { border-bottom: none; }
+  .panel-row { display: flex; align-items: center; gap: 9px; padding: 8px 0; font-size: 13px; }
+  .panel-entry { border-bottom: 1px solid var(--border); }
+  .panel-entry:last-child { border-bottom: none; }
   .state-label { font-size: 11.5px; color: var(--ink-muted); }
+  /* Extra models sit under their provider, indented to the checkbox column so
+     it reads as "these run on that key" rather than as five more providers. */
+  .panel-models { padding: 0 0 8px 25px; }
+  .panel-model { display: flex; align-items: center; gap: 7px; padding: 2px 0; }
+  .panel-model input[type=text] { flex: 1; min-width: 0; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; padding: 5px 8px; border-radius: 7px; }
+  .panel-add { font-size: 12px; padding-top: 3px; }
 
   .banner { padding: 11px 14px; border-radius: 10px; font-size: 12.5px; margin-bottom: 14px; border: 1px solid transparent; line-height: 1.5; }
   .banner.warn { background: color-mix(in srgb, var(--warn) 12%, var(--surface)); border-color: color-mix(in srgb, var(--warn) 35%, var(--border)); color: var(--ink); }
@@ -616,7 +623,16 @@
     // only panel this build could run, so there was nothing to choose. It is
     // now the actual panel selection -- checked by default when the provider
     // is usable, disabled only when it has no key to run with.
-    return '<li class="panel-row">'
+    // `mock` is a fixed three-model synthetic roster behind one name, so
+    // there is no second model to add to it; every real provider can seat as
+    // many as its key will serve.
+    var extras = p.usable && p.id !== "mock"
+      ? '<div class="panel-models" data-models-for="' + h(p.id) + '">'
+        + '<div class="panel-add"><button type="button" class="link" data-add-model="' + h(p.id) + '">+ another model on this key</button></div>'
+        + "</div>"
+      : "";
+    return '<li class="panel-entry">'
+      + '<div class="panel-row">'
       + '<input type="checkbox" class="panel-pick" data-provider="' + h(p.id) + '"'
       + (p.checked ? " checked" : "") + (p.usable ? "" : " disabled")
       + ' aria-label="' + h(p.id) + '">'
@@ -624,6 +640,8 @@
       + "<strong>" + h(p.id) + "</strong>"
       + '<span class="state-label">' + h(label) + "</span>"
       + '<span style="margin-left:auto">' + action + "</span>"
+      + "</div>"
+      + extras
       + "</li>";
   }
 
@@ -651,7 +669,8 @@
       "</form>" +
       '<div class="stack">' +
       '<div class="card panel">' +
-      '<div class="ptitle">Panel</div>' +
+      '<div class="ptitle">Panel <span id="panel-count" class="state-label"></span></div>' +
+      '<p class="sub" style="margin:0 0 10px">One line per model. A key can seat more than one — five models behind two keys is a bigger panel, not five independent sources.</p>' +
       '<div id="panel-warning"></div>' +
       '<ul style="list-style:none;padding:0;margin:0">' + providers.map(panelRowHtml).join("") + "</ul>" +
       '<p class="sub" style="margin:12px 0 0"><a href="#/keys">Manage keys</a></p>' +
@@ -669,28 +688,105 @@
       return out;
     }
 
+    // The model ids typed under one provider, blanks dropped. An empty row is
+    // a row the operator is still filling in, not a model — it must not reach
+    // the spec, where `provider:` would resolve to the default model and seat
+    // the same model twice.
+    function extraModelsFor(id) {
+      var out = [];
+      var block = document.querySelector('[data-models-for="' + id.replace(/"/g, '') + '"]');
+      if (!block) return out;
+      Array.prototype.forEach.call(block.querySelectorAll("input[type=text]"), function (input) {
+        var v = input.value.trim();
+        if (v) out.push(v);
+      });
+      return out;
+    }
+
+    // The `--panel` spec, exactly as the CLI takes it: a bare provider means
+    // its default model, `provider:model` pins one. A provider listed several
+    // times is several models on one adapter, which is what makes a five-model
+    // panel reachable from two keys.
+    function selectedPanelSpec() {
+      var out = [];
+      selectedProviders().forEach(function (id) {
+        out.push(id);
+        extraModelsFor(id).forEach(function (model) { out.push(id + ":" + model); });
+      });
+      return out;
+    }
+
     // Models, not boxes: `mock` is a three-model synthetic roster behind one
     // name, so the server sends each row's own contribution and this only
-    // adds them up. Summing integers is not "computing an estimate" (U7) --
-    // every figure shown still comes from the table the server precomputed.
+    // adds them up, plus any extra model lines typed under a ticked provider.
+    // Summing integers is not "computing an estimate" (U7) -- every figure
+    // shown still comes from the table the server precomputed.
     function selectedModelCount() {
       var byId = {};
       providers.forEach(function (p) { byId[p.id] = p.models || 1; });
-      return selectedProviders().reduce(function (n, id) { return n + (byId[id] || 1); }, 0);
+      return selectedProviders().reduce(function (n, id) {
+        return n + (byId[id] || 1) + extraModelsFor(id).length;
+      }, 0);
     }
 
-    // The independence warning counts what will actually run, not what is
-    // merely available: a roster of four with one ticked is a one-provider
-    // debate, and §6.2's cross-checking argument is about the panel that ran.
+    // Two different facts, and conflating them is how a panel of five models
+    // behind one key comes to read as five-way cross-checking. The count says
+    // how big the panel is; the warning says how many *independent* sources
+    // it has, because §6.2's independence term is about the providers that
+    // actually ran, not the roster's length.
     function updateWarning() {
       var picked = selectedProviders().length;
+      var models = selectedModelCount();
+      var count = document.getElementById("panel-count");
+      if (count) count.textContent = models === 0 ? "" :
+        "· " + models + " model" + (models === 1 ? "" : "s") + " · " + picked + " provider" + (picked === 1 ? "" : "s");
       var el = document.getElementById("panel-warning");
       if (!el) return;
-      el.innerHTML = picked >= 3 ? "" :
-        '<div class="banner warn" role="status">' +
-        (picked === 0 ? "No models selected — pick at least one." :
-          "Only " + picked + " independent provider" + (picked === 1 ? "" : "s") + " selected — correlated failures between models from the same source will not be caught by cross-checking.") +
+      if (models === 0) {
+        el.innerHTML = '<div class="banner warn" role="status">No models selected — pick at least one. <a href="#/keys">Add more keys</a>.</div>';
+        return;
+      }
+      if (picked >= 3) { el.innerHTML = ""; return; }
+      el.innerHTML = '<div class="banner warn" role="status">' +
+        models + " model" + (models === 1 ? "" : "s") + " from only " + picked + " provider" + (picked === 1 ? "" : "s") +
+        " — correlated failures between models from the same source will not be caught by cross-checking, however many of them answer." +
         ' <a href="#/keys">Add more keys</a>.</div>';
+    }
+
+    // One more model line under a provider. Added empty and focused: the
+    // operator types the vendor's own model id (`deepseek/deepseek-chat`),
+    // and this build does not know what any given key is entitled to, so
+    // there is no list to offer instead.
+    function addModelRow(id, value) {
+      var block = document.querySelector('[data-models-for="' + id.replace(/"/g, '') + '"]');
+      if (!block) return null;
+      var row = document.createElement("div");
+      row.className = "panel-model";
+      row.innerHTML = '<input type="text" spellcheck="false" autocapitalize="off" autocomplete="off"'
+        + ' aria-label="extra model for ' + h(id) + '" placeholder="model id, e.g. ' + h(exampleModelFor(id)) + '">'
+        + '<button type="button" class="link" data-drop-model="1" aria-label="remove this model">remove</button>';
+      block.insertBefore(row, block.lastElementChild);
+      var input = row.querySelector("input");
+      if (value) input.value = value;
+      input.addEventListener("input", refresh);
+      row.querySelector("[data-drop-model]").addEventListener("click", function () {
+        row.parentNode.removeChild(row);
+        refresh();
+      });
+      return input;
+    }
+
+    // A plausible id for the provider, shown as placeholder text only. Wrong
+    // for most keys and deliberately not authoritative -- it is there so the
+    // field's shape is obvious, not to suggest this model is available.
+    function exampleModelFor(id) {
+      if (id === "openrouter") return "meta-llama/llama-3.3-70b-instruct";
+      if (id === "groq") return "llama-3.1-8b-instant";
+      if (id === "openai") return "gpt-4o-mini";
+      if (id === "anthropic") return "claude-haiku-4-5";
+      if (id === "gemini") return "gemini-3.6-flash-lite";
+      if (id === "deepseek") return "deepseek-reasoner";
+      return "model-id";
     }
 
     function updateEstimate() {
@@ -701,15 +797,32 @@
       // response with no table falls back to the whole-roster figure.
       var table = (estimates.per_model_count || {})[depth];
       var n = selectedModelCount();
-      var est = (table && n < table.length) ? table[n] : estimates[depth];
+      // A panel past the end of the table is quoted from its last row and
+      // said to be a floor, never from the whole-roster figure: a bigger
+      // panel costs more, and falling back to a smaller number would understate
+      // it in exactly the case the operator most needs it not to.
+      var beyond = !!(table && table.length && n >= table.length);
+      var est = table ? (beyond ? table[table.length - 1] : table[n]) : estimates[depth];
       var el = document.getElementById("estimate");
       if (!est) { el.textContent = ""; return; }
-      el.textContent = "Estimate: up to " + money(est.cost) + " · " + est.calls + " calls · up to " + est.wall_clock_secs + "s · " + est.model_count + " model" + (est.model_count === 1 ? "" : "s") + " (falls as models become unusable)";
+      el.textContent = "Estimate: " + (beyond ? "at least " : "up to ") + money(est.cost) + " · " + (beyond ? "≥" : "") + est.calls + " calls · up to " + est.wall_clock_secs + "s · " + n + " model" + (n === 1 ? "" : "s") + " (falls as models become unusable)";
     }
     function refresh() { updateEstimate(); updateWarning(); }
     document.getElementById("depth").addEventListener("change", updateEstimate);
     Array.prototype.forEach.call(document.querySelectorAll(".panel-pick"), function (box) {
       box.addEventListener("change", refresh);
+    });
+    Array.prototype.forEach.call(document.querySelectorAll("[data-add-model]"), function (btn) {
+      btn.addEventListener("click", function () {
+        var input = addModelRow(btn.getAttribute("data-add-model"));
+        // A new line adds nothing until it is filled in, so the count does
+        // not move yet -- but tick the provider it belongs to, since adding a
+        // model to a panel you are not running is never what was meant.
+        var box = document.querySelector('.panel-pick[data-provider="' + btn.getAttribute("data-add-model") + '"]');
+        if (box && !box.disabled) box.checked = true;
+        refresh();
+        if (input) input.focus();
+      });
     });
     refresh();
 
@@ -723,7 +836,7 @@
         document.getElementById("submit-error").innerHTML = '<p class="field-error">The question must not be empty.</p>';
         return;
       }
-      var panel = selectedProviders();
+      var panel = selectedPanelSpec();
       if (panel.length === 0) {
         document.getElementById("submit-error").innerHTML = '<p class="field-error">Pick at least one model for the panel.</p>';
         return;

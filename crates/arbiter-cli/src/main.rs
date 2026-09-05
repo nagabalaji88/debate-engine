@@ -35,11 +35,14 @@ enum Command {
     /// file containing one).
     Run {
         question: String,
-        /// Comma-separated providers, each optionally pinning a model
-        /// (`anthropic,openai:gpt-4o,gemini`), or the literal `mock` to run
-        /// the whole pipeline against a synthetic in-process panel with no
-        /// keys and no network at all. A named provider with no resolvable
-        /// key is an error, never a silent drop.
+        /// Comma-separated models, each `provider` (its default model) or
+        /// `provider:model` — `anthropic,openai:gpt-4o,gemini`. Name a
+        /// provider more than once to seat several of its models on one key
+        /// (`openrouter:deepseek/deepseek-chat,openrouter:qwen/qwen-2.5-72b-instruct`),
+        /// which is how a five-model panel is reached without five accounts.
+        /// The literal `mock` runs the whole pipeline against a synthetic
+        /// in-process panel with no keys and no network at all. A named
+        /// provider with no resolvable key is an error, never a silent drop.
         #[arg(long, default_value = "mock")]
         panel: String,
         #[arg(long, value_enum, default_value = "standard")]

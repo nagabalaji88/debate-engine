@@ -192,6 +192,46 @@ mod tests {
         assert_eq!(ids, vec!["gemini", "anthropic", "deepseek"]);
     }
 
+    /// A panel is a list of *models*, not of providers. Five entries naming
+    /// one provider are five panel members on one adapter -- the only way an
+    /// operator with two working keys reaches a five-model panel at all, and
+    /// the reason `resolve` registers per distinct provider while pushing per
+    /// entry. `PositionId` is `pos_{provider}_{model}`, so these stay five
+    /// distinct positions rather than one overwritten four times.
+    #[test]
+    fn one_provider_can_seat_several_models() {
+        let spec = "openrouter:deepseek/deepseek-chat,\
+                    openrouter:meta-llama/llama-3.3-70b-instruct,\
+                    openrouter:qwen/qwen-2.5-72b-instruct,\
+                    openrouter:mistralai/mistral-small-3.2-24b-instruct,\
+                    groq:llama-3.3-70b-versatile";
+        let entries = parse_spec(spec).unwrap();
+        assert_eq!(entries.len(), 5, "{entries:?}");
+        let models: Vec<&str> = entries.iter().map(|e| e.model.as_str()).collect();
+        assert_eq!(
+            models
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            5,
+            "every entry must be its own model: {models:?}"
+        );
+        assert_eq!(entries[0].provider.as_str(), "openrouter");
+        assert_eq!(entries[4].provider.as_str(), "groq");
+    }
+
+    /// A vendor model id may itself contain a colon (OpenRouter's free tier
+    /// is `vendor/model:free`), so the split is on the *first* colon only.
+    #[test]
+    fn a_model_id_may_contain_a_colon_of_its_own() {
+        let entries = parse_spec("openrouter:deepseek/deepseek-chat-v3-0324:free").unwrap();
+        assert_eq!(entries[0].provider.as_str(), "openrouter");
+        assert_eq!(
+            entries[0].model.as_str(),
+            "deepseek/deepseek-chat-v3-0324:free"
+        );
+    }
+
     #[test]
     fn an_unknown_provider_is_refused_and_lists_the_real_ones() {
         let err = parse_spec("bard").unwrap_err().to_string();

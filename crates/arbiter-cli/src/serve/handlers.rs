@@ -529,19 +529,23 @@ pub(crate) async fn list_providers() -> Response {
         .map(|r| r["models"].as_u64().unwrap_or(1) as usize)
         .sum();
 
-    // One estimate per possible panel size, 0..=usable, rather than a single
-    // number for the whole roster. Screen 1 lets the operator pick which
-    // providers sit on the panel (P4b), and U7 forbids the page computing a
-    // number of its own — so the server precomputes every answer the picker
-    // can produce and the page does a lookup. `estimates.standard`/`.deep`
-    // stay exactly as they were: the whole-roster figure, shown before any
-    // box is touched.
+    // One estimate per possible panel size, rather than a single number for
+    // the whole roster. Screen 1 lets the operator pick which providers sit
+    // on the panel (P4b), and U7 forbids the page computing a number of its
+    // own — so the server precomputes every answer the picker can produce and
+    // the page does a lookup. `estimates.standard`/`.deep` stay exactly as
+    // they were: the whole-roster figure, shown before any box is touched.
+    //
+    // The table runs past the provider count because a panel is a list of
+    // *models*, not of providers: one `openrouter` key can seat five of them
+    // (`--panel openrouter:a,openrouter:b,...`), so an operator with two keys
+    // can still build a panel of six. Sizing this `0..=usable_models` would
+    // have left every such panel falling back to the whole-roster figure,
+    // which is the one case where the estimate must not be approximate — it
+    // is understating a panel three times the size.
+    let largest = usable_models.max(MAX_PANEL_MODELS);
     let table = |depth: Depth| -> serde_json::Value {
-        serde_json::Value::Array(
-            (0..=usable_models)
-                .map(|n| run_estimate(depth, n))
-                .collect(),
-        )
+        serde_json::Value::Array((0..=largest).map(|n| run_estimate(depth, n)).collect())
     };
 
     Json(serde_json::json!({
@@ -557,6 +561,14 @@ pub(crate) async fn list_providers() -> Response {
     }))
     .into_response()
 }
+
+/// How far the precomputed estimate table reaches — the largest panel Screen
+/// 1 will quote a figure for. Not a limit on what `--panel` accepts: the
+/// kernel has no cap and the CLI takes whatever list it is given. It is the
+/// point past which precomputing every answer stops being worth the bytes,
+/// chosen as "comfortably more models than anyone is going to sit on one
+/// panel" rather than derived from anything.
+const MAX_PANEL_MODELS: usize = 12;
 
 /// Screen 1's own "shown before the button, recomputed when the panel ...
 /// changes" (U2) — computed here, server-side, so the page itself never

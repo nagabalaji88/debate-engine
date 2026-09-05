@@ -364,6 +364,146 @@ async fn all_5_panel_key_states_render() {
     }
 }
 
+/// `a_panel_can_hold_five_models_behind_fewer_keys`: a panel is a list of
+/// models, not of providers, but the picker was one checkbox per provider --
+/// so a five-model panel needed five working keys, which is not something
+/// most operators have. Each usable provider now carries its own extra-model
+/// rows, and what they build is the same `provider[:model]` spec `--panel`
+/// takes.
+///
+/// The independence figure has to stay honest through this: five models
+/// behind two keys is a bigger panel, not five independent sources, so the
+/// warning keeps counting providers even as the count reports models.
+#[tokio::test]
+async fn a_panel_can_hold_five_models_behind_fewer_keys() {
+    let server = start_server("panel_extra_models");
+    let (browser, _guard) = browser("panel_extra_models").await;
+    let page = browser.new_page("about:blank").await.unwrap();
+
+    // Two keyed providers, which is all this needs to reach five models --
+    // and no real key exists in this sandbox, so the roster is mocked.
+    page.evaluate_on_new_document(
+        r#"
+        (function () {
+          window.__runBody = null;
+          const real = window.fetch.bind(window);
+          window.fetch = function (url, opts) {
+            const u = String(url);
+            if (u.indexOf('/api/providers') !== -1 && (!opts || !opts.method || opts.method === 'GET')) {
+              const row = function (id) { return { id: id, state: 'present', source: 'keychain', fingerprint: 'abcd', usable: true, models: 1 }; };
+              const table = function (n) { const out = []; for (let i = 0; i <= n; i++) out.push({ cost: i * 0.1, calls: i * 10, wall_clock_secs: 300, model_count: i }); return out; };
+              return Promise.resolve(new Response(JSON.stringify({
+                providers: [row('openrouter'), row('groq')],
+                estimates: {
+                  standard: { cost: 0.2, calls: 20, wall_clock_secs: 300, model_count: 2 },
+                  deep: { cost: 0.4, calls: 40, wall_clock_secs: 300, model_count: 2 },
+                  per_model_count: { standard: table(12), deep: table(12) },
+                },
+              }), { status: 200, headers: { 'content-type': 'application/json' } }));
+            }
+            if (u.indexOf('/api/runs') !== -1 && opts && opts.method === 'POST') {
+              window.__runBody = opts.body;
+              // Refused, so the page stays on this screen with the captured
+              // body: what is under test is the spec, not what follows it.
+              return Promise.resolve(new Response(JSON.stringify({ error: 'captured' }), { status: 400, headers: { 'content-type': 'application/json' } }));
+            }
+            return real(url, opts);
+          };
+        })();
+        "#,
+    )
+    .await
+    .unwrap();
+
+    page.goto(server.url("#/new")).await.unwrap();
+    wait_for(
+        &page,
+        "document.querySelectorAll('.panel-pick').length === 2",
+        "both mocked providers to render",
+    )
+    .await;
+
+    // Two keys, two models, and the warning says the panel is not independent.
+    let before = text_of(&page, "#panel-count").await;
+    assert!(
+        before.contains("2 models") && before.contains("2 providers"),
+        "the count must separate models from providers: {before}"
+    );
+
+    // Three more models on the openrouter key takes the panel to five.
+    page.evaluate(
+        r#"
+        (function () {
+          const btn = document.querySelector('[data-add-model="openrouter"]');
+          const ids = ['meta-llama/llama-3.3-70b-instruct',
+                       'qwen/qwen-2.5-72b-instruct',
+                       'deepseek/deepseek-chat-v3-0324:free'];
+          ids.forEach(function (id) {
+            btn.click();
+            const rows = document.querySelectorAll('[data-models-for="openrouter"] input[type=text]');
+            const input = rows[rows.length - 1];
+            input.value = id;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          });
+        })();
+        "#,
+    )
+    .await
+    .unwrap();
+    wait_for(
+        &page,
+        "document.getElementById('panel-count').textContent.indexOf('5 models') !== -1",
+        "the panel to report five models",
+    )
+    .await;
+
+    // Five models, still two providers: the warning must not have gone quiet
+    // just because the panel grew.
+    let count = text_of(&page, "#panel-count").await;
+    assert!(count.contains("2 providers"), "{count}");
+    let warning = text_of(&page, "#panel-warning").await;
+    assert!(
+        warning.contains("5 models") && warning.contains("2 providers"),
+        "a five-model, two-provider panel is not five-way cross-checking: {warning}"
+    );
+
+    // And the spec that goes out is the one `--panel` would take.
+    page.find_element("#question")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap()
+        .type_str("Should we adopt a modular monolith or microservices?")
+        .await
+        .unwrap();
+    page.find_element("#start-btn")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    wait_for(&page, "!!window.__runBody", "the run request to go out").await;
+    let body: String = page
+        .evaluate("window.__runBody")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    let sent: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let panel = sent["panel"].as_str().unwrap();
+    assert_eq!(
+        panel,
+        "openrouter,\
+         openrouter:meta-llama/llama-3.3-70b-instruct,\
+         openrouter:qwen/qwen-2.5-72b-instruct,\
+         openrouter:deepseek/deepseek-chat-v3-0324:free,\
+         groq",
+        "the spec must name five models across the two keys"
+    );
+    assert_eq!(panel.split(',').count(), 5, "{panel}");
+}
+
 /// `the_panel_picker_chooses_who_actually_runs`: before P4 the panel
 /// checkboxes were `checked disabled` decoration, because `mock` was the only
 /// panel this build could run. They now carry the run: what is ticked becomes

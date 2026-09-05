@@ -3052,3 +3052,43 @@ recognised, not just Anthropic's. `OPENAI_API_KEY`, `GEMINI_API_KEY`,
 `XAI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY` and `GROQ_API_KEY` all
 resolve — a key already exported for another tool is found without renaming it,
 which is §11.1's whole point in having source 2.
+
+## D58 — A panel is a list of models, and the picker now says so
+
+`--panel` always took a list of *models*: `parse_spec` splits on the first
+comma-separated entry, `resolve` pushes one roster row per entry, and it
+registers one adapter per **distinct** provider precisely so a provider named
+twice is two panel members on one key. `PositionId` is `pos_{provider}_{model}`,
+so those members stay distinct all the way through `positions.generate`.
+
+The Debate screen did not say so. Its Panel card was one checkbox per provider
+and submitted `selectedProviders().join(",")`, which made the panel size equal
+to the number of working keys. An operator holding two keys could run a
+two-model debate and no larger — and five models is where §6.2's confidence
+arithmetic starts having enough positions to be worth reading.
+
+So each usable provider row now carries its own extra-model lines: a
+`+ another model on this key` button appends a text field, and the submitted
+spec is `provider` for the default model plus `provider:model` for each line
+filled in. That is the same string `--panel` takes, so the two entry points
+cannot drift.
+
+Two consequences worth naming, because both are places this could have quietly
+lied:
+
+- **The estimate table had to grow.** It was sized `0..=usable_models`, one row
+  per possible tick-count, and any larger panel fell back to the whole-roster
+  figure — which is *smaller*. A panel of six on two keys would have quoted the
+  price of two. The table now runs to `MAX_PANEL_MODELS` (12), and a panel past
+  its end is quoted from the last row as a floor ("at least"), never from the
+  roster figure. `MAX_PANEL_MODELS` is a display limit only; neither `--panel`
+  nor the kernel caps panel size.
+- **The independence warning still counts providers.** Five models behind one
+  OpenRouter key are one source, not five, and §6.2's independence term is
+  computed over the providers that actually ran. The Panel card therefore
+  reports both numbers separately ("5 models · 2 providers") and the warning
+  says the panel is not independent however many of them answer. Growing the
+  panel must not be a way to talk the confidence figure up.
+
+The judge seat is unchanged: it rides the first entry in the panel, so listing
+the provider you want judging first still decides it.
