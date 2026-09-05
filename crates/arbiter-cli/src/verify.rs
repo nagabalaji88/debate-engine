@@ -6,11 +6,21 @@
 //! `POST /api/providers/:p/test` both refused honestly. The adapters exist
 //! now, so both do the real thing.
 //!
-//! **This spends money.** One completion of at most a couple of tokens, which
-//! is the cheapest question that still proves the whole path works — the key
-//! is accepted, the model name resolves, and the network reaches the vendor.
-//! A HEAD request or a models-list call would prove less: several of these
-//! providers accept a key for listing that they then reject for inference.
+//! Two questions, cheapest first.
+//!
+//! 1. **Does the key authenticate?** [`arbiter_providers::probe`] asks the
+//!    vendor's model-listing endpoint, which needs a valid key and nothing
+//!    else. Free, and conclusive about the key itself — a bad one is caught
+//!    here without ever spending a paid request.
+//! 2. **Can the account actually run inference?** Only if step 1 passed: one
+//!    completion of a few tokens. **This spends money.**
+//!
+//! An earlier version asked only the second question, on the grounds that a
+//! models-list "proves less" — true, and the answer is to ask both in order
+//! rather than to pick one. Asking only the first is how a tool reports a key
+//! as working when the account cannot afford to use it; asking only the second
+//! is how one reports a perfectly good key as bad. Between them they say which
+//! of those is true, and the result cites the evidence.
 
 use arbiter_core::ProviderId;
 use arbiter_kernel::ids::ReservationId;
@@ -25,7 +35,7 @@ use arbiter_providers::{build_provider, default_model_for};
 /// The shortest prompt that still forces a real completion. Deliberately not
 /// empty: some providers reject an empty message outright, which would look
 /// like a bad key.
-const PROBE_PROMPT: &str = "Reply with the single word: ok";
+const COMPLETION_PROMPT: &str = "Reply with the single word: ok";
 
 /// Process-global, matching `VerificationCache`'s own in-memory design. Both
 /// callers (the CLI command and the serve endpoint) share it so a `Test`
@@ -265,7 +275,7 @@ pub(crate) async fn verify(provider: &ProviderId) -> Verification {
     };
     let request = ProviderRequest {
         model: model.clone(),
-        prompt: PROBE_PROMPT.to_string(),
+        prompt: COMPLETION_PROMPT.to_string(),
         params: serde_json::json!({"max_tokens": 4}).to_string(),
         idempotency_key: None,
         // No ledger is involved -- this is not a run -- but the field is
