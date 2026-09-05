@@ -113,6 +113,12 @@ pub trait CredentialSource: Send + Sync {
 fn conventional_env_var(provider: &ProviderId) -> Option<&'static str> {
     match provider.as_str() {
         "anthropic" => Some("ANTHROPIC_API_KEY"),
+        "openai" => Some("OPENAI_API_KEY"),
+        "gemini" => Some("GEMINI_API_KEY"),
+        "xai" => Some("XAI_API_KEY"),
+        "deepseek" => Some("DEEPSEEK_API_KEY"),
+        "openrouter" => Some("OPENROUTER_API_KEY"),
+        "groq" => Some("GROQ_API_KEY"),
         _ => None,
     }
 }

@@ -20,7 +20,15 @@ use openai_compatible::Flavor;
 /// Every provider this build can actually reach, in the order a panel picker
 /// should offer them. `mock` is deliberately absent: it is constructed with a
 /// script by whoever needs it, never resolved from a credential.
-pub const REAL_PROVIDER_IDS: [&str; 5] = ["anthropic", "openai", "gemini", "xai", "deepseek"];
+pub const REAL_PROVIDER_IDS: [&str; 7] = [
+    "anthropic",
+    "openai",
+    "gemini",
+    "xai",
+    "deepseek",
+    "openrouter",
+    "groq",
+];
 
 /// Where an operator goes to get a key for this provider.
 ///
@@ -31,6 +39,8 @@ pub const REAL_PROVIDER_IDS: [&str; 5] = ["anthropic", "openai", "gemini", "xai"
 pub fn console_url_for(provider: &ProviderId) -> Option<&'static str> {
     Some(match provider.as_str() {
         "anthropic" => "https://console.anthropic.com/settings/keys",
+        "openrouter" => "https://openrouter.ai/keys",
+        "groq" => "https://console.groq.com/keys",
         "openai" => "https://platform.openai.com/api-keys",
         "gemini" => "https://aistudio.google.com/app/apikey",
         "xai" => "https://console.x.ai",
@@ -47,6 +57,8 @@ pub fn default_model_for(provider: &ProviderId) -> Option<ModelId> {
         "xai" => Flavor::XAi.default_model(),
         "deepseek" => Flavor::DeepSeek.default_model(),
         "gemini" => gemini::default_model(),
+        "openrouter" => Flavor::OpenRouter.default_model(),
+        "groq" => Flavor::Groq.default_model(),
         _ => return None,
     })
 }
@@ -73,6 +85,14 @@ pub fn build_provider(
         )?),
         "deepseek" => Box::new(openai_compatible::OpenAiCompatibleProvider::new(
             Flavor::DeepSeek,
+            api_key,
+        )?),
+        "openrouter" => Box::new(openai_compatible::OpenAiCompatibleProvider::new(
+            Flavor::OpenRouter,
+            api_key,
+        )?),
+        "groq" => Box::new(openai_compatible::OpenAiCompatibleProvider::new(
+            Flavor::Groq,
             api_key,
         )?),
         "gemini" => Box::new(gemini::GeminiProvider::new(api_key)?),

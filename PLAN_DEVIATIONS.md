@@ -3005,3 +3005,50 @@ the listing call alone, with the vendor's own "API key is invalid." and no
 completion spent. The `blocked`-with-proof path cannot be exercised here — it
 needs a valid key on an account without credit, which is precisely the state
 this session has no access to.
+
+## D57 — two real defects a user's own screenshots exposed, and the reason the other tool worked
+
+A comparison run failed on every provider at once, while the same keys produced
+answers in `master-prompt-generator`. The three failures were three different
+things, and only one of them was mine:
+
+```
+anthropic  HTTP 400  Your credit balance is too low ...
+openai     HTTP 429  You have no credits remaining ...
+gemini     HTTP 404  This model models/gemini-2.0-flash is no longer available.
+                     Please update your code to use models/gemini-3.6-flash
+```
+
+- **Gemini's default model was retired out from under it.** A genuine bug here,
+  and the one thing in that screenshot this codebase could fix. The new id is
+  taken from the vendor's own 404, not guessed. Its test now asserts against
+  `default_model()` rather than repeating the literal, so the next retirement
+  is a one-line change instead of two places that can disagree.
+- **The other two are exhausted accounts**, on the two vendors this build
+  reached directly. Nothing to fix in code; already reported correctly.
+- **And MPG worked because it was not calling those vendors at all.** Its
+  network response names `OPENROUTER_API_KEY` and `credential_family:
+  openrouter`; its enabled models are `openrouter/deepseek/deepseek-chat`,
+  `openrouter/mistralai/mistral-small-3.2-24b-instruct`,
+  `openrouter/meta-llama/llama-3.3-70b` and GPT-OSS on Groq. It routes through
+  an aggregator, billed by the aggregator, so a direct OpenAI or Anthropic
+  account running dry does not touch it.
+
+So **`openrouter` and `groq` are now providers here too**, which is what makes
+this app usable with the keys the operator already has. Both speak Chat
+Completions, so both are `Flavor`s of the existing `openai_compatible` adapter
+rather than new ones — the whole addition is four match arms, two listing
+endpoints and two environment variables.
+
+Neither gets a pricing entry, deliberately. An aggregator's cost is whatever
+the routed model charges, so there is no single rate to publish; `None` renders
+as "cost unknown", and an invented average would be a wrong number displayed
+with the same confidence as a right one. `every_direct_provider_has_a_published_price`
+now asserts exactly that split, so a future provider cannot quietly acquire a
+made-up price.
+
+While here: every provider's conventional environment variable is now
+recognised, not just Anthropic's. `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+`XAI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY` and `GROQ_API_KEY` all
+resolve — a key already exported for another tool is found without renaming it,
+which is §11.1's whole point in having source 2.

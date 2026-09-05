@@ -137,7 +137,13 @@ impl Provider for GeminiProvider {
 }
 
 pub fn default_model() -> ModelId {
-    ModelId::new("gemini-2.0-flash")
+    // `gemini-2.0-flash` was retired: the live API answered
+    // `404 ... "This model models/gemini-2.0-flash is no longer available.
+    // Please update your code to use models/gemini-3.6-flash"`. Taken from the
+    // vendor's own message rather than guessed at. A model id is a moving
+    // target for every provider here, which is why `--panel gemini:<model>`
+    // exists — this is only the default for a panel that names no model.
+    ModelId::new("gemini-3.6-flash")
 }
 
 #[cfg(test)]
@@ -147,7 +153,7 @@ mod tests {
 
     fn request() -> ProviderRequest {
         ProviderRequest {
-            model: ModelId::new("gemini-2.0-flash"),
+            model: default_model(),
             prompt: "Say hello".to_string(),
             params: "{}".to_string(),
             idempotency_key: None,
@@ -158,9 +164,12 @@ mod tests {
     #[test]
     fn model_goes_in_the_path_not_the_body() {
         let p = GeminiProvider::new(SecretString::new("k")).unwrap();
-        let url = p.url(&ModelId::new("gemini-2.0-flash"));
+        let url = p.url(&default_model());
         assert!(
-            url.ends_with("/models/gemini-2.0-flash:generateContent"),
+            url.ends_with(&format!(
+                "/models/{}:generateContent",
+                default_model().as_str()
+            )),
             "{url}"
         );
         assert!(GeminiProvider::body(&request()).get("model").is_none());

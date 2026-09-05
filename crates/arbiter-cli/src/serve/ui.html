@@ -32,7 +32,7 @@
     --good:#0a8a3f; --warn:#a86a00; --bad:#c0392b; --code-bg:#F5F6FA;
     /* One colour per provider, used for its card, its bar and its lane, so a
        model is the same colour everywhere it appears. */
-    --anthropic:#2a78d6; --openai:#eb6834; --gemini:#1baf7a; --xai:#eda100; --deepseek:#e87ba4; --mock:#78809a;
+    --anthropic:#2a78d6; --openai:#eb6834; --gemini:#1baf7a; --xai:#eda100; --deepseek:#e87ba4; --openrouter:#7a5af0; --groq:#d4552e; --mock:#78809a;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -40,7 +40,7 @@
       --ink:#ECEEF6; --ink-2:#A7ADC0; --ink-muted:#6E7488;
       --accent:#7C83FF; --accent-2:#5B63E8; --accent-ink:#0B0E14;
       --good:#3ddc84; --warn:#f0b429; --bad:#e66767; --code-bg:#0E1220;
-      --anthropic:#3987e5; --openai:#f0703c; --gemini:#199e70; --xai:#c98500; --deepseek:#d55181; --mock:#8a92aa;
+      --anthropic:#3987e5; --openai:#f0703c; --gemini:#199e70; --xai:#c98500; --deepseek:#d55181; --openrouter:#8e72ff; --groq:#e0663f; --mock:#8a92aa;
     }
   }
   :root[data-theme="dark"] {
@@ -48,7 +48,7 @@
     --ink:#ECEEF6; --ink-2:#A7ADC0; --ink-muted:#6E7488;
     --accent:#7C83FF; --accent-2:#5B63E8; --accent-ink:#0B0E14;
     --good:#3ddc84; --warn:#f0b429; --bad:#e66767; --code-bg:#0E1220;
-    --anthropic:#3987e5; --openai:#f0703c; --gemini:#199e70; --xai:#c98500; --deepseek:#d55181; --mock:#8a92aa;
+    --anthropic:#3987e5; --openai:#f0703c; --gemini:#199e70; --xai:#c98500; --deepseek:#d55181; --openrouter:#8e72ff; --groq:#e0663f; --mock:#8a92aa;
   }
 
   * { box-sizing: border-box; }
@@ -282,6 +282,8 @@
     gemini:    { color: "var(--gemini)",    desc: "Multimodal strength" },
     xai:       { color: "var(--xai)",       desc: "Real-time awareness" },
     deepseek:  { color: "var(--deepseek)",  desc: "Technical and coding focus" },
+    openrouter:{ color: "var(--openrouter)", desc: "One key, many vendors — billed by OpenRouter" },
+    groq:      { color: "var(--groq)",      desc: "Open-weight models, very fast" },
     mock:      { color: "var(--mock)",      desc: "Synthetic panel — no key, no network" },
   };
   function colorOf(id) { return (META[id] || {}).color || "var(--mock)"; }

@@ -894,7 +894,7 @@ async fn compare_renders_one_card_per_model() {
         .into_value()
         .unwrap();
     assert_eq!(
-        cards, 5,
+        cards, 7,
         "every provider this build can reach needs a card, answered or not"
     );
     let skipped: u32 = page
@@ -997,8 +997,8 @@ async fn the_keys_screen_can_add_and_test_a_key() {
         .unwrap()
         .into_value()
         .unwrap();
-    assert!(counts.contains("\"set\":5"), "{counts}");
-    assert!(counts.contains("\"test\":5"), "{counts}");
+    assert!(counts.contains("\"set\":7"), "{counts}");
+    assert!(counts.contains("\"test\":7"), "{counts}");
     assert!(
         counts.contains("\"mock\":0"),
         "mock must not offer a key form: {counts}"

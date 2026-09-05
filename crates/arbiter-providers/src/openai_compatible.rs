@@ -26,6 +26,14 @@ pub enum Flavor {
     OpenAi,
     XAi,
     DeepSeek,
+    /// An aggregator: one key, and a `vendor/model` string that routes to
+    /// whichever provider actually serves it. Billed by OpenRouter, not by the
+    /// upstream vendor — which is why a key here keeps working when a direct
+    /// OpenAI or Anthropic account has run out of credit.
+    OpenRouter,
+    /// Hosted open-weight models on their own inference hardware, behind the
+    /// same Chat Completions shape.
+    Groq,
 }
 
 impl Flavor {
@@ -34,6 +42,8 @@ impl Flavor {
             Flavor::OpenAi => "openai",
             Flavor::XAi => "xai",
             Flavor::DeepSeek => "deepseek",
+            Flavor::OpenRouter => "openrouter",
+            Flavor::Groq => "groq",
         })
     }
 
@@ -42,6 +52,8 @@ impl Flavor {
             Flavor::OpenAi => "https://api.openai.com/v1/chat/completions",
             Flavor::XAi => "https://api.x.ai/v1/chat/completions",
             Flavor::DeepSeek => "https://api.deepseek.com/chat/completions",
+            Flavor::OpenRouter => "https://openrouter.ai/api/v1/chat/completions",
+            Flavor::Groq => "https://api.groq.com/openai/v1/chat/completions",
         }
     }
 
@@ -51,6 +63,11 @@ impl Flavor {
             Flavor::OpenAi => "gpt-4o",
             Flavor::XAi => "grok-2-latest",
             Flavor::DeepSeek => "deepseek-chat",
+            // An aggregator model id is `vendor/model`. This one is cheap and
+            // widely available; any other is reachable as
+            // `--panel openrouter:vendor/model`.
+            Flavor::OpenRouter => "deepseek/deepseek-chat",
+            Flavor::Groq => "llama-3.3-70b-versatile",
         })
     }
 }

@@ -66,6 +66,12 @@ fn listing_request(
         "deepseek" => client
             .get("https://api.deepseek.com/models")
             .bearer_auth(key.expose()),
+        "openrouter" => client
+            .get("https://openrouter.ai/api/v1/models")
+            .bearer_auth(key.expose()),
+        "groq" => client
+            .get("https://api.groq.com/openai/v1/models")
+            .bearer_auth(key.expose()),
         // Gemini takes the key in a header, never the query string, for the
         // same reason the adapter does: a URL lands in logs.
         "gemini" => client

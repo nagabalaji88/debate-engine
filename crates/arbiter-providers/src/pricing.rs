@@ -45,12 +45,16 @@ pub fn pricing_for(provider: &ProviderId) -> Option<Pricing> {
         "anthropic" => (3.0, 15.0),
         // gpt-4o
         "openai" => (2.5, 10.0),
-        // gemini-2.0-flash
+        // gemini-3.6-flash
         "gemini" => (0.10, 0.40),
         // grok-2-latest
         "xai" => (2.0, 10.0),
         // deepseek-chat
         "deepseek" => (0.27, 1.10),
+        // `openrouter` and `groq` are deliberately absent: an aggregator's
+        // price is whatever the routed model costs, so there is no single rate
+        // to publish here. `None` renders as "cost unknown", which is honest;
+        // inventing an average would put a wrong number on every answer.
         _ => return None,
     };
     Some(Pricing {
@@ -63,13 +67,20 @@ pub fn pricing_for(provider: &ProviderId) -> Option<Pricing> {
 mod tests {
     use super::*;
 
+    /// Every provider that bills at one published rate has one here. The
+    /// aggregators do not, and must not: their cost depends on which upstream
+    /// model a request was routed to, and a made-up average would be a wrong
+    /// number shown with the same confidence as a right one.
     #[test]
-    fn every_real_provider_has_a_published_price() {
+    fn every_direct_provider_has_a_published_price() {
+        const AGGREGATORS: [&str; 2] = ["openrouter", "groq"];
         for id in crate::REAL_PROVIDER_IDS {
-            assert!(
-                pricing_for(&ProviderId::new(id)).is_some(),
-                "{id} can be run but has no price to show for it"
-            );
+            let priced = pricing_for(&ProviderId::new(id)).is_some();
+            if AGGREGATORS.contains(&id) {
+                assert!(!priced, "{id} routes to other vendors — it has no one rate");
+            } else {
+                assert!(priced, "{id} can be run but has no price to show for it");
+            }
         }
     }
 
