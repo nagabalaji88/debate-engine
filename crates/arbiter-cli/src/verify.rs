@@ -47,9 +47,33 @@ fn now_unix() -> u64 {
 /// is perfectly good.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Verification {
-    Verified { model: String, cached: bool },
-    Rejected { status: u16, message: String },
-    Unreachable { message: String },
+    Verified {
+        model: String,
+        cached: bool,
+    },
+    /// The key itself was refused: 401 or 403, the two statuses HTTP reserves
+    /// for "who are you" and "you may not". Only this means "replace the key".
+    Rejected {
+        status: u16,
+        message: String,
+    },
+    /// The vendor answered, the key got *past* authentication, and the request
+    /// still was not served — no credit on the account, a rate limit, a model
+    /// the plan does not include, an outage.
+    ///
+    /// This is its own state because the first version collapsed it into
+    /// `Rejected`, and a live key with an empty balance came back as
+    /// "rejected: HTTP 400 ... credit balance is too low". That told the
+    /// operator to replace a key that was perfectly good. Anything other than
+    /// 401/403 got past auth by definition, so the key is not the problem.
+    Blocked {
+        status: u16,
+        message: String,
+    },
+    /// No response at all: DNS, TLS, a proxy, a timeout.
+    Unreachable {
+        message: String,
+    },
     NoKey,
 }
 
@@ -60,6 +84,7 @@ impl Verification {
         match self {
             Verification::Verified { .. } => "verified",
             Verification::Rejected { .. } => "rejected",
+            Verification::Blocked { .. } => "blocked",
             Verification::Unreachable { .. } => "unreachable",
             Verification::NoKey => "missing",
         }
@@ -73,6 +98,11 @@ impl Verification {
                 } else {
                     model.clone()
                 }
+            }
+            // The distinction is the whole point of the state, so it is said
+            // out loud rather than left to be inferred from a status code.
+            Verification::Blocked { message, .. } => {
+                format!("the key was accepted, but the request was refused — {message}")
             }
             Verification::Rejected { message, .. } | Verification::Unreachable { message } => {
                 message.clone()
@@ -163,18 +193,23 @@ pub(crate) async fn verify(provider: &ProviderId) -> Verification {
         // failure is cached: a 429 or a 503 says nothing about the key, and
         // caching it for 24 hours would keep telling the operator their key
         // is bad long after the rate limit cleared.
-        Err(ProviderError::Http { status, message }) => {
-            if matches!(status, 401 | 403) {
-                cache().put(
-                    provider.as_str(),
-                    model.as_str(),
-                    &fingerprint,
-                    VerifyResult::Rejected { status },
-                    now_unix(),
-                );
-            }
+        // 401/403 are the only two statuses that mean the *key* was refused.
+        // Cached, because a bad key stays bad until it is replaced.
+        Err(ProviderError::Http { status, message }) if matches!(status, 401 | 403) => {
+            cache().put(
+                provider.as_str(),
+                model.as_str(),
+                &fingerprint,
+                VerifyResult::Rejected { status },
+                now_unix(),
+            );
             Verification::Rejected { status, message }
         }
+        // Any other answer: authentication succeeded and the request still
+        // failed. Never cached — topping up a balance or waiting out a rate
+        // limit changes the answer immediately, and a 24-hour cache would go
+        // on reporting a problem the operator had already fixed.
+        Err(ProviderError::Http { status, message }) => Verification::Blocked { status, message },
         // Never reached the vendor at all: DNS, TLS, a proxy, a timeout. Not
         // the key's fault, and never cached.
         Err(e) => Verification::Unreachable {
@@ -206,6 +241,52 @@ mod tests {
         let v = verify(&ProviderId::new("anthropic")).await;
         assert_eq!(v.state(), "missing");
         assert_eq!(v.detail(), "no key configured");
+    }
+
+    /// The defect this state exists for: a live Anthropic key with an empty
+    /// balance answers `400 invalid_request_error` — "Your credit balance is
+    /// too low" — and the first version reported that as `rejected`, telling
+    /// the operator to replace a key that authenticated perfectly well.
+    #[test]
+    fn a_billing_failure_is_blocked_not_rejected() {
+        let blocked = Verification::Blocked {
+            status: 400,
+            message: "anthropic HTTP 400 Bad Request: Your credit balance is too low".to_string(),
+        };
+        assert_eq!(blocked.state(), "blocked");
+        assert!(
+            blocked.detail().contains("the key was accepted"),
+            "a blocked result must say the key is not the problem: {}",
+            blocked.detail()
+        );
+        assert!(blocked.detail().contains("credit balance"));
+    }
+
+    /// Only the two statuses HTTP reserves for authentication mean the key
+    /// itself was refused. Everything else got past auth by definition.
+    #[test]
+    fn only_401_and_403_mean_the_key_is_the_problem() {
+        for status in [400u16, 402, 404, 429, 500, 503] {
+            assert_eq!(
+                Verification::Blocked {
+                    status,
+                    message: String::new()
+                }
+                .state(),
+                "blocked",
+                "HTTP {status} authenticated, so it must not read as a bad key"
+            );
+        }
+        for status in [401u16, 403] {
+            assert_eq!(
+                Verification::Rejected {
+                    status,
+                    message: String::new()
+                }
+                .state(),
+                "rejected"
+            );
+        }
     }
 
     #[test]

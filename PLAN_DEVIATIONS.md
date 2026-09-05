@@ -2660,6 +2660,19 @@ plan had already signed off.
   future runner to remember `--test-threads=1`. The suite is also *faster*
   this way (16s vs 25s serial).
 
+**A correction, found by a real key in real use.** The first version of this
+had only `Rejected` for "the vendor answered and would not serve us", so a
+*live* Anthropic key with an exhausted balance — which answers
+`400 invalid_request_error`, "Your credit balance is too low" — was reported as
+`rejected`. That told the operator to replace a key that authenticated
+perfectly. `Blocked` now covers it: 401 and 403 are the only two statuses HTTP
+reserves for authentication, so anything else got *past* auth by definition and
+the key is not the problem. Blocked results are never cached, because topping
+up a balance or waiting out a rate limit changes the answer immediately; they
+render amber rather than red, and say in words that the key is fine and the
+account needs attention. `arbiter keys test` still exits non-zero for both —
+neither can serve a debate — but names which problem it is.
+
 Verified end to end against the live Anthropic API with a deliberately invalid
 key: `Error: positions.generate: every model in the panel failed to produce a
 position (1 of 1): anthropic/claude-sonnet-4-5: anthropic HTTP 401

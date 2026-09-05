@@ -1326,7 +1326,7 @@
   function renderKeys(providers) {
     var real = providers.filter(function (p) { return p.state !== "not_required"; });
     var rows = real.map(function (p) {
-      var dot = p.state === "verified" ? "ok" : p.state === "present" ? "warn" : "off";
+      var dot = p.state === "verified" ? "ok" : (p.state === "present" || p.state === "blocked") ? "warn" : "off";
       return '<tr id="key-row-' + h(p.id) + '"><td><span class="dot" style="background:' + colorOf(p.id) + '"></span> ' + h(p.id) + "</td>" +
         '<td><span class="dot ' + dot + '" aria-hidden="true"></span> <span class="key-state">' + h(p.state) + "</span></td>" +
         "<td>" + (p.source ? h(p.source) : "—") + "</td>" +
@@ -1388,7 +1388,12 @@
             btn.disabled = false;
             btn.textContent = original;
             var kind = r.state === "verified" ? "ok" : r.state === "rejected" ? "danger" : "warn";
-            showDetail(id, '<div class="banner ' + kind + '" role="status"><strong>' + h(r.state) + "</strong> — " + h(r.detail) + "</div>");
+            // A blocked account is the one result that names a fix the
+            // operator cannot make from here, so it says where to go.
+            var hint = r.state === "blocked"
+              ? '<br><span class="muted">Your key is fine. This is your account with the provider — check its billing, plan or rate limits.</span>'
+              : "";
+            showDetail(id, '<div class="banner ' + kind + '" role="status"><strong>' + h(r.state) + "</strong> — " + h(r.detail) + hint + "</div>");
             var stateEl = document.querySelector("#key-row-" + CSS.escape(id) + " .key-state");
             if (stateEl) stateEl.textContent = r.state;
           })

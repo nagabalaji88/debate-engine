@@ -442,12 +442,15 @@ pub async fn keys_test_command(provider: Option<String>) -> anyhow::Result<()> {
             outcome.state(),
             outcome.detail()
         );
-        if outcome.state() == "rejected" {
+        if matches!(outcome.state(), "rejected" | "blocked") {
             any_rejected = true;
         }
     }
     if any_rejected {
-        anyhow::bail!("at least one key was rejected by its provider");
+        anyhow::bail!(
+            "at least one provider cannot serve a request — `rejected` means replace the key, \
+             `blocked` means the key is fine and the account needs attention"
+        );
     }
     Ok(())
 }
