@@ -2673,6 +2673,25 @@ render amber rather than red, and say in words that the key is fine and the
 account needs attention. `arbiter keys test` still exits non-zero for both —
 neither can serve a debate — but names which problem it is.
 
+**And a second correction, from the same report.** Even once classified
+correctly, the result read as a wall of JSON: the raw error envelope was being
+passed through verbatim, so the operator saw
+`{"type":"error","error":{"type":"invalid_request_error","message":"Your credit
+balance is too low..."},"request_id":"req_011..."}` when one sentence of that
+was the point. `http::message_in` now digs the vendor's own sentence out of
+whichever envelope it arrived in — `/error/message` covers all five providers,
+with `/message`, `/error/detail` and a bare `{"error": "string"}` as fallbacks
+for gateways — and an unparseable body (an HTML page from a load balancer) still
+falls through to itself, because an unrecognised shape is exactly when the
+operator most needs to see it whole. Fixed in `http.rs` rather than in the Keys
+screen, so Compare cards and debate failure messages get it too.
+
+The result is also split into three fields instead of one blob: a `headline` in
+our words ("Your key works. anthropic refused the request — check that
+account's billing, plan or rate limits."), the vendor's `detail` unparaphrased,
+and the `status`. The first attempt put our framing and the vendor's text in one
+string and then repeated the framing underneath, which said the same thing twice.
+
 Verified end to end against the live Anthropic API with a deliberately invalid
 key: `Error: positions.generate: every model in the panel failed to produce a
 position (1 of 1): anthropic/claude-sonnet-4-5: anthropic HTTP 401

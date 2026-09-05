@@ -380,7 +380,16 @@ async fn testing_a_provider_without_a_key_spends_nothing() {
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["state"], "missing");
-    assert_eq!(body["detail"], "no key configured");
+    assert!(
+        body["headline"]
+            .as_str()
+            .unwrap()
+            .contains("No key configured"),
+        "{body}"
+    );
+    // Nothing was called, so there is no vendor sentence to quote.
+    assert_eq!(body["detail"], "");
+    assert!(body["status"].is_null());
 }
 
 /// `testing_mock_is_verified_without_a_socket`: the synthetic panel is always

@@ -1388,12 +1388,12 @@
             btn.disabled = false;
             btn.textContent = original;
             var kind = r.state === "verified" ? "ok" : r.state === "rejected" ? "danger" : "warn";
-            // A blocked account is the one result that names a fix the
-            // operator cannot make from here, so it says where to go.
-            var hint = r.state === "blocked"
-              ? '<br><span class="muted">Your key is fine. This is your account with the provider — check its billing, plan or rate limits.</span>'
-              : "";
-            showDetail(id, '<div class="banner ' + kind + '" role="status"><strong>' + h(r.state) + "</strong> — " + h(r.detail) + hint + "</div>");
+            showDetail(id,
+              '<div class="banner ' + kind + '" role="status">' +
+              "<strong>" + h(r.headline) + "</strong>" +
+              (r.detail ? '<br><span class="mono" style="font-size:11.5px">' + h(r.detail) + "</span>" : "") +
+              (r.status ? '<br><span class="muted" style="font-size:11px">HTTP ' + h(r.status) + "</span>" : "") +
+              "</div>");
             var stateEl = document.querySelector("#key-row-" + CSS.escape(id) + " .key-state");
             if (stateEl) stateEl.textContent = r.state;
           })

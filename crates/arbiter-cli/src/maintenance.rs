@@ -436,12 +436,12 @@ pub async fn keys_test_command(provider: Option<String>) -> anyhow::Result<()> {
     let mut any_rejected = false;
     for provider in targets {
         let outcome = crate::verify::verify(&provider).await;
-        println!(
-            "{}: {} -- {}",
-            provider.as_str(),
-            outcome.state(),
-            outcome.detail()
-        );
+        println!("{}: {}", provider.as_str(), outcome.state());
+        println!("  {}", outcome.headline(provider.as_str()));
+        let detail = outcome.detail();
+        if !detail.is_empty() {
+            println!("  {detail}");
+        }
         if matches!(outcome.state(), "rejected" | "blocked") {
             any_rejected = true;
         }

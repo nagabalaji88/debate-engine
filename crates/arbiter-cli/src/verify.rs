@@ -90,24 +90,51 @@ impl Verification {
         }
     }
 
+    /// One short sentence saying what this means for the operator, separate
+    /// from the vendor's own words. Two lines that both said "your key is
+    /// fine" read as padding; this is the only place that framing appears.
+    pub(crate) fn headline(&self, provider: &str) -> String {
+        match self {
+            Verification::Verified { cached: true, .. } => {
+                "Verified — checked within the last 24 hours.".to_string()
+            }
+            Verification::Verified { .. } => "Verified — the key works.".to_string(),
+            Verification::Rejected { .. } => {
+                format!("{provider} refused this key. Replace it.")
+            }
+            Verification::Blocked { .. } => {
+                format!(
+                    "Your key works. {provider} refused the request — check that account's billing, plan or rate limits."
+                )
+            }
+            Verification::Unreachable { .. } => {
+                format!(
+                    "Could not reach {provider} at all — nothing here says whether the key is good."
+                )
+            }
+            Verification::NoKey => "No key configured for this provider.".to_string(),
+        }
+    }
+
+    /// What the vendor (or the transport) actually said, with no framing of
+    /// our own wrapped around it.
     pub(crate) fn detail(&self) -> String {
         match self {
-            Verification::Verified { model, cached } => {
-                if *cached {
-                    format!("{model} (cached — verified within the last 24h)")
-                } else {
-                    model.clone()
-                }
+            Verification::Verified { model, .. } => model.clone(),
+            Verification::Rejected { message, .. }
+            | Verification::Blocked { message, .. }
+            | Verification::Unreachable { message } => message.clone(),
+            Verification::NoKey => String::new(),
+        }
+    }
+
+    /// The HTTP status, when a vendor answered with one.
+    pub(crate) fn status(&self) -> Option<u16> {
+        match self {
+            Verification::Rejected { status, .. } | Verification::Blocked { status, .. } => {
+                Some(*status)
             }
-            // The distinction is the whole point of the state, so it is said
-            // out loud rather than left to be inferred from a status code.
-            Verification::Blocked { message, .. } => {
-                format!("the key was accepted, but the request was refused — {message}")
-            }
-            Verification::Rejected { message, .. } | Verification::Unreachable { message } => {
-                message.clone()
-            }
-            Verification::NoKey => "no key configured".to_string(),
+            _ => None,
         }
     }
 }
@@ -240,7 +267,12 @@ mod tests {
     async fn a_provider_with_no_key_says_so_rather_than_calling_anything() {
         let v = verify(&ProviderId::new("anthropic")).await;
         assert_eq!(v.state(), "missing");
-        assert_eq!(v.detail(), "no key configured");
+        assert_eq!(
+            v.detail(),
+            "",
+            "nothing was called, so there is nothing to quote"
+        );
+        assert!(v.headline("anthropic").contains("No key configured"));
     }
 
     /// The defect this state exists for: a live Anthropic key with an empty
@@ -254,12 +286,16 @@ mod tests {
             message: "anthropic HTTP 400 Bad Request: Your credit balance is too low".to_string(),
         };
         assert_eq!(blocked.state(), "blocked");
-        assert!(
-            blocked.detail().contains("the key was accepted"),
-            "a blocked result must say the key is not the problem: {}",
-            blocked.detail()
+        assert_eq!(blocked.status(), Some(400));
+        // The framing is ours and says the key is fine; the detail is the
+        // vendor's own sentence, unwrapped and unparaphrased.
+        let headline = blocked.headline("anthropic");
+        assert!(headline.contains("Your key works"), "{headline}");
+        assert!(headline.contains("billing"), "{headline}");
+        assert_eq!(
+            blocked.detail(),
+            "anthropic HTTP 400 Bad Request: Your credit balance is too low"
         );
-        assert!(blocked.detail().contains("credit balance"));
     }
 
     /// Only the two statuses HTTP reserves for authentication mean the key
@@ -296,13 +332,21 @@ mod tests {
             message: "anthropic HTTP 401 Unauthorized".to_string(),
         };
         assert_eq!(rejected.state(), "rejected");
-        assert!(rejected.detail().contains("401"));
+        assert!(
+            rejected.headline("anthropic").contains("Replace it"),
+            "a refused key must say what to do: {}",
+            rejected.headline("anthropic")
+        );
 
         let cached = Verification::Verified {
             model: "claude-sonnet-4-5".to_string(),
             cached: true,
         };
-        assert!(cached.detail().contains("claude-sonnet-4-5"));
-        assert!(cached.detail().contains("cached"), "{}", cached.detail());
+        assert_eq!(cached.detail(), "claude-sonnet-4-5");
+        assert!(
+            cached.headline("anthropic").contains("24 hours"),
+            "{}",
+            cached.headline("anthropic")
+        );
     }
 }

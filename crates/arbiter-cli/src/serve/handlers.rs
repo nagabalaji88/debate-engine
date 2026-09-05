@@ -628,7 +628,13 @@ pub(crate) async fn test_provider(Path(provider): Path<String>) -> Response {
     Json(serde_json::json!({
         "id": provider.as_str(),
         "state": outcome.state(),
+        // Three separate fields, not one prose blob: the page renders the
+        // headline as its own line, the vendor's sentence as the body, and the
+        // status as small print. Joining them here would force the page to
+        // split them apart again.
+        "headline": outcome.headline(provider.as_str()),
         "detail": outcome.detail(),
+        "status": outcome.status(),
     }))
     .into_response()
 }

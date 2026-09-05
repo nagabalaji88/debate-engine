@@ -64,20 +64,59 @@ pub(crate) fn request_id_of(response: &reqwest::Response) -> Option<String> {
     })
 }
 
-/// A non-2xx response. The body is included because every one of these vendors
-/// puts the actionable part (`model not found`, `invalid_api_key`, a rate-limit
-/// reason) in the body, not the status line — but truncated, since an HTML
-/// error page from a proxy in front of the API can be enormous.
+/// The sentence a vendor actually wrote, dug out of whatever envelope it
+/// wrapped it in.
+///
+/// Every one of these APIs puts the useful part — "Your credit balance is too
+/// low", "model not found", a rate-limit reason — in a JSON body, and each
+/// wraps it differently. Passing the raw body through meant an operator read
+/// `{"type":"error","error":{"type":"invalid_request_error","message":"Your
+/// credit balance is too low..."},"request_id":"req_011..."}` when the useful
+/// half of that is one sentence. The shapes, in the order tried:
+///
+/// ```jsonc
+/// {"error": {"message": "..."}}   // OpenAI, xAI, DeepSeek, Gemini, Anthropic
+/// {"message": "..."}              // some gateways and proxies
+/// {"error": "..."}                // a bare string, seen from proxies
+/// ```
+///
+/// Returns `None` when the body is not JSON or carries no message anywhere
+/// this knows to look — an HTML error page from a load balancer, say — and
+/// the caller falls back to the raw body so nothing is ever swallowed.
+pub(crate) fn message_in(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    for pointer in ["/error/message", "/message", "/error/detail", "/detail"] {
+        if let Some(text) = value.pointer(pointer).and_then(|v| v.as_str()) {
+            let text = text.trim();
+            if !text.is_empty() {
+                return Some(text.to_string());
+            }
+        }
+    }
+    // `{"error": "a bare string"}`
+    value
+        .get("error")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// A non-2xx response, rendered as the vendor's own sentence where one can be
+/// found and the raw body otherwise. Truncated either way: an HTML error page
+/// from a proxy in front of the API can be enormous.
 pub(crate) fn status_error(
     provider: &str,
     status: reqwest::StatusCode,
     body: &str,
 ) -> ProviderError {
-    let mut body = body.trim().to_string();
-    body.truncate(400);
+    let mut detail = message_in(body).unwrap_or_else(|| body.trim().to_string());
+    if detail.chars().count() > 400 {
+        detail = detail.chars().take(400).collect::<String>() + "…";
+    }
     ProviderError::Http {
         status: status.as_u16(),
-        message: format!("{provider} HTTP {status}: {body}"),
+        message: format!("{provider} HTTP {status}: {detail}"),
     }
 }
 
@@ -125,6 +164,61 @@ mod tests {
         assert_eq!(optional_u64(&body, "/usage/input_tokens"), 12);
         assert_eq!(optional_u64(&body, "/usage/output_tokens"), 0);
         assert_eq!(optional_u64(&body, "/nothing/here"), 0);
+    }
+
+    /// The exact envelope that prompted this: a live Anthropic key with an
+    /// exhausted balance. The operator needs the sentence, not the wrapper.
+    #[test]
+    fn anthropics_error_envelope_yields_its_sentence() {
+        let body = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."},"request_id":"req_011CejXCLm12kCqVoBCCSuMN"}"#;
+        assert_eq!(
+            message_in(body).as_deref(),
+            Some(
+                "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."
+            )
+        );
+        let rendered =
+            status_error("anthropic", reqwest::StatusCode::BAD_REQUEST, body).to_string();
+        assert!(rendered.contains("credit balance is too low"), "{rendered}");
+        assert!(
+            !rendered.contains("request_id") && !rendered.contains("invalid_request_error"),
+            "the envelope must not survive into the message: {rendered}"
+        );
+    }
+
+    #[test]
+    fn every_vendor_envelope_shape_is_understood() {
+        // OpenAI / xAI / DeepSeek
+        assert_eq!(
+            message_in(r#"{"error":{"message":"Incorrect API key provided","type":"invalid_request_error","code":"invalid_api_key"}}"#).as_deref(),
+            Some("Incorrect API key provided")
+        );
+        // Gemini
+        assert_eq!(
+            message_in(r#"{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT"}}"#).as_deref(),
+            Some("API key not valid.")
+        );
+        // A gateway that puts it at the top level
+        assert_eq!(
+            message_in(r#"{"message":"upstream timed out"}"#).as_deref(),
+            Some("upstream timed out")
+        );
+        // A bare string
+        assert_eq!(
+            message_in(r#"{"error":"service unavailable"}"#).as_deref(),
+            Some("service unavailable")
+        );
+    }
+
+    /// Nothing is ever swallowed: a body this cannot parse still reaches the
+    /// operator whole, because an unrecognised shape is exactly when they most
+    /// need to see it.
+    #[test]
+    fn an_unparseable_body_falls_back_to_itself() {
+        let html = "<html><body>502 Bad Gateway</body></html>";
+        assert_eq!(message_in(html), None);
+        let rendered = status_error("openai", reqwest::StatusCode::BAD_GATEWAY, html).to_string();
+        assert!(rendered.contains("502 Bad Gateway"), "{rendered}");
     }
 
     #[test]

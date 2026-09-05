@@ -1057,7 +1057,7 @@ async fn the_keys_screen_can_add_and_test_a_key() {
     .await;
     let result = text_of(&page, "#key-detail-openai").await;
     assert!(
-        result.contains("no key configured"),
+        result.contains("No key configured"),
         "the result must say why: {result}"
     );
 }
