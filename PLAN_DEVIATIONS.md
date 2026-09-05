@@ -2988,6 +2988,18 @@ answered.
   completion — the question that actually matters. Nothing depends on the
   probe succeeding.
 
+Confirmed afterwards from the other tool's own UI, which reports
+**"key is valid — 73 chat models reachable (does not check remaining quota)"**.
+That is the same distinction in its own words: its check establishes validity
+and says so honestly, and it never claimed to test whether the account can run
+anything. Nothing was wrong in either tool — the two answered different
+questions and neither screen said which.
+
+So this one now says what it proved, rather than only that it passed:
+"Verified — a real completion succeeded, so the key works and the account can
+run inference." A reader holding both screens can see which is the stronger
+claim without having to know how either was implemented.
+
 Verified: a deliberately invalid Anthropic key is now reported `rejected` by
 the listing call alone, with the vendor's own "API key is invalid." and no
 completion spent. The `blocked`-with-proof path cannot be exercised here — it

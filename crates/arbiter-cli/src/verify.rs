@@ -101,9 +101,11 @@ impl Verification {
     pub(crate) fn headline(&self, provider: &str) -> String {
         match self {
             Verification::Verified { cached: true, .. } => {
-                "Verified — checked within the last 24 hours.".to_string()
+                "Verified — a real completion succeeded within the last 24 hours.".to_string()
             }
-            Verification::Verified { .. } => "Verified — the key works.".to_string(),
+            Verification::Verified { .. } => {
+                "Verified — a real completion succeeded, so the key works and the account can run inference.".to_string()
+            }
             Verification::Rejected { .. } => {
                 format!("{provider} refused this key. Replace it.")
             }
@@ -448,6 +450,13 @@ mod tests {
             cached: true,
         };
         assert_eq!(cached.detail(), "claude-sonnet-4-5");
+        assert!(
+            cached
+                .headline("anthropic")
+                .contains("completion succeeded"),
+            "a verification must say what it proved, not just that it passed: {}",
+            cached.headline("anthropic")
+        );
         assert!(
             cached.headline("anthropic").contains("24 hours"),
             "{}",
