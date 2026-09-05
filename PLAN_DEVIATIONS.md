@@ -2899,3 +2899,65 @@ path, `mock` verifying without a socket, and both endpoints sitting behind
 admission. What is still unverified is unchanged from D51: no *successful*
 verification against a real vendor, which needs a valid key this environment
 does not have — the `Verified` arm is exercised only through `mock`.
+
+## D55 — credential handling compared against `master-prompt-generator`, and what was worth taking
+
+At the user's request, this codebase's API-key logic was compared against
+`nagabalaji88/testavatar`'s `master-prompt-generator` (branch
+`claude/master-prompt-generator-5bfovx`), which solves the same problem for a
+multi-user server app. Four things came back; one of them was a real bug here.
+
+**Adopted.**
+
+- **A blank credential is a missing one, not an empty one.** Their
+  `_api_key_for` guards this explicitly ("passing `""` to litellm reads as 'no
+  auth' on some providers and as a malformed header on others"). This codebase
+  did not: `ARBITER_ANTHROPIC_API_KEY=` reported the provider as **present**,
+  sent an empty `x-api-key`, and the Keys screen then told the operator their
+  key was *rejected* — pointing at the wrong thing entirely. Worse, because
+  §11.1 reads the environment before the keychain, a blank variable in a shell
+  profile silently **shadowed** a perfectly good stored key. Both sources now
+  trim and treat blank as absent. Trimming also catches
+  `export KEY=$(cat keyfile)`, whose trailing newline travels into the header.
+- **A status-aware explanation.** Their `_describe_http_error` notes that "401
+  means the key is wrong while 429 means the key is fine and the account is out
+  of quota, and those have opposite fixes". D54's `Blocked` had the right shape
+  but one headline for every non-auth status, so a 404 (the plan does not
+  include this model) and a 503 (the vendor is down) both told the operator to
+  check their credit balance. The headline now follows the status.
+- **Where to get a key.** Their provider-family table carries a `console_url`
+  per family. A screen that says "no key configured" and offers a box to paste
+  one into is half an answer if the reader does not know where the key comes
+  from; `console_url_for` now sits beside the Add-key form.
+- **Say when a stored key is outranked.** Their store deliberately puts the
+  database above the environment, reasoning that "a key an admin has just typed
+  into the UI has to take effect, and if a stale environment variable outranked
+  it the edit would silently do nothing". That trap is live here now that the
+  Keys screen can write to the keychain — but §11.1 fixes the resolution order
+  with the environment first, and that is not this endpoint's to change. So the
+  write reports its `effective_source`, and the page says "Saved to the
+  keychain — but env:ANTHROPIC_API_KEY is still what gets used" rather than
+  reloading unchanged and looking broken.
+
+**Deliberately not adopted.**
+
+- **Encrypted-at-rest database storage.** Theirs is right for a multi-user
+  server: several replicas, an admin UI, no OS keychain to reach. It costs an
+  encryption-key lifecycle they document honestly — deriving from
+  `JWT_SECRET_KEY` when `CREDENTIAL_ENCRYPTION_KEY` is unset, and every stored
+  credential becoming undecryptable if that secret rotates. A single-user local
+  CLI has a strictly better option already: the OS keychain, where the platform
+  owns the key material and no backup or `pg_dump` can contain a provider key.
+- **Provider families and aliases** (`claude` → `anthropic`). Friendly, and
+  cheap in their design because a family is already a first-class record. Here
+  a provider id is simultaneously a keychain username, an environment-variable
+  stem, a `--panel` token and a verification-cache key; introducing a second
+  accepted spelling means normalising at every one of those or having two
+  spellings resolve to two different keychain entries. Not worth it for the
+  spelling convenience alone.
+
+Verified: `ARBITER_ANTHROPIC_API_KEY=` now reports `missing` where it reported
+`present`, and `ARBITER_ANTHROPIC_API_KEY="  " ANTHROPIC_API_KEY=sk-ant-real`
+resolves to the real key rather than the blank one. Six new tests cover blank
+and whitespace-only values, the shadowing case, whitespace trimming, the
+per-status headlines, and that every runnable provider has a console URL.

@@ -102,10 +102,18 @@ impl Verification {
             Verification::Rejected { .. } => {
                 format!("{provider} refused this key. Replace it.")
             }
-            Verification::Blocked { .. } => {
-                format!(
-                    "Your key works. {provider} refused the request — check that account's billing, plan or rate limits."
-                )
+            Verification::Blocked { status, .. } => {
+                let because = match status {
+                    // The two the vendors actually use for "you are out of
+                    // credit": Anthropic answers 400 with a billing message,
+                    // most others use 402.
+                    400 | 402 => "check that account's billing or credit balance",
+                    404 => "the account or plan may not include this model",
+                    408 | 429 => "it is rate limited or out of quota — try again shortly",
+                    500..=599 => "the provider is having trouble at their end, not yours",
+                    _ => "check that account's billing, plan or limits",
+                };
+                format!("Your key works. {provider} refused the request — {because}.")
             }
             Verification::Unreachable { .. } => {
                 format!(
@@ -296,6 +304,35 @@ mod tests {
             blocked.detail(),
             "anthropic HTTP 400 Bad Request: Your credit balance is too low"
         );
+    }
+
+    /// A 404 is not a billing problem and a 503 is not the operator's problem
+    /// at all. One headline for every non-auth status sent people to check a
+    /// credit balance that was never the issue.
+    #[test]
+    fn a_blocked_headline_names_the_actual_cause() {
+        let cases = [
+            (400u16, "billing or credit balance"),
+            (402, "billing or credit balance"),
+            (404, "may not include this model"),
+            (429, "rate limited"),
+            (503, "trouble at their end"),
+        ];
+        for (status, expected) in cases {
+            let headline = Verification::Blocked {
+                status,
+                message: String::new(),
+            }
+            .headline("anthropic");
+            assert!(
+                headline.contains(expected),
+                "HTTP {status} should say {expected:?}: {headline}"
+            );
+            assert!(
+                headline.contains("Your key works"),
+                "every blocked headline must clear the key: {headline}"
+            );
+        }
     }
 
     /// Only the two statuses HTTP reserves for authentication mean the key

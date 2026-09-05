@@ -1411,6 +1411,8 @@
     app.querySelectorAll("[data-setkey]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var id = btn.getAttribute("data-setkey");
+        var row = providers.filter(function (p) { return p.id === id; })[0] || {};
+        var consoleUrl = row.console_url;
         showDetail(id,
           '<form class="key-form" data-provider="' + h(id) + '">' +
           '<label for="key-input-' + h(id) + '">API key for ' + h(id) + "</label>" +
@@ -1419,7 +1421,8 @@
           '<div style="flex:0 0 auto"><button type="submit" class="btn-primary">Save to keychain</button> ' +
           '<button type="button" class="ghost" data-cancel>Cancel</button></div>' +
           "</div>" +
-          '<p class="sub" style="margin:8px 0 0">Stored in the OS keychain, the same place <code>arbiter keys set</code> puts it. Never written to a file here, never shown again.</p>' +
+          '<p class="sub" style="margin:8px 0 0">Stored in the OS keychain, the same place <code>arbiter keys set</code> puts it. Never written to a file here, never shown again.' +
+          (consoleUrl ? ' <a href="' + h(consoleUrl) + '" target="_blank" rel="noopener noreferrer">Get a key for ' + h(id) + " →</a>" : "") + "</p>" +
           '<div class="key-form-msg"></div>' +
           "</form>");
         var form = document.querySelector("#key-detail-" + CSS.escape(id) + " .key-form");
@@ -1440,10 +1443,19 @@
           save.disabled = true;
           save.innerHTML = '<span class="spinner" aria-hidden="true"></span>Saving…';
           api("/api/providers/" + encodeURIComponent(id) + "/key", { method: "POST", body: { key: value } })
-            .then(function () {
+            .then(function (r) {
               // Clear the field before anything else: there is no reason for
               // the key to stay in the DOM once it is in the keychain.
               input.value = "";
+              if (r && r.shadowed_by) {
+                // Saved, but an environment variable still outranks it. Left
+                // unsaid, the operator sees the screen reload unchanged and
+                // concludes the form is broken.
+                showDetail(id,
+                  '<div class="banner warn" role="alert"><strong>Saved to the keychain — but ' + h(r.shadowed_by) + " is still what gets used.</strong>" +
+                  '<br><span class="muted">The environment is read before the keychain. Unset that variable in the terminal you launched from, then restart, for the key you just saved to take effect.</span></div>');
+                return;
+              }
               screenKeys();
             })
             .catch(function (e) {

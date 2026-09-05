@@ -21,6 +21,23 @@ use openai_compatible::Flavor;
 /// script by whoever needs it, never resolved from a credential.
 pub const REAL_PROVIDER_IDS: [&str; 5] = ["anthropic", "openai", "gemini", "xai", "deepseek"];
 
+/// Where an operator goes to get a key for this provider.
+///
+/// Borrowed from `master-prompt-generator`'s provider-family table, which
+/// pairs every family with its console URL: a screen that says "no key
+/// configured" and offers a box to paste one into is only half an answer if
+/// the reader does not know where the key comes from.
+pub fn console_url_for(provider: &ProviderId) -> Option<&'static str> {
+    Some(match provider.as_str() {
+        "anthropic" => "https://console.anthropic.com/settings/keys",
+        "openai" => "https://platform.openai.com/api-keys",
+        "gemini" => "https://aistudio.google.com/app/apikey",
+        "xai" => "https://console.x.ai",
+        "deepseek" => "https://platform.deepseek.com/api_keys",
+        _ => return None,
+    })
+}
+
 /// The default model for a provider named without one.
 pub fn default_model_for(provider: &ProviderId) -> Option<ModelId> {
     Some(match provider.as_str() {
@@ -70,6 +87,17 @@ pub fn build_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_runnable_provider_says_where_to_get_a_key() {
+        for id in REAL_PROVIDER_IDS {
+            assert!(
+                console_url_for(&ProviderId::new(id)).is_some(),
+                "{id} can be run but the UI cannot say where its key comes from"
+            );
+        }
+        assert!(console_url_for(&ProviderId::new("mock")).is_none());
+    }
 
     #[test]
     fn every_listed_provider_can_actually_be_built() {

@@ -515,6 +515,7 @@ pub(crate) async fn list_providers() -> Response {
                     "fingerprint": null,
                     "usable": false,
                     "models": models,
+                    "console_url": arbiter_providers::console_url_for(&provider),
                 }),
             }
         })
@@ -702,10 +703,29 @@ pub(crate) async fn set_provider_key(
         );
     }
 
+    // ARCHITECTURE §11.1 puts the environment ahead of the keychain, so a key
+    // stored here can be outranked by a variable the operator forgot they
+    // exported — and their edit then silently does nothing. That resolution
+    // order is not this endpoint's to change, so it reports what will actually
+    // be used and lets the page say so.
+    let (env, keychain) = crate::maintenance::credential_sources();
+    let sources: [&dyn CredentialSource; 2] = [&env, &keychain];
+    let effective = sources
+        .iter()
+        .find_map(|s| s.resolve(&provider))
+        .map(|(_, source)| describe_source(&source));
+    let shadowed_by = match effective.as_deref() {
+        Some(source) if source != "keychain" => Some(source.to_string()),
+        _ => None,
+    };
+
     Json(serde_json::json!({
         "id": provider.as_str(),
         "state": "present",
         "fingerprint": &fingerprint[fingerprint.len().saturating_sub(4)..],
+        "effective_source": effective,
+        // Non-null means: stored fine, but this other source still wins.
+        "shadowed_by": shadowed_by,
     }))
     .into_response()
 }

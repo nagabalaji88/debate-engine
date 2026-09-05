@@ -142,15 +142,38 @@ fn resolve_from_env(
     provider: &ProviderId,
 ) -> Option<(SecretString, KeySource)> {
     let arbiter_var = format!("ARBITER_{}_API_KEY", provider.as_str().to_uppercase());
-    if let Some(value) = lookup(&arbiter_var) {
+    if let Some(value) = lookup(&arbiter_var).and_then(non_blank) {
         return Some((SecretString::new(value), KeySource::ArbiterEnv(arbiter_var)));
     }
     let provider_var = conventional_env_var(provider)?;
-    let value = lookup(provider_var)?;
+    let value = lookup(provider_var).and_then(non_blank)?;
     Some((
         SecretString::new(value),
         KeySource::ProviderEnv(provider_var.to_string()),
     ))
+}
+
+/// A variable that is set but empty is a *missing* credential, not an empty
+/// one, and the distinction is load-bearing twice over.
+///
+/// An empty string sent as a bearer token or an `x-api-key` header reads as
+/// "no auth" to some providers and as a malformed header to others; both fail
+/// later, with a worse error than "no key configured" and pointing at the
+/// wrong thing — the operator is told to replace a key when the real problem
+/// is that their variable never got a value.
+///
+/// Worse, without this an `export ANTHROPIC_API_KEY=` in a shell profile
+/// silently *shadows* a perfectly good keychain entry: the environment is
+/// consulted first, it answers, and the key that would have worked is never
+/// reached. Trimming is deliberate too — a trailing newline from
+/// `export KEY=$(cat file)` is the same mistake wearing a different hat.
+fn non_blank(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 /// Source 3: the OS keychain, via `keyring` — the one cross-platform crate
@@ -188,7 +211,9 @@ impl KeychainCredentialSource {
 impl CredentialSource for KeychainCredentialSource {
     fn resolve(&self, provider: &ProviderId) -> Option<(SecretString, KeySource)> {
         let entry = Self::entry(provider).ok()?;
-        let value = entry.get_password().ok()?;
+        // Same rule as the environment: a blank entry is no entry. A keychain
+        // can hold an empty string just as a shell can export one.
+        let value = non_blank(entry.get_password().ok()?)?;
         Some((SecretString::new(value), KeySource::Keychain))
     }
 }
@@ -448,6 +473,52 @@ mod tests {
         fn resolve(&self, provider: &ProviderId) -> Option<(SecretString, KeySource)> {
             resolve_from_env(|name| self.0.get(name).cloned(), provider)
         }
+    }
+
+    /// A variable that is set but empty is not a credential. The dangerous
+    /// half of this is the shadowing: the environment is consulted before the
+    /// keychain, so without the blank check an `export ANTHROPIC_API_KEY=` in
+    /// a shell profile makes a perfectly good stored key unreachable, and the
+    /// operator is told their key was rejected.
+    #[test]
+    fn a_blank_env_var_is_a_missing_credential_not_an_empty_one() {
+        let provider = ProviderId::new("anthropic");
+        for blank in ["", "   ", "\n", "\t \n"] {
+            let env = FakeEnvSource(BTreeMap::from([(
+                "ARBITER_ANTHROPIC_API_KEY".to_string(),
+                blank.to_string(),
+            )]));
+            assert!(
+                env.resolve(&provider).is_none(),
+                "{blank:?} must not resolve as a key"
+            );
+        }
+    }
+
+    #[test]
+    fn a_blank_arbiter_var_does_not_shadow_the_providers_own() {
+        let provider = ProviderId::new("anthropic");
+        let env = FakeEnvSource(BTreeMap::from([
+            ("ARBITER_ANTHROPIC_API_KEY".to_string(), "  ".to_string()),
+            ("ANTHROPIC_API_KEY".to_string(), "real-key".to_string()),
+        ]));
+        let (secret, source) = env.resolve(&provider).expect("the real key must win");
+        assert_eq!(secret.expose(), "real-key");
+        assert!(matches!(source, KeySource::ProviderEnv(_)));
+    }
+
+    /// `export KEY=$(cat keyfile)` carries the file's trailing newline, which
+    /// travels into the auth header and is rejected by some providers with a
+    /// message that says nothing about whitespace.
+    #[test]
+    fn surrounding_whitespace_is_trimmed_off_a_key() {
+        let provider = ProviderId::new("anthropic");
+        let env = FakeEnvSource(BTreeMap::from([(
+            "ARBITER_ANTHROPIC_API_KEY".to_string(),
+            "  sk-ant-value\n".to_string(),
+        )]));
+        let (secret, _) = env.resolve(&provider).unwrap();
+        assert_eq!(secret.expose(), "sk-ant-value");
     }
 
     #[test]
