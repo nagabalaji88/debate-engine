@@ -328,3 +328,100 @@ async fn sse_resumes_from_last_event_id() {
         );
     }
 }
+
+/// `setting_a_key_refuses_what_it_cannot_store`: the three inputs that must
+/// never reach the OS keychain — `mock` (which needs no key), a provider this
+/// build cannot reach, and an empty value. Each is refused before any
+/// keychain call is attempted, so a typo never leaves a half-written entry.
+#[tokio::test]
+async fn setting_a_key_refuses_what_it_cannot_store() {
+    let server = start_server().await;
+    let cases = [
+        ("mock", "sk-whatever", "needs no key"),
+        ("bard", "sk-whatever", "not a provider this build can reach"),
+        ("anthropic", "   ", "must not be empty"),
+    ];
+    for (provider, key, expected) in cases {
+        let resp = client()
+            .post(format!("{}/api/providers/{provider}/key", server.origin))
+            .header("X-Arbiter-Token", server.token.as_ref())
+            .header("Host", server.origin.trim_start_matches("http://"))
+            .json(&serde_json::json!({"key": key}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "{provider} should be refused"
+        );
+        let body = resp.text().await.unwrap();
+        assert!(body.contains(expected), "{provider}: {body}");
+        assert!(
+            !body.contains("sk-whatever"),
+            "a refusal must not echo the key back: {body}"
+        );
+    }
+}
+
+/// `testing_a_provider_without_a_key_spends_nothing`: `POST .../test` answers
+/// `200` with a state rather than an error — "there is no key" is a fact it
+/// established, not a failed request — and never opens a socket to do it.
+#[tokio::test]
+async fn testing_a_provider_without_a_key_spends_nothing() {
+    let server = start_server().await;
+    let resp = client()
+        .post(format!("{}/api/providers/openai/test", server.origin))
+        .header("X-Arbiter-Token", server.token.as_ref())
+        .header("Host", server.origin.trim_start_matches("http://"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["state"], "missing");
+    assert_eq!(body["detail"], "no key configured");
+}
+
+/// `testing_mock_is_verified_without_a_socket`: the synthetic panel is always
+/// usable, and proving it must never cost a request.
+#[tokio::test]
+async fn testing_mock_is_verified_without_a_socket() {
+    let server = start_server().await;
+    let resp = client()
+        .post(format!("{}/api/providers/mock/test", server.origin))
+        .header("X-Arbiter-Token", server.token.as_ref())
+        .header("Host", server.origin.trim_start_matches("http://"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["state"], "verified");
+}
+
+/// `key_endpoints_are_behind_admission`: both new endpoints spend money or
+/// write a credential, so neither may be reachable without the token — the
+/// same rule every other endpoint follows, checked here because these two
+/// were added after the admission tests were written.
+#[tokio::test]
+async fn key_endpoints_are_behind_admission() {
+    let server = start_server().await;
+    for path in [
+        "/api/providers/anthropic/test",
+        "/api/providers/anthropic/key",
+    ] {
+        let resp = client()
+            .post(format!("{}{path}", server.origin))
+            .header("Host", server.origin.trim_start_matches("http://"))
+            .json(&serde_json::json!({"key": "sk-should-never-be-stored"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::FORBIDDEN,
+            "{path} must refuse a request with no token"
+        );
+    }
+}

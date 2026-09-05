@@ -75,7 +75,10 @@ pub(crate) fn status_error(
 ) -> ProviderError {
     let mut body = body.trim().to_string();
     body.truncate(400);
-    ProviderError::Other(format!("{provider} HTTP {status}: {body}"))
+    ProviderError::Http {
+        status: status.as_u16(),
+        message: format!("{provider} HTTP {status}: {body}"),
+    }
 }
 
 /// Reads a JSON field that must be present for the response to be usable at

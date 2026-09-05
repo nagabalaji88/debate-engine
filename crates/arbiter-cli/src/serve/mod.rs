@@ -141,6 +141,10 @@ pub(crate) fn router(state: AppState) -> Router {
             "/api/providers/{provider}/test",
             post(handlers::test_provider),
         )
+        .route(
+            "/api/providers/{provider}/key",
+            post(handlers::set_provider_key),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             admission::admission,

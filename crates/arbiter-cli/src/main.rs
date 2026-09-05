@@ -10,6 +10,7 @@ mod resume_replay;
 mod run_handle;
 mod serve;
 mod synthetic;
+mod verify;
 
 use arbiter_core::{Policy, RunId};
 use arbiter_kernel::bounds::{Bounds, Depth};
@@ -355,12 +356,14 @@ async fn main() -> anyhow::Result<()> {
         Command::Keys { action } => match action {
             KeysAction::List => maintenance::keys_list_command(),
             KeysAction::Set { provider } => maintenance::keys_set_command(provider),
-            KeysAction::Test { .. } => maintenance::keys_test_unimplemented(),
+            KeysAction::Test { provider } => maintenance::keys_test_command(provider).await,
             KeysAction::Rm { provider } => maintenance::keys_rm_command(provider),
         },
         Command::Providers { action } => match action {
             ProvidersAction::List => maintenance::providers_list_command(),
-            ProvidersAction::Test { .. } => maintenance::providers_test_unimplemented(),
+            ProvidersAction::Test { provider } => {
+                maintenance::providers_test_command(provider).await
+            }
         },
         Command::Serve {
             bind,

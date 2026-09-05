@@ -616,13 +616,90 @@ fn describe_source(source: &arbiter_providers::keys::KeySource) -> String {
 }
 
 /// `POST /api/providers/:p/test` — **makes a paid request**, per the plan's
-/// own table; honestly refused here exactly as `arbiter providers test`
-/// refuses, since no real adapter (P4) exists in this build to make that
-/// request with.
-pub(crate) async fn test_provider(Path(_provider): Path<String>) -> Response {
-    err(
-        StatusCode::NOT_IMPLEMENTED,
-        "provider verification needs P4 (real provider adapters), not implemented in this build \
-         (PLAN_DEVIATIONS.md D46)",
-    )
+/// own table: one minimal completion through the real adapter, cached for 24h
+/// by key fingerprint (ARCHITECTURE §11.1). Shares its implementation with
+/// `arbiter keys test`, so the terminal and the page can never disagree about
+/// whether a key works.
+pub(crate) async fn test_provider(Path(provider): Path<String>) -> Response {
+    let provider = arbiter_core::ProviderId::new(provider.trim());
+    let outcome = crate::verify::verify(&provider).await;
+    // Always 200: "your key was refused" is a fact this endpoint successfully
+    // established, not a failure of the request. The page reads `state`.
+    Json(serde_json::json!({
+        "id": provider.as_str(),
+        "state": outcome.state(),
+        "detail": outcome.detail(),
+    }))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(crate) struct SetKeyBody {
+    #[serde(default)]
+    key: String,
+}
+
+/// `POST /api/providers/:p/key` — stores a key in the OS keychain, the same
+/// place `arbiter keys set` puts it.
+///
+/// The page used to refuse to carry a key at all, on the argument that it
+/// would sit in browser memory for no benefit. The benefit turned out to be
+/// real: an operator who has just been told "no key configured" on this
+/// screen should be able to fix it here, not be sent to a terminal to run a
+/// different program. The exposure is bounded by what already guards every
+/// other endpoint — a loopback-only bind, the per-process token, and the
+/// Origin/Sec-Fetch-Site checks in `admission` — and the key goes straight to
+/// the OS keychain rather than to any file this program writes.
+///
+/// The key never comes back out: the response carries only the resulting
+/// state and the last four characters of its fingerprint, exactly as
+/// `GET /api/providers` does. It is never logged, never echoed, and never put
+/// in a URL where a proxy or a browser history could keep it.
+pub(crate) async fn set_provider_key(
+    Path(provider): Path<String>,
+    Json(body): Json<SetKeyBody>,
+) -> Response {
+    let provider = arbiter_core::ProviderId::new(provider.trim());
+    if provider.as_str() == "mock" {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "`mock` needs no key — it is synthetic and opens no socket",
+        );
+    }
+    if arbiter_providers::default_model_for(&provider).is_none() {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "`{provider}` is not a provider this build can reach — known: {}",
+                arbiter_providers::REAL_PROVIDER_IDS.join(", ")
+            ),
+        );
+    }
+    let key = body.key.trim();
+    if key.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "the key must not be empty");
+    }
+
+    let secret = arbiter_providers::keys::SecretString::new(key);
+    let fingerprint = secret.fingerprint();
+    if let Err(e) = arbiter_providers::keys::KeychainCredentialSource::set(&provider, &secret) {
+        // The keychain error text can name the backend but never the value:
+        // `keyring`'s own errors do not carry the secret.
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "storing the key for {provider} in the OS keychain: {e} — this usually means no \
+                 keychain backend is reachable (no D-Bus Secret Service session on Linux). Set \
+                 ARBITER_{}_API_KEY in the terminal you launch from instead.",
+                provider.as_str().to_uppercase()
+            ),
+        );
+    }
+
+    Json(serde_json::json!({
+        "id": provider.as_str(),
+        "state": "present",
+        "fingerprint": &fingerprint[fingerprint.len().saturating_sub(4)..],
+    }))
+    .into_response()
 }

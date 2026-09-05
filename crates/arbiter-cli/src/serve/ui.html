@@ -1327,11 +1327,17 @@
     var real = providers.filter(function (p) { return p.state !== "not_required"; });
     var rows = real.map(function (p) {
       var dot = p.state === "verified" ? "ok" : p.state === "present" ? "warn" : "off";
-      return "<tr><td><span class=\"dot\" style=\"background:" + colorOf(p.id) + "\"></span> " + h(p.id) + "</td>" +
-        '<td><span class="dot ' + dot + '" aria-hidden="true"></span> ' + h(p.state) + "</td>" +
+      return '<tr id="key-row-' + h(p.id) + '"><td><span class="dot" style="background:' + colorOf(p.id) + '"></span> ' + h(p.id) + "</td>" +
+        '<td><span class="dot ' + dot + '" aria-hidden="true"></span> <span class="key-state">' + h(p.state) + "</span></td>" +
         "<td>" + (p.source ? h(p.source) : "—") + "</td>" +
         "<td>" + (p.fingerprint ? "…" + h(p.fingerprint) : "—") + "</td>" +
-        '<td><button type="button" class="link" data-recheck="' + h(p.id) + '">Re-check (costs one request)</button></td></tr>';
+        '<td style="white-space:nowrap">' +
+        '<button type="button" class="link" data-setkey="' + h(p.id) + '">' + (p.state === "missing" ? "Add key" : "Replace key") + "</button>" +
+        ' · <button type="button" class="link" data-recheck="' + h(p.id) + '">Test</button>' +
+        "</td></tr>" +
+        // The form and the result share a row of their own beneath the
+        // provider's, so revealing one never reflows the table's columns.
+        '<tr class="key-detail" id="key-detail-' + h(p.id) + '" hidden><td colspan="5"></td></tr>';
     }).join("");
 
     setScreen(
@@ -1353,24 +1359,94 @@
       "<div>bash/zsh&nbsp;&nbsp;&nbsp;&nbsp;export ANTHROPIC_API_KEY=&quot;sk-ant-…&quot;</div>" +
       "<div>keychain&nbsp;&nbsp;&nbsp;&nbsp;arbiter keys set anthropic</div>" +
       "</div>" +
-      '<p class="sub" style="margin:12px 0 0">Set them in the same terminal you launch from, then restart. Keys are never entered through this page — it would put them in a browser\'s memory and history for no benefit.</p>' +
+      '<p class="sub" style="margin:12px 0 0">Or use <strong>Add key</strong> above to store one in the OS keychain from here. A key set as an environment variable wins over the keychain, and only applies to the terminal you launch from.</p>' +
       "</div>"
     );
 
+    function detailCell(id) {
+      var row = document.getElementById("key-detail-" + id);
+      return { row: row, cell: row.querySelector("td") };
+    }
+    function showDetail(id, html) {
+      var d = detailCell(id);
+      d.cell.innerHTML = html;
+      d.row.hidden = false;
+    }
+
+    // ---- Test: one real, minimal request through the adapter. The endpoint
+    // answers 200 with a state even when the vendor refused the key, because
+    // "refused" is a fact it successfully established.
     app.querySelectorAll("[data-recheck]").forEach(function (btn) {
       btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-recheck");
         btn.disabled = true;
-        btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Checking…';
-        api("/api/providers/" + encodeURIComponent(btn.getAttribute("data-recheck")) + "/test", { method: "POST" })
-          .then(screenKeys)
+        var original = btn.textContent;
+        btn.innerHTML = '<span class="spinner" aria-hidden="true"></span>Testing…';
+        showDetail(id, '<span class="muted">Sending one minimal request to ' + h(id) + "…</span>");
+        api("/api/providers/" + encodeURIComponent(id) + "/test", { method: "POST" })
+          .then(function (r) {
+            btn.disabled = false;
+            btn.textContent = original;
+            var kind = r.state === "verified" ? "ok" : r.state === "rejected" ? "danger" : "warn";
+            showDetail(id, '<div class="banner ' + kind + '" role="status"><strong>' + h(r.state) + "</strong> — " + h(r.detail) + "</div>");
+            var stateEl = document.querySelector("#key-row-" + CSS.escape(id) + " .key-state");
+            if (stateEl) stateEl.textContent = r.state;
+          })
           .catch(function (e) {
             btn.disabled = false;
-            btn.textContent = "Re-check (costs one request)";
-            var msg = document.createElement("p");
-            msg.className = "field-error";
-            msg.textContent = (e.status ? "HTTP " + e.status + ": " : "") + e.message;
-            btn.insertAdjacentElement("afterend", msg);
+            btn.textContent = original;
+            showDetail(id, errorBanner(e));
           });
+      });
+    });
+
+    // ---- Add / replace a key. `type="password"` with autocomplete off: the
+    // value must not be shoulder-readable, and a browser has no business
+    // remembering it. It is POSTed in a body, never a URL.
+    app.querySelectorAll("[data-setkey]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var id = btn.getAttribute("data-setkey");
+        showDetail(id,
+          '<form class="key-form" data-provider="' + h(id) + '">' +
+          '<label for="key-input-' + h(id) + '">API key for ' + h(id) + "</label>" +
+          '<div class="row" style="align-items:flex-end">' +
+          '<input type="password" id="key-input-' + h(id) + '" autocomplete="off" spellcheck="false" placeholder="paste the key">' +
+          '<div style="flex:0 0 auto"><button type="submit" class="btn-primary">Save to keychain</button> ' +
+          '<button type="button" class="ghost" data-cancel>Cancel</button></div>' +
+          "</div>" +
+          '<p class="sub" style="margin:8px 0 0">Stored in the OS keychain, the same place <code>arbiter keys set</code> puts it. Never written to a file here, never shown again.</p>' +
+          '<div class="key-form-msg"></div>' +
+          "</form>");
+        var form = document.querySelector("#key-detail-" + CSS.escape(id) + " .key-form");
+        var input = document.getElementById("key-input-" + id);
+        if (input) input.focus();
+        form.querySelector("[data-cancel]").addEventListener("click", function () {
+          detailCell(id).row.hidden = true;
+        });
+        form.addEventListener("submit", function (ev) {
+          ev.preventDefault();
+          var value = input.value;
+          var msg = form.querySelector(".key-form-msg");
+          if (!value.trim()) {
+            msg.innerHTML = '<p class="field-error">Paste a key first.</p>';
+            return;
+          }
+          var save = form.querySelector("button[type=submit]");
+          save.disabled = true;
+          save.innerHTML = '<span class="spinner" aria-hidden="true"></span>Saving…';
+          api("/api/providers/" + encodeURIComponent(id) + "/key", { method: "POST", body: { key: value } })
+            .then(function () {
+              // Clear the field before anything else: there is no reason for
+              // the key to stay in the DOM once it is in the keychain.
+              input.value = "";
+              screenKeys();
+            })
+            .catch(function (e) {
+              save.disabled = false;
+              save.textContent = "Save to keychain";
+              msg.innerHTML = errorBanner(e);
+            });
+        });
       });
     });
   }

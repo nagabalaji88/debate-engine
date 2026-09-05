@@ -970,6 +970,98 @@ async fn keys_screen_never_renders_a_key() {
     );
 }
 
+/// `the_keys_screen_can_add_and_test_a_key`: the two things an operator with
+/// no key needs are on this screen, not in a terminal — a form to set one and
+/// a button to prove it works. The form must carry the key as a password
+/// field (not shoulder-readable, not remembered by the browser), and the
+/// value must leave the DOM once submitted.
+#[tokio::test]
+async fn the_keys_screen_can_add_and_test_a_key() {
+    let server = start_server("keys_add");
+    let (browser, _guard) = browser("keys_add").await;
+    let page = browser.new_page(server.url("#/keys")).await.unwrap();
+    wait_for(
+        &page,
+        "!!document.querySelector('[data-setkey]')",
+        "the Keys screen with its per-provider actions",
+    )
+    .await;
+
+    // Every real provider offers both actions; `mock` needs no key and so
+    // appears in neither list.
+    let counts: String = page
+        .evaluate(
+            "JSON.stringify({               set: document.querySelectorAll('[data-setkey]').length,                test: document.querySelectorAll('[data-recheck]').length,                mock: document.querySelectorAll('[data-setkey=\"mock\"]').length })",
+        )
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert!(counts.contains("\"set\":5"), "{counts}");
+    assert!(counts.contains("\"test\":5"), "{counts}");
+    assert!(
+        counts.contains("\"mock\":0"),
+        "mock must not offer a key form: {counts}"
+    );
+
+    // Opening the form reveals a password input, never a plain text one.
+    page.find_element("[data-setkey='anthropic']")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    wait_for(
+        &page,
+        "!!document.getElementById('key-input-anthropic')",
+        "the add-key form",
+    )
+    .await;
+    let field: String = page
+        .evaluate(
+            "JSON.stringify({ type: document.getElementById('key-input-anthropic').type,                autocomplete: document.getElementById('key-input-anthropic').getAttribute('autocomplete') })",
+        )
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert!(field.contains("\"type\":\"password\""), "{field}");
+    assert!(field.contains("\"autocomplete\":\"off\""), "{field}");
+
+    // An empty key is refused client-side, before a request is sent.
+    page.evaluate(
+        "document.querySelector('#key-detail-anthropic form').dispatchEvent(new Event('submit', {cancelable:true}))",
+    )
+    .await
+    .unwrap();
+    wait_for(
+        &page,
+        "!!document.querySelector('#key-detail-anthropic .field-error')",
+        "an empty key to be refused",
+    )
+    .await;
+
+    // Testing a keyless provider reports it rather than erroring, and spends
+    // nothing to find out.
+    page.find_element("[data-recheck='openai']")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+    wait_for(
+        &page,
+        "!!document.querySelector('#key-detail-openai .banner')",
+        "the test result for a keyless provider",
+    )
+    .await;
+    let result = text_of(&page, "#key-detail-openai").await;
+    assert!(
+        result.contains("no key configured"),
+        "the result must say why: {result}"
+    );
+}
+
 /// `every_screen_is_keyboard_navigable`: each screen has at least one
 /// real, focusable, non-pointer-only control reachable by Tab, and the
 /// question field is the first stop on screen 1 (`autofocus`).

@@ -425,11 +425,31 @@ pub fn keys_rm_command(provider: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn keys_test_unimplemented() -> anyhow::Result<()> {
-    anyhow::bail!(
-        "`arbiter keys test` needs P4 (real provider adapters) to make the one minimal request \
-         it verifies against -- not implemented in this build (PLAN_DEVIATIONS.md D46)"
-    )
+/// `arbiter keys test [provider]` -- **spends money**: one minimal completion
+/// per provider tested. With no provider named, every provider that has a key
+/// is tested and the ones without are reported, not called.
+pub async fn keys_test_command(provider: Option<String>) -> anyhow::Result<()> {
+    let targets: Vec<ProviderId> = match provider {
+        Some(p) => vec![ProviderId::new(p)],
+        None => known_providers(),
+    };
+    let mut any_rejected = false;
+    for provider in targets {
+        let outcome = crate::verify::verify(&provider).await;
+        println!(
+            "{}: {} -- {}",
+            provider.as_str(),
+            outcome.state(),
+            outcome.detail()
+        );
+        if outcome.state() == "rejected" {
+            any_rejected = true;
+        }
+    }
+    if any_rejected {
+        anyhow::bail!("at least one key was rejected by its provider");
+    }
+    Ok(())
 }
 
 pub fn providers_list_command() -> anyhow::Result<()> {
@@ -445,16 +465,17 @@ pub fn providers_list_command() -> anyhow::Result<()> {
         let state = arbiter_providers::keys::resolve_state(&sources, &provider);
         println!("  key: {}", describe_state(&state));
         println!(
-            "  usable: false (P4 real adapters not implemented in this build, \
-             PLAN_DEVIATIONS.md D46)"
+            "  usable: {} (a resolvable key; `arbiter providers test` spends one \
+             request to prove it works)",
+            matches!(state, arbiter_providers::keys::KeyState::Present { .. })
         );
     }
     Ok(())
 }
 
-pub fn providers_test_unimplemented() -> anyhow::Result<()> {
-    anyhow::bail!(
-        "`arbiter providers test` needs P4 (real provider adapters), which is not implemented \
-         in this build (PLAN_DEVIATIONS.md D46)"
-    )
+/// `arbiter providers test` is `keys test` under the roster's name -- the same
+/// one minimal request, reported the same way. Kept as its own command because
+/// the plan names both.
+pub async fn providers_test_command(provider: Option<String>) -> anyhow::Result<()> {
+    keys_test_command(provider).await
 }

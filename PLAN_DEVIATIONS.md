@@ -2810,3 +2810,60 @@ failed card and a keyless one), Debate with the panel picker and a live
 estimate, Usage with per-model token/latency/cost bars, and Keys. What is not
 verified is unchanged from D51: no successful real completion from any vendor,
 which needs a valid key this environment does not have.
+
+## D54 — key verification made real, and the Keys screen given the two controls it was missing
+
+`arbiter keys test`, `arbiter providers test` and `POST /api/providers/:p/test`
+had all refused honestly since L4: there was no adapter to make the one minimal
+request they verify against. P4 built the adapters, and this wires them up. The
+Keys screen also gained an **Add key** form at the user's request.
+
+- **`ProviderError` grew a structured variant.** Verification has to tell "this
+  key is wrong" (401/403 — the operator can fix it) from "the vendor is unwell"
+  (5xx — they can only wait) and from "we never reached them at all" (DNS, TLS,
+  a proxy), and recovering a status code by parsing a human-readable string
+  would be guesswork. `ProviderError::Http { status, message }` carries it.
+  Purely additive: 28 construction sites, zero of them destructuring.
+- **One verification path, two callers.** `verify.rs` is shared by the CLI
+  command and the serve endpoint, so the terminal and the page can never
+  disagree about whether a key works. It sends a four-token completion, not a
+  models-list call: several of these providers accept a key for listing that
+  they then reject for inference, so listing proves less than it appears to.
+- **Only an authentication failure is cached.** §11.1 asks for a 24h cache
+  keyed by fingerprint; caching a 429 or a 503 for a day would keep telling an
+  operator their key is bad long after the rate limit cleared.
+- **`POST .../test` answers `200` even when the key was refused.** "Your key is
+  rejected" is a fact the endpoint successfully established, not a failure of
+  the request; the page reads `state`.
+- **`Verification` is wider than `VerifyResult`.** The stored enum has only
+  `Verified` and `Rejected{status}`, and no way to say "never reached the
+  vendor" — collapsing an unreachable network into `Rejected` would tell an
+  operator to replace a key that is perfectly good. The wider enum is the API
+  shape; only the two cases §11.1 names are ever cached.
+
+**A reversal worth naming.** The Keys screen used to say, in copy I wrote:
+"Keys are never entered through this page — it would put them in a browser's
+memory and history for no benefit." The user asked for exactly that capability,
+and on inspection the "no benefit" half was wrong: an operator who has just
+been told "no key configured" *on this screen* should be able to fix it here,
+not be sent to a different program. The exposure is bounded by what already
+guards every other endpoint — loopback-only bind, per-process token, Host and
+Origin and `Sec-Fetch-Site` checks — and the key goes straight to the OS
+keychain, the same place `arbiter keys set` puts it, never to a file this
+program writes. The page carries it in a `type="password"` field with
+`autocomplete="off"`, POSTs it in a body (never a URL, where a proxy log or
+browser history would keep it), clears the field on success, and the response
+returns only the state and the last four characters of the fingerprint. The
+key is never logged and never echoed — `setting_a_key_refuses_what_it_cannot_store`
+asserts a refusal does not hand it back.
+
+Verified end to end against the live Anthropic API with a deliberately invalid
+key: the Keys screen's **Test** flipped the row to `rejected` and showed the
+vendor's own `HTTP 401 ... "API key is invalid."`, with the source and
+fingerprint (`env:ARBITER_ANTHROPIC_API_KEY`, `…c9a3`) and no key anywhere on
+the page; `arbiter keys test anthropic` printed the same thing and exited
+non-zero. Four serve tests and one UI test cover the refusals, the keyless
+path, `mock` verifying without a socket, and both endpoints sitting behind
+admission. What is still unverified is unchanged from D51: no *successful*
+verification against a real vendor, which needs a valid key this environment
+does not have — the `Verified` arm is exercised only through `mock`.

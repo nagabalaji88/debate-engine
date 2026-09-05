@@ -119,6 +119,13 @@ pub struct ProviderResponse {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
+    /// A response arrived and the provider refused it. The status is carried
+    /// separately from the message because key verification has to tell
+    /// "this key is wrong" (401/403 — the operator can fix it) from "the
+    /// service is unwell" (5xx — they can only wait), and parsing that back
+    /// out of a human-readable string would be guesswork.
+    #[error("{message}")]
+    Http { status: u16, message: String },
     #[error("{0}")]
     Other(String),
 }
