@@ -587,7 +587,7 @@
     var usable = providers.filter(function (p) { return p.usable; });
     setScreen(
       '<h1>Quick compare</h1>' +
-      '<p class="sub">The same prompt, sent to every model you have a key for. Nothing is saved and nothing is judged — for a decision with reasoning behind it, run a <a href="#/new">debate</a>.</p>' +
+      '<p class="sub">The same prompt, sent to every model you have a key for. Nothing is saved and nothing is judged — for a decision with reasoning behind it, start a <a href="#/new">decision review</a>.</p>' +
       (usable.length === 0
         ? '<div class="card panel empty-cta">' +
           '<div class="ptitle">Connect a provider to start comparing</div>' +
@@ -1401,7 +1401,7 @@
       "</p>" +
       '<p class="sub" id="cancel-note" style="margin-top:-4px">Leaving this page does not stop the review. Cancelling does \u2014 but requests already sent to a provider may still be billed.</p>' +
       '<details class="technical section-gap"><summary>Technical activity</summary>' +
-      '<div class="label" style="margin-top:10px">Stage <span id="stage-line" class="muted">init</span></div>' +
+      '<div class="label" style="margin-top:10px">Stage <span id="stage-line" class="muted">init</span> \u00b7 <span id="step-line" class="muted">step 1 of 15</span></div>' +
       '<div class="card flow-wrap" id="run-stepper">' + stepperHtml(0, true) + "</div>" +
       '<div class="label section-gap">Event log \u2014 newest first</div>' +
       '<div class="log" id="event-log" tabindex="0" aria-label="Event log, newest first"></div>' +
@@ -1508,13 +1508,16 @@
       // No completion percentage: the stages differ by orders of magnitude in
       // duration and the challenge loop can repeat, so "62%" would be a number
       // with nothing behind it. The step and round are both facts.
+      // The reader-facing figure is the round, which is a fact about their
+      // debate. "Step 10 of 15" is a fact about the pipeline, and belongs with
+      // the rest of the pipeline under Technical activity.
       if (progressLine) {
-        progressLine.innerHTML = "step " + (idx + 1) + " of " + STAGE_ORDER.length +
-          '<span class="unit"> · ' +
-          (round === 0 ? "before the first challenge round"
-                       : "challenge round " + round + " of at most " + maxRounds) +
-          "</span>";
+        progressLine.textContent = round === 0
+          ? "before the first challenge round"
+          : "challenge round " + round + " of at most " + maxRounds;
       }
+      var stepLine = document.getElementById("step-line");
+      if (stepLine) stepLine.textContent = "step " + (idx + 1) + " of " + STAGE_ORDER.length;
       var claimsLine = document.getElementById("claims-line");
       if (claimsLine && e.payload && typeof e.payload.claims === "number") claimsLine.textContent = String(e.payload.claims);
 
@@ -1712,7 +1715,7 @@
     var optionsRows = explain.options.map(function (o) {
       var below = o.share < 0.20;
       var isLeader = stance.recommends && data.recommendation && data.recommendation.option_id === o.id;
-      return "<tr><td data-label=\"Alternative\">" + h(o.label) + (isLeader ? ' <strong>(recommended)</strong>' : "") + "</td><td data-label=\"Share\">" + pct(o.share) + "</td><td data-label=\"Supports\">" + o.supported_by.length + "</td><td data-label=\"Opposes\">" + o.opposed_by.length + "</td><td>" + (below ? '<span class="tag SPLIT_DECISION">below floor</span>' : "") + "</td></tr>";
+      return "<tr><td data-label=\"Alternative\">" + h(o.label) + (isLeader ? ' <strong>(recommended)</strong>' : "") + "</td><td data-label=\"" + h(WORDS.share) + "\">" + pct(o.share) + "</td><td data-label=\"Supports\">" + o.supported_by.length + "</td><td data-label=\"Opposes\">" + o.opposed_by.length + "</td><td>" + (below ? '<span class="tag SPLIT_DECISION">below floor</span>' : "") + "</td></tr>";
     }).join("");
 
     var dims = explain.confidence.dimensions.map(function (d) {
@@ -1734,7 +1737,12 @@
       (isDemo ? ' <span class="demo-chip">demo</span>' : "") + "</div>" +
       headline +
 
-      '<div class="memo-section"><div class="memo-label">Main reasons</div>' + reasons + "</div>" +
+      // "Main reasons" would be reasons *for* something, and on a tie there
+      // is no something. The claims are the same either way; what they are
+      // evidence for is not.
+      '<div class="memo-section"><div class="memo-label">' +
+      (stance.recommends ? "Main reasons" : "What the panel agreed on") +
+      "</div>" + reasons + "</div>" +
 
       '<div class="memo-section"><div class="memo-label">Strongest unresolved objection</div>' +
       '<p class="memo-body" data-objection>' + objection + "</p></div>" +
@@ -1963,7 +1971,7 @@
       '<label for="decision-note" style="margin-top:12px">Reason' +
       (stance.recommends ? " (required if you choose another alternative)" : " (required)") +
       "</label>" +
-      '<input id="decision-note" placeholder="What decided it, or what you are waiting for">' +
+      '<input id="decision-note" style="width:100%" placeholder="What decided it, or what you are waiting for">' +
       '<div id="override-rows" style="margin-top:12px"></div>' +
       '<button type="button" class="link" id="add-override">+ Add a field override</button><br><br>' +
       '<button type="button" class="btn-primary" id="accept-btn">Record decision</button>' +
