@@ -37,6 +37,7 @@ async fn start_server() -> TestServer {
         store_root: store_root.clone(),
         token: token.clone(),
         origin: origin.clone(),
+        cancels: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
     let app = router(state);
     let handle = tokio::spawn(async move {

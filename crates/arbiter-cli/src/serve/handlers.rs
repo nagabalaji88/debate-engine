@@ -168,7 +168,7 @@ pub(crate) async fn list_runs(
                 "outcome": r.outcome, "confidence": r.confidence, "margin": r.margin,
                 "cost": r.cost, "orphaned_cost": r.orphaned_cost, "model_count": r.model_count,
                 "depth": r.depth, "policy_version": r.policy_version, "started_at": r.started_at,
-                "completed_at": r.completed_at,
+                "completed_at": r.completed_at, "synthetic": r.synthetic,
             })
         })
         .collect();
@@ -220,9 +220,12 @@ pub(crate) async fn get_run(State(state): State<AppState>, Path(id): Path<String
                     .unwrap_or(false);
                 let orphaned_cost = orphaned_cost_for(&state, &run_id);
 
+                let panel = panel_of(reader.as_ref());
                 Json(serde_json::json!({
                     "run_id": run_id.as_str(),
                     "status": "complete",
+                    "panel": panel,
+                    "synthetic": is_synthetic(&panel),
                     "policy_version": record.policy_version.as_str(),
                     "outcome": record.outcome,
                     "recommendation": record.recommendation,
@@ -249,16 +252,32 @@ pub(crate) async fn get_run(State(state): State<AppState>, Path(id): Path<String
                 .and_then(|events| events.last())
                 .map(|e| e.event_type);
             match last_type {
-                Some(EventType::RunFailed) => (
-                    StatusCode::OK,
-                    Json(serde_json::json!({"run_id": run_id.as_str(), "status": "failed"})),
-                )
-                    .into_response(),
-                _ => (
-                    StatusCode::OK,
-                    Json(serde_json::json!({"run_id": run_id.as_str(), "status": "running"})),
-                )
-                    .into_response(),
+                Some(EventType::RunFailed) => {
+                    let panel = panel_of(reader.as_ref());
+                    (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "run_id": run_id.as_str(),
+                            "status": "failed",
+                            "panel": panel,
+                            "synthetic": is_synthetic(&panel),
+                        })),
+                    )
+                        .into_response()
+                }
+                _ => {
+                    let panel = panel_of(reader.as_ref());
+                    (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "run_id": run_id.as_str(),
+                            "status": "running",
+                            "panel": panel,
+                            "synthetic": is_synthetic(&panel),
+                        })),
+                    )
+                        .into_response()
+                }
             }
         }
     }
@@ -830,4 +849,80 @@ pub(crate) async fn set_provider_key(
         "shadowed_by": shadowed_by,
     }))
     .into_response()
+}
+
+/// `POST /api/runs/:id/cancel` — stop a run that is still going.
+///
+/// Sets the run's shared cancellation token. The five stages that call
+/// `ctx.cancel.is_cancelled()` stop at their next check, and the controller
+/// turns it into a normal stop rather than an error, so the run finishes with
+/// whatever it had gathered instead of vanishing.
+///
+/// A run id that is not currently running is a 404 rather than a cheerful 200:
+/// "Cancel" that quietly does nothing to an already-finished run is the kind
+/// of confirmation that teaches operators not to trust the button.
+///
+/// This does **not** claw back money. Requests already dispatched may well be
+/// billed, which is why the UI says so next to the button rather than implying
+/// the spend stops the moment you click.
+pub async fn cancel_run(
+    State(state): State<AppState>,
+    Path(run_id): Path<String>,
+) -> impl IntoResponse {
+    let token = state.cancels.lock().unwrap().get(&run_id).cloned();
+    match token {
+        Some(token) => {
+            token.cancel();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "run_id": run_id,
+                    "cancelling": true,
+                    "note": "Requests already sent to a provider may still be billed.",
+                })),
+            )
+                .into_response()
+        }
+        None => err(
+            StatusCode::NOT_FOUND,
+            "this run is not currently running, so there is nothing to cancel",
+        ),
+    }
+}
+
+/// The panel a run recorded in its manifest, as `provider:model` strings.
+///
+/// Read from `RUN_STARTED`, which is where the manifest lands. Returns an
+/// empty list for runs written before the manifest carried a panel -- and
+/// `synthetic` is false for those, because "we cannot tell" must not be
+/// rendered as "this was a demo".
+fn panel_of(reader: &dyn arbiter_kernel::store::RunReader) -> Vec<String> {
+    reader
+        .events()
+        .ok()
+        .and_then(|mut events| events.find(|e| e.event_type == EventType::RunStarted))
+        .and_then(|e| e.payload.get("panel").cloned())
+        .and_then(|v| v.as_array().cloned())
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    let pair = row.as_array()?;
+                    Some(format!(
+                        "{}:{}",
+                        pair.get(1)?.as_str()?,
+                        pair.first()?.as_str()?
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether every model that answered was synthetic.
+///
+/// Drives the demo banner. Deliberately "every", not "any": a panel with one
+/// real provider in it spent real money and produced real text, and must not
+/// be filed under "no provider charges".
+pub(crate) fn is_synthetic(panel: &[String]) -> bool {
+    !panel.is_empty() && panel.iter().all(|entry| entry.starts_with("mock:"))
 }

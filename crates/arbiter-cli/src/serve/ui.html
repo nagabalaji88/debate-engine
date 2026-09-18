@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Multiplex</title>
+<title>Arbiter</title>
 <style>
   /* Sora and IBM Plex Mono, both SIL Open Font License 1.1, embedded as
      base64 rather than linked from fonts.googleapis.com. Three reasons, all
@@ -63,6 +63,13 @@
   button, input, select, textarea { font-family: inherit; color: inherit; }
   a { color: var(--accent); }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* The routed heading is focused in code after every navigation, so screen
+     readers announce the new screen. It carries `tabindex="-1"`, so it can
+     never be reached by Tab -- removing its ring costs no keyboard user
+     anything, and a full-width blue rectangle on every screen was drowning
+     out the focus ring that does matter. The screen change still announces
+     itself, via the focus move and `aria-live` on <main>. */
+  h1[tabindex="-1"]:focus, h1[tabindex="-1"]:focus-visible { outline: none; }
   [hidden] { display: none !important; }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
 
@@ -126,6 +133,25 @@
 
   .split { display: grid; grid-template-columns: 320px 1fr; gap: 16px; align-items: start; }
   @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
+  /* Phone: a five-column table of scores does not survive 390px, and a
+     horizontal scrollbar hides the columns rather than fitting them. Each row
+     becomes its own block, with the column name carried in as a label. */
+  @media (max-width: 620px) {
+    .topbar { flex-wrap: wrap; gap: 8px 12px; }
+    .tabs { order: 3; width: 100%; overflow-x: auto; }
+    .stat-row { grid-template-columns: 1fr 1fr; }
+    .resp-grid { grid-template-columns: 1fr; }
+    .stepper { flex-direction: column; align-items: flex-start; gap: 10px; }
+    .stepper .line { display: none; }
+    .stepper .step { flex-direction: row; gap: 10px; align-items: center; }
+    table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    table, table tbody, table tr, table td { display: block; width: 100%; }
+    table tr { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; padding: 6px 2px; }
+    table td { border: none; display: flex; justify-content: space-between; gap: 14px; padding: 6px 12px; }
+    table td::before { content: attr(data-label); font-weight: 600; color: var(--ink-2); flex: none; }
+    .memo-head { font-size: 20px; }
+    .subtabs { overflow-x: auto; }
+  }
 
   /* Image 5: one response card per model, laid out side by side. */
   .resp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
@@ -200,6 +226,49 @@
   .banner.warn { background: color-mix(in srgb, var(--warn) 12%, var(--surface)); border-color: color-mix(in srgb, var(--warn) 35%, var(--border)); color: var(--ink); }
   .banner.danger { background: color-mix(in srgb, var(--bad) 12%, var(--surface)); border-color: color-mix(in srgb, var(--bad) 35%, var(--border)); color: var(--ink); }
   .banner.ok { background: color-mix(in srgb, var(--good) 12%, var(--surface)); border-color: color-mix(in srgb, var(--good) 35%, var(--border)); color: var(--ink); }
+  /* Demo: deliberately striped rather than a quiet grey note. A demo record
+     that can be mistaken for a real one at a glance is the failure mode. */
+  .banner.demo { background: repeating-linear-gradient(135deg,
+      color-mix(in srgb, var(--accent) 9%, var(--surface)) 0 12px,
+      color-mix(in srgb, var(--accent) 14%, var(--surface)) 12px 24px);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--ink); }
+  .memo { padding: 18px 20px 16px; }
+  .memo-top { display: flex; align-items: center; gap: 8px; }
+  .memo-head { margin: 10px 0 0; font-size: 23px; line-height: 1.25; letter-spacing: -.01em; }
+  .memo-section { margin-top: 16px; }
+  .memo-label { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ink-2); margin-bottom: 6px; }
+  .memo-body { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--ink); }
+  .memo-body li { margin-bottom: 4px; }
+  ol.reasons { margin: 0; padding-left: 20px; font-size: 13.5px; line-height: 1.55; }
+  ol.reasons li { margin-bottom: 5px; }
+  pre.preview { margin: 6px 0 0; padding: 12px 14px; background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 9px; font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+    max-height: 190px; overflow: auto; }
+  .review-settings summary, .brief-file summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+  .stepper.phases .step { flex: 1; }
+  .stepper.phases .lbl2 { font-size: 12px; font-weight: 600; }
+  .technical summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+  button.danger-ghost { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, var(--border)); }
+  .empty-cta { padding: 20px; }
+  .empty-cta .btn-primary { display: inline-block; text-decoration: none; }
+  .unavailable { margin: 10px 0 4px; font-size: 13px; }
+  .unavailable summary { cursor: pointer; color: var(--ink-2); }
+  .unavailable-list { margin: 8px 0 0; padding-left: 18px; line-height: 1.7; }
+  .choices { display: flex; flex-direction: column; gap: 7px; }
+  .choice { display: flex; align-items: baseline; gap: 8px; font-size: 13.5px; font-weight: 400; }
+  .choice input { flex: none; }
+  .memo-actions { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .subtabs { display: flex; gap: 2px; margin: 22px 0 12px; border-bottom: 1px solid var(--border);
+    flex-wrap: wrap; }
+  .subtab { border: none; background: none; font: inherit; font-size: 13px; font-weight: 600;
+    color: var(--ink-2); padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent;
+    margin-bottom: -1px; }
+  .subtab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+  .demo-chip { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 999px; vertical-align: middle;
+    background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--ink-2); }
   .tag { display: inline-block; padding: 3px 10px; border-radius: 999px; font-weight: 700; font-size: 11px; letter-spacing: .02em; border: 1px solid var(--border); }
   .tag.CONSENSUS { background: color-mix(in srgb, var(--good) 16%, var(--surface)); color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, var(--border)); }
   .tag.MAJORITY_WITH_DISSENT, .tag.SPLIT_DECISION { background: color-mix(in srgb, var(--warn) 16%, var(--surface)); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
@@ -228,14 +297,12 @@
 </head>
 <body>
 <div class="topbar">
-  <a class="brand" href="#/compare"><span class="mark"></span>Multiplex</a>
+  <a class="brand" href="#/history"><span class="mark"></span>Arbiter</a>
   <nav class="tabs" aria-label="Screens">
-    <a class="tab-btn" href="#/compare" id="nav-compare">Compare</a>
-    <a class="tab-btn" href="#/new" id="nav-new">Debate</a>
-    <a class="tab-btn" href="#/flow" id="nav-flow">Flow</a>
-    <a class="tab-btn" href="#/usage" id="nav-usage">Usage</a>
-    <a class="tab-btn" href="#/history" id="nav-history">History</a>
-    <a class="tab-btn" href="#/keys" id="nav-keys">Keys</a>
+    <a class="tab-btn" href="#/history" id="nav-history">Decisions</a>
+    <a class="tab-btn" href="#/compare" id="nav-compare">Quick compare</a>
+    <a class="tab-btn" href="#/usage" id="nav-usage">Usage &amp; costs</a>
+    <a class="tab-btn" href="#/keys" id="nav-keys">Settings</a>
   </nav>
   <div class="spacer"></div>
   <div class="run-status" id="run-status"><span class="sdot"></span><span id="run-status-text">Ready</span></div>
@@ -278,6 +345,75 @@
     return "$" + v.toPrecision(2).replace(/0+$/, "").replace(/\.$/, "");
   }
   function pct(n) { return (Number(n) * 100).toFixed(0) + "%"; }
+
+  // -------------------------------------------------------------------
+  // Demo runs
+  // -------------------------------------------------------------------
+  // A run whose whole panel was `mock` produced synthetic text, spent no
+  // money and proves nothing about any model. Every screen that can show one
+  // says so, because the alternative is a screenshot of invented claims
+  // labelled "Fact / agreed", with a dollar figure and a confidence score,
+  // that is indistinguishable from a real decision record.
+  //
+  // The qualifier travels with the number rather than replacing it: hiding
+  // the figures would make demo runs harder to debug, and rounding them to
+  // zero would be its own lie.
+  function demoBanner(isDemo) {
+    if (!isDemo) return "";
+    return '<div class="banner demo" role="note" data-demo-banner>' +
+      "<strong>Demo review \u2014 synthetic responses.</strong> Every model on this panel " +
+      "was the built-in mock. No provider was called, no charges were incurred, and the " +
+      "text below was generated locally. Figures are simulated." +
+      "</div>";
+  }
+  function demoMoney(n, isDemo) {
+    return (isDemo ? "Simulated " : "") + money(n);
+  }
+  function scoreLabel(isDemo) {
+    return isDemo ? "Demo argument score" : "Argument strength";
+  }
+
+  // -------------------------------------------------------------------
+  // Words for things
+  // -------------------------------------------------------------------
+  // One label per concept, used everywhere. Compare used to call its cost
+  // figure a fact reported by the provider while Usage called the same kind
+  // of figure an estimate from published prices; both were describing
+  // `pricing.rs`, and only one of them could be right.
+  var WORDS = {
+    usage: "Provider-reported usage",
+    latency: "Measured latency",
+    estimated: "Estimated cost",
+    unresolved: "Unresolved spend",
+    reconciled: "Reconciled cost",
+    recorded: "Recorded cost",
+    share: "Weighted support share",
+  };
+
+  var OUTCOME_WORDS = {
+    Consensus: "Consensus",
+    MajorityWithDissent: "Majority with dissent",
+    SplitDecision: "Split decision",
+    InsufficientEvidence: "Insufficient evidence",
+  };
+  function outcomeWord(outcome) {
+    return OUTCOME_WORDS[outcome] || String(outcome || "Unknown");
+  }
+
+  // An RFC3339 timestamp, as a person reads it. History was a wall of
+  // `2026-09-18T13:40:11.326689674Z`, which is nine digits of precision
+  // nobody scans a list by.
+  function friendlyDate(iso) {
+    if (!iso) return "\u2014";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return h(String(iso));
+    var months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    var hh = String(d.getUTCHours()).padStart(2, "0");
+    var mm = String(d.getUTCMinutes()).padStart(2, "0");
+    return d.getUTCDate() + " " + months[d.getUTCMonth()] + " " + d.getUTCFullYear() +
+      ", " + hh + ":" + mm + " UTC";
+  }
+
 
   // One colour and one line of description per provider, so a model looks
   // the same on its roster card, its response card and its usage bar. An
@@ -388,7 +524,10 @@
     var hash = location.hash.replace(/^#/, "") || "/compare";
     var parts = hash.split("/").filter(Boolean);
     var tab = parts[0] || "compare";
-    if (tab === "running" || tab === "result") tab = "new";
+    // Everything that belongs to one decision -- the brief, the run, the
+    // result, the stage flow -- lights up Decisions. Flow is no longer a
+    // top-level destination; it is a view of a particular run.
+    if (tab === "running" || tab === "result" || tab === "new" || tab === "flow") tab = "history";
     updateNav(tab);
     if (parts[0] === "running" && parts[1]) return screenRunning(parts[1]);
     if (parts[0] === "result" && parts[1]) return screenResult(parts[1]);
@@ -400,7 +539,7 @@
     return screenCompare();
   }
   function updateNav(current) {
-    ["compare", "new", "flow", "usage", "history", "keys"].forEach(function (name) {
+    ["compare", "usage", "history", "keys"].forEach(function (name) {
       var el = document.getElementById("nav-" + name);
       if (!el) return;
       if (name === current) el.setAttribute("aria-current", "page");
@@ -433,12 +572,12 @@
   // because its confidence figure depends on who actually answered).
   function screenCompare() {
     setStatus("Ready", false);
-    setScreen('<h1>Compare</h1><div class="card panel"><div class="skeleton" style="width:50%"></div><div class="skeleton"></div></div>');
+    setScreen('<h1>Quick compare</h1><div class="card panel"><div class="skeleton" style="width:50%"></div><div class="skeleton"></div></div>');
 
     api("/api/providers").then(function (data) {
       renderCompare((data.providers || []).filter(function (p) { return p.id !== "mock"; }));
     }).catch(function (e) {
-      setScreen('<h1>Compare</h1>' + errorBanner(e, true));
+      setScreen('<h1>Quick compare</h1>' + errorBanner(e, true));
       var retry = app.querySelector("[data-retry]");
       if (retry) retry.addEventListener("click", screenCompare);
     });
@@ -447,23 +586,52 @@
   function renderCompare(providers) {
     var usable = providers.filter(function (p) { return p.usable; });
     setScreen(
-      '<h1>Compare</h1>' +
+      '<h1>Quick compare</h1>' +
       '<p class="sub">The same prompt, sent to every model you have a key for. Nothing is saved and nothing is judged — for a decision with reasoning behind it, run a <a href="#/new">debate</a>.</p>' +
       (usable.length === 0
-        ? '<div class="banner warn" role="status">No provider keys are configured, so there is nothing to compare yet. <a href="#/keys">Add a key</a> — every model below will answer once one is set.</div>'
+        ? '<div class="card panel empty-cta">' +
+          '<div class="ptitle">Connect a provider to start comparing</div>' +
+          '<p class="sub" style="margin:6px 0 14px">A comparison sends your prompt to every model you hold a key for. ' +
+          "No key is configured yet, so there is nothing to send it to.</p>" +
+          '<a class="btn-primary" href="#/keys" id="connect-cta">Connect a provider</a>' +
+          "</div>"
         : "") +
-      '<div class="model-row">' + providers.map(modelCardHtml).join("") + "</div>" +
+      // Unavailable providers collapse away rather than filling the screen
+      // with cards for models that will not be called.
+      (usable.length
+        ? '<div class="model-row">' + usable.map(modelCardHtml).join("") + "</div>" +
+          (providers.length > usable.length
+            ? '<details class="unavailable"><summary>' + (providers.length - usable.length) +
+              " provider" + (providers.length - usable.length === 1 ? "" : "s") + " without a key</summary>" +
+              '<ul class="unavailable-list">' + providers.filter(function (p) { return !p.usable; }).map(function (p) {
+                return "<li><strong>" + h(p.id) + "</strong> <span class=\"muted\">no key configured</span> " +
+                  '<a href="#/keys">Connect</a></li>';
+              }).join("") + "</ul></details>"
+            : "")
+        : '<details class="unavailable"><summary>' + providers.length + " provider" +
+          (providers.length === 1 ? "" : "s") + " available once connected</summary>" +
+          '<ul class="unavailable-list">' + providers.map(function (p) {
+            return "<li><strong>" + h(p.id) + "</strong> <span class=\"muted\">no key configured</span> " +
+              '<a href="#/keys">Connect</a></li>';
+          }).join("") + "</ul></details>") +
       '<div class="split">' +
       '<div class="stack">' +
       '<form id="compare-form" class="card panel" novalidate>' +
       '<div class="ptitle">Prompt</div>' +
       '<textarea id="compare-prompt" autofocus required placeholder="Explain the trade-off between a modular monolith and microservices for a team of six."></textarea>' +
       '<div id="compare-error"></div>' +
-      '<button type="submit" class="btn-primary" id="compare-btn" style="margin-top:12px">Ask all models</button>' +
+      '<button type="submit" class="btn-primary" id="compare-btn" style="margin-top:12px"' +
+      (usable.length === 0 ? " disabled" : "") + ">Ask all models</button>" +
+      (usable.length === 0
+        ? '<p class="sub" style="margin:8px 0 0" id="compare-disabled-note">Connect a provider first — with no key there is no model to ask.</p>'
+        : "") +
       "</form>" +
       '<div class="card panel">' +
       '<div class="ptitle">What this measures</div>' +
-      '<p class="sub" style="margin:0">Tokens, cost and latency per answer — all three are facts the providers report. Judging the writing is yours to do; nothing here scores an answer.</p>' +
+      '<p class="sub" style="margin:0"><strong>' + h(WORDS.usage) + '</strong> and <strong>' + h(WORDS.latency) +
+      "</strong> come back from the provider. <strong>" + h(WORDS.estimated) +
+      "</strong> is those token counts multiplied by a published list price held in this build, " +
+      "so it is an estimate and not a bill. Judging the writing is yours to do; nothing here scores an answer.</p>" +
       "</div>" +
       "</div>" +
       '<div>' +
@@ -539,9 +707,22 @@
         setStatus("Ready", false);
         btn.disabled = false;
         btn.textContent = "Ask all models";
-        totalEl.textContent = priced === 0
-          ? "No published price for any model that answered."
-          : "Total, estimated from list prices: " + money(spent) + " across " + priced + " answer" + (priced === 1 ? "" : "s") + ". See the Usage tab for the breakdown.";
+        // Three different situations, three different sentences. "No
+        // published price for any model that answered" was printed even when
+        // nothing answered at all, which told the reader the wrong thing
+        // about why the screen was empty.
+        var answered = lastCompare.rows.length;
+        if (answered === 0) {
+          totalEl.textContent = "No responses received. Connect a provider to start a comparison.";
+        } else if (priced === 0) {
+          totalEl.textContent = answered + " answer" + (answered === 1 ? "" : "s") +
+            ", none of which this build holds a list price for, so no cost could be estimated.";
+        } else {
+          totalEl.textContent = WORDS.estimated + ": " + money(spent) + " across " + priced +
+            " answer" + (priced === 1 ? "" : "s") +
+            " (token counts from the provider, priced from a list held in this build). " +
+            "See Usage & costs for the breakdown.";
+        }
       }
 
       streamCompare(prompt, function (name, data) {
@@ -680,20 +861,52 @@
       '<div class="model-row">' + providers.map(modelCardHtml).join("") + "</div>" +
       '<div class="split">' +
       '<form id="new-run-form" class="card panel" novalidate>' +
-      '<div class="ptitle">Question</div>' +
-      '<textarea id="question" name="question" autofocus required placeholder="Should we adopt a modular monolith or microservices? Paste a paragraph, or a path to a file."></textarea>' +
-      '<div class="row" style="margin-top:14px">' +
+      '<div class="ptitle">Decision brief</div>' +
+      '<p class="sub" style="margin:4px 0 12px">A broad question produces a broad debate. Everything below the first field is optional \u2014 each one you fill in narrows what the models argue about.</p>' +
+
+      '<label for="question">What are you deciding?</label>' +
+      '<textarea id="question" name="question" autofocus required placeholder="Choose an architecture for our order service"></textarea>' +
+
+      '<label for="brief-context" style="margin-top:12px">Context</label>' +
+      '<input id="brief-context" placeholder="Five engineers, existing Java application, twelve-week delivery window">' +
+
+      '<label for="brief-options" style="margin-top:12px">Alternatives <span class="muted">(one per line)</span></label>' +
+      '<textarea id="brief-options" rows="3" placeholder="Modular monolith&#10;Microservices"></textarea>' +
+
+      '<label for="brief-constraints" style="margin-top:12px">Constraints <span class="muted">(one per line)</span></label>' +
+      '<textarea id="brief-constraints" rows="2" placeholder="Small operations team&#10;Keep existing integrations"></textarea>' +
+
+      '<label for="brief-criteria" style="margin-top:12px">What does success look like? <span class="muted">(one per line)</span></label>' +
+      '<textarea id="brief-criteria" rows="2" placeholder="Maintainability&#10;Delivery speed&#10;Reliability"></textarea>' +
+
+      // An honest account of where the file-path behaviour went. The old
+      // placeholder said "paste a paragraph, or a path to a file", which meant
+      // any text that happened to look like a path was read off this machine
+      // and sent to every provider on the panel. That is now explicit.
+      '<details class="brief-file" style="margin-top:12px"><summary>Attach a file instead</summary>' +
+      '<p class="sub" style="margin:8px 0 0">Type a path to a file on this machine. Its contents are sent to every provider on the panel, so check what is in it first \u2014 the preview below shows exactly what leaves this machine.</p>' +
+      '<input id="brief-file" placeholder="./docs/requirements.md" style="margin-top:8px">' +
+      "</details>" +
+
+      '<details class="review-settings" style="margin-top:14px"><summary>Review settings</summary>' +
+      '<div class="row" style="margin-top:12px">' +
       '<div><label for="depth">Depth</label>' +
       '<select id="depth" name="depth">' +
-      '<option value="standard">standard — 1 round</option>' +
-      '<option value="deep">deep — up to 3 rounds</option>' +
+      '<option value="standard">Quick review \u2014 1 challenge round</option>' +
+      '<option value="deep">Detailed review \u2014 up to 3 challenge rounds</option>' +
       "</select></div>" +
-      '<div><label for="budget">Budget cap</label>' +
+      '<div><label for="budget">Budget cap (USD)</label>' +
       '<input type="number" id="budget" name="budget" min="0" step="0.01" value="2.00"></div>' +
       "</div>" +
+      '<p class="sub" style="margin:10px 0 0">The cap is enforced against this build\u2019s own ledger, which records a provider-reported cost where the provider reports one and a reservation estimate otherwise. It is not a guarantee from your provider.</p>' +
+      "</details>" +
+
+      '<div class="label" style="margin-top:16px">What will be sent</div>' +
+      '<pre class="preview" id="brief-preview" aria-live="polite"></pre>' +
+
       '<p id="estimate" class="sub" style="margin:14px 0 0" aria-live="polite"></p>' +
       '<div id="submit-error"></div>' +
-      '<button type="submit" class="btn-primary" id="start-btn" style="margin-top:12px"' + (usable.length === 0 ? " disabled" : "") + ">Start debate</button>" +
+      '<button type="submit" class="btn-primary" id="start-btn" style="margin-top:12px"' + (usable.length === 0 ? " disabled" : "") + ">Start review</button>" +
       "</form>" +
       '<div class="stack">' +
       '<div class="card panel">' +
@@ -949,13 +1162,73 @@
     refresh();
 
     var form = document.getElementById("new-run-form");
+    // The brief, as one question string.
+    //
+    // The run API takes a question, not a structured brief, and inventing a
+    // schema for it here would mean a UI field the engine has never seen.
+    // Composing the fields into headed sections keeps the extra context in
+    // front of the models while leaving the wire format alone -- and the
+    // preview below shows the reader exactly what that composition produced,
+    // so nothing is added to their question behind their back.
+    function composeBrief() {
+      var val = function (id) { return (document.getElementById(id) || {}).value || ""; };
+      var listOf = function (id) {
+        return val(id).split("\n").map(function (l) { return l.trim(); }).filter(Boolean);
+      };
+      var question = val("question").trim();
+      var parts = [];
+      if (question) parts.push(question);
+      var context = val("brief-context").trim();
+      if (context) parts.push("Context: " + context);
+      var options = listOf("brief-options");
+      if (options.length) {
+        parts.push("Alternatives under consideration:\n" + options.map(function (o) { return "- " + o; }).join("\n"));
+      }
+      var constraints = listOf("brief-constraints");
+      if (constraints.length) {
+        parts.push("Constraints:\n" + constraints.map(function (c) { return "- " + c; }).join("\n"));
+      }
+      var criteria = listOf("brief-criteria");
+      if (criteria.length) {
+        parts.push("Judge the alternatives against:\n" + criteria.map(function (c) { return "- " + c; }).join("\n"));
+      }
+      var file = val("brief-file").trim();
+      // A bare path is the one input the server reads off disk. Sent alone so
+      // that behaviour stays exactly as explicit as it looks.
+      if (file && parts.length === 0) return file;
+      return parts.join("\n\n");
+    }
+
+    function renderPreview() {
+      var pre = document.getElementById("brief-preview");
+      if (!pre) return;
+      var composed = composeBrief();
+      var file = ((document.getElementById("brief-file") || {}).value || "").trim();
+      if (!composed) {
+        pre.textContent = "Nothing yet \u2014 describe the decision above.";
+        pre.classList.add("muted");
+        return;
+      }
+      pre.classList.remove("muted");
+      pre.textContent = composed +
+        (file && composed !== file
+          ? "\n\n(plus the contents of " + file + ", read from this machine)"
+          : "");
+    }
+    ["question", "brief-context", "brief-options", "brief-constraints", "brief-criteria", "brief-file"]
+      .forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener("input", renderPreview);
+      });
+    renderPreview();
+
     var submitting = false;
     form.addEventListener("submit", function (ev) {
       ev.preventDefault();
       if (submitting) return; // double-submit impossible
-      var question = document.getElementById("question").value;
+      var question = composeBrief();
       if (!question.trim()) {
-        document.getElementById("submit-error").innerHTML = '<p class="field-error">The question must not be empty.</p>';
+        document.getElementById("submit-error").innerHTML = '<p class="field-error">Say what you are deciding before starting a review.</p>';
         return;
       }
       var panel = selectedPanelSpec();
@@ -1022,6 +1295,57 @@
   };
   function shortStage(name) { return STAGE_LABEL[name] || name; }
 
+
+  // The four phases a person can follow, mapped onto the fifteen stages the
+  // engine actually runs.
+  //
+  // The stage names are real and stay available under Technical activity;
+  // what they are not is an answer to "what is happening to my decision right
+  // now". `challenge.run` tells an engineer a great deal and a reader nothing.
+  var PHASES = [
+    {
+      key: "gather",
+      title: "Gather perspectives",
+      detail: "Each model is answering the question on its own, without seeing the others.",
+      stages: ["init", "panel.resolve", "positions.generate"],
+    },
+    {
+      key: "examine",
+      title: "Examine claims",
+      detail: "Pulling out what each answer actually claims, and finding where those claims agree or contradict.",
+      stages: ["claims.extract", "claims.normalize", "options.cluster", "relations.analyze"],
+    },
+    {
+      key: "challenge",
+      title: "Challenge alternatives",
+      detail: "Putting the strongest disagreements back to the models and seeing which claims survive.",
+      stages: ["disputes.rank", "challenge.plan", "challenge.run", "rebuttal.run", "controller.decide"],
+    },
+    {
+      key: "prepare",
+      title: "Prepare recommendation",
+      detail: "Scoring what survived and writing up the decision, its objections and its gaps.",
+      stages: ["judge.evaluate", "decision.synthesize", "record.build"],
+    },
+  ];
+  function phaseIndexForStage(stage) {
+    for (var i = 0; i < PHASES.length; i++) {
+      if (PHASES[i].stages.indexOf(stage) !== -1) return i;
+    }
+    // An unknown stage must not silently reset the strip to the beginning.
+    return -1;
+  }
+  function phaseStripHtml(activeIndex) {
+    return '<div class="stepper phases">' + PHASES.map(function (p, i) {
+      var cls = i < activeIndex ? "done" : (i === activeIndex ? "active" : "pending");
+      return '<div class="step ' + cls + '">' +
+        '<span class="line"></span>' +
+        '<span class="dot2">' + (i < activeIndex ? "✓" : String(i + 1)) + "</span>" +
+        '<span class="lbl2">' + h(p.title) + "</span>" +
+        "</div>";
+    }).join("") + "</div>";
+  }
+
   function stepperHtml(reachedIndex, running) {
     return '<div class="stepper">' + STAGE_ORDER.map(function (name, i) {
       var cls = i < reachedIndex ? "done" : (i === reachedIndex ? (running ? "active" : "done") : "pending");
@@ -1054,23 +1378,60 @@
     // Set once this screen has been navigated away from, so a late callback
     // that already had its reply in flight cannot redirect or repaint.
     var gone = false;
+    var spentSoFar = 0;
+    var anyEstimated = false;
 
     setScreen(
-      '<h1>Running</h1>' +
-      '<p class="sub">Run <code>' + h(runId) + "</code></p>" +
-      '<div class="banner warn">Closing this page does not stop the run.</div>' +
+      '<h1>Reviewing your decision</h1>' +
+      '<p class="sub">Models are answering independently, their claims are being checked against each other, and the strongest disagreements are being tested.</p>' +
+      '<div id="demo-slot"></div>' +
       '<div id="conn-banner"></div>' +
-      '<div class="card flow-wrap" id="run-stepper">' + stepperHtml(0, true) + "</div>" +
+      '<div class="card flow-wrap" id="phase-strip">' + phaseStripHtml(0) + "</div>" +
+      '<div class="card panel section-gap"><div class="ptitle" id="phase-title">Connecting\u2026</div>' +
+      '<p class="memo-body" id="phase-detail" style="margin-top:4px">Opening the event stream for this run.</p></div>' +
       '<div class="stat-row section-gap">' +
-      '<div class="card stat accent"><div class="k">Stage</div><div class="v" id="stage-line" style="font-size:16px">Connecting…</div></div>' +
-      '<div class="card stat"><div class="k">Progress</div><div class="v" id="progress-line">0<span class="unit">%</span></div></div>' +
-      '<div class="card stat"><div class="k">Claims</div><div class="v" id="claims-line">0</div></div>' +
+      '<div class="card stat accent"><div class="k">Progress</div><div class="v" id="progress-line" style="font-size:16px">starting</div></div>' +
+      '<div class="card stat"><div class="k">Claims found</div><div class="v" id="claims-line">0</div></div>' +
       '<div class="card stat"><div class="k">Elapsed</div><div class="v" id="elapsed-line">0<span class="unit">s</span></div></div>' +
+      '<div class="card stat"><div class="k">' + h(WORDS.estimated) + '</div><div class="v" id="spend-line">' + fineMoney(0) + "</div></div>" +
       "</div>" +
-      '<p><button type="button" class="ghost" id="stop-btn">Stop watching</button></p>' +
-      '<div class="label section-gap">Event log — newest first</div>' +
-      '<div class="log" id="event-log" tabindex="0" aria-label="Event log, newest first"></div>'
+      '<p class="memo-actions">' +
+      '<button type="button" class="ghost danger-ghost" id="cancel-btn">Cancel review</button> ' +
+      '<button type="button" class="ghost" id="stop-btn">Leave this page</button>' +
+      "</p>" +
+      '<p class="sub" id="cancel-note" style="margin-top:-4px">Leaving this page does not stop the review. Cancelling does \u2014 but requests already sent to a provider may still be billed.</p>' +
+      '<details class="technical section-gap"><summary>Technical activity</summary>' +
+      '<div class="label" style="margin-top:10px">Stage <span id="stage-line" class="muted">init</span></div>' +
+      '<div class="card flow-wrap" id="run-stepper">' + stepperHtml(0, true) + "</div>" +
+      '<div class="label section-gap">Event log \u2014 newest first</div>' +
+      '<div class="log" id="event-log" tabindex="0" aria-label="Event log, newest first"></div>' +
+      "</details>"
     );
+
+    // The demo banner needs the run's own record of who answered, which the
+    // detail endpoint carries.
+    api("/api/runs/" + encodeURIComponent(runId)).then(function (info) {
+      if (gone) return;
+      var slot = document.getElementById("demo-slot");
+      if (slot && info && info.synthetic) slot.innerHTML = demoBanner(true);
+    }).catch(function () { /* the stream below reports its own failures */ });
+
+    document.getElementById("cancel-btn").addEventListener("click", function () {
+      var btn = document.getElementById("cancel-btn");
+      btn.disabled = true;
+      btn.textContent = "Cancelling\u2026";
+      api("/api/runs/" + encodeURIComponent(runId) + "/cancel", { method: "POST", body: {} })
+        .then(function () {
+          document.getElementById("cancel-note").innerHTML =
+            "<strong>Cancelling.</strong> The review stops at its next checkpoint and keeps whatever it had gathered. " +
+            "Requests already sent to a provider may still be billed.";
+        })
+        .catch(function (e) {
+          btn.disabled = false;
+          btn.textContent = "Cancel review";
+          document.getElementById("conn-banner").innerHTML = errorBanner(e);
+        });
+    });
 
     elapsedTimer = setInterval(function () {
       var el = document.getElementById("elapsed-line");
@@ -1118,6 +1479,31 @@
       if (stepper) stepper.innerHTML = stepperHtml(idx, true);
       var stageLine = document.getElementById("stage-line");
       if (stageLine) stageLine.textContent = lastStage;
+
+      // The reader-facing half: which of the four phases this stage belongs
+      // to, and a sentence about what that phase is doing.
+      var phaseIdx = phaseIndexForStage(lastStage);
+      if (phaseIdx !== -1) {
+        var strip = document.getElementById("phase-strip");
+        if (strip) strip.innerHTML = phaseStripHtml(phaseIdx);
+        var title = document.getElementById("phase-title");
+        var detail = document.getElementById("phase-detail");
+        if (title) title.textContent = PHASES[phaseIdx].title;
+        if (detail) detail.textContent = PHASES[phaseIdx].detail;
+      }
+
+      // Spend as it accrues, from the run's own events. `cost_measured`
+      // separates a provider-reported figure from a reservation estimate, so
+      // the label changes rather than the number quietly meaning two things.
+      if (e.event_type === "CALL_COMPLETED" && e.payload) {
+        spentSoFar += Number(e.payload.actual_cost || 0);
+        if (e.payload.cost_measured !== true) anyEstimated = true;
+        var spendLine = document.getElementById("spend-line");
+        if (spendLine) spendLine.textContent = fineMoney(spentSoFar);
+        var spendCard = spendLine && spendLine.parentElement
+          ? spendLine.parentElement.querySelector(".k") : null;
+        if (spendCard) spendCard.textContent = anyEstimated ? WORDS.estimated : WORDS.recorded;
+      }
       var progressLine = document.getElementById("progress-line");
       // No completion percentage: the stages differ by orders of magnitude in
       // duration and the challenge loop can repeat, so "62%" would be a number
@@ -1226,43 +1612,107 @@
     });
   }
 
+  // Is there actually a recommendation to make?
+  //
+  // The screen used to print a bold headline recommendation and mark one row
+  // "(winner)" whenever `recommendation` was set -- including on a split
+  // decision where three options sat on an identical share and the only thing
+  // separating them was the deterministic tie-break that orders the list. A
+  // sort order is not a finding, and presenting it as one is the single most
+  // misleading thing this interface did.
+  //
+  // So: a recommendation is shown only when the outcome is one that supports
+  // it *and* the leader is actually ahead.
+  var TIE_EPSILON = 0.005;
+  function decisionStance(data) {
+    var explain = data.explain;
+    var ranked = (explain.options || []).slice().sort(function (a, b) { return b.share - a.share; });
+    var margin = ranked.length > 1 ? ranked[0].share - ranked[1].share : 1;
+    var tied = ranked.length > 1 && margin < TIE_EPSILON;
+    var outcomeAllows = data.outcome === "Consensus" || data.outcome === "MajorityWithDissent";
+    return {
+      ranked: ranked,
+      margin: margin,
+      tied: tied,
+      // `recommends` gates every "winner"/"Recommended" affordance on screen.
+      recommends: !!(data.recommendation && outcomeAllows && !tied),
+      leader: ranked[0] || null,
+    };
+  }
+
   function renderResult(runId, data) {
     var explain = data.explain;
     var integrity = data.integrity || {};
-    var isConsensus = data.outcome === "Consensus";
+    var isDemo = data.synthetic === true;
+    var stance = decisionStance(data);
     var outcomeSlug = { Consensus: "CONSENSUS", MajorityWithDissent: "MAJORITY_WITH_DISSENT", SplitDecision: "SPLIT_DECISION", InsufficientEvidence: "INSUFFICIENT_EVIDENCE" }[data.outcome] || h(data.outcome);
 
     var banners = "";
     if (integrity.completeness && integrity.completeness.status === "truncated") {
       banners += '<div class="banner warn" role="alert">This decision was synthesised from the evidence gathered before the budget ran out, and is marked truncated' + (integrity.completeness.reason ? " (" + h(integrity.completeness.reason) + ")" : "") + ".</div>";
     }
-    if (integrity.fixpoint_converged === false) {
-      banners += '<div class="banner warn" role="alert">The argument graph did not converge within the iteration cap — the 0.05 convergence penalty below reflects this.</div>';
-    }
     if (integrity.chain_verified === false) {
       banners += '<div class="banner danger" role="alert"><strong>Chain break detected.</strong> This run\'s event log could not be verified and its record may be incomplete or tampered with.</div>';
     }
 
-    // "MAJORITY_WITH_DISSENT means something survived. A layout that hides
-    // it lies." (U4) -- every non-CONSENSUS outcome gets this banner, not
-    // only the ones with a disputed claim to name: a SplitDecision can
-    // come purely from fragmented option shares with every claim already
-    // Agreed (`defeat_chains` genuinely empty in that case), and that is
-    // exactly as much "something survived" as a live dissenting claim is.
-    var liveObjection = "";
-    if (!isConsensus && explain.defeat_chains && explain.defeat_chains.length) {
+    // The strongest surviving objection, above everything else it might
+    // undercut. On a tie this is the reason there is no recommendation, so it
+    // is never optional.
+    var objection = "";
+    if (explain.defeat_chains && explain.defeat_chains.length) {
       var top = explain.defeat_chains[0];
-      liveObjection = '<div class="banner warn" role="alert"><strong>Live objection:</strong> claim <code>' + h(top.claim_id) + '</code> (standing ' + Number(top.standing).toFixed(2) + ") remains unresolved.</div>";
-    } else if (!isConsensus) {
-      var ranked = explain.options.slice().sort(function (a, b) { return b.share - a.share; });
-      var margin = ranked.length > 1 ? ranked[0].share - ranked[1].share : 1;
-      liveObjection = '<div class="banner warn" role="alert"><strong>Live objection:</strong> no single option has a clear majority — ' +
-        h(ranked[0] ? ranked[0].label : "the leading option") + " leads by only " + pct(margin) + ", not a settled win.</div>";
+      objection = "Claim <code>" + h(top.claim_id) + "</code> (standing " + Number(top.standing).toFixed(2) + ") is still contested, and nothing in this run resolved it.";
+    } else if (stance.tied) {
+      objection = "The leading alternatives are level under the current scoring policy — " +
+        h(stance.ranked.length) + " of them within " + pct(TIE_EPSILON) + " of each other. Nothing here distinguishes them.";
+    } else if (!stance.recommends) {
+      objection = "No option reached a clear majority; " + h(stance.leader ? stance.leader.label : "the leading option") +
+        " leads by only " + pct(stance.margin) + ".";
+    } else {
+      objection = "No claim survived unresolved. The margin over the runner-up is " + pct(stance.margin) + ".";
     }
+
+    // What would have to change. `change_triggers` is literally the answer to
+    // "which evidence would distinguish these", so it leads here rather than
+    // sitting in a technical appendix called "Change triggers".
+    var claimsAll = data.claims || [];
+    var unverified = claimsAll.filter(function (c) { return c.kind === "Unverified"; }).length;
+    var unresolved = claimsAll.filter(function (c) { return c.standing === "unresolved" || c.standing === "disputed"; }).length;
+    var gapBits = [];
+    if (unverified) gapBits.push(unverified + " claim" + (unverified === 1 ? "" : "s") + " could not be traced to anything a model actually wrote");
+    if (unresolved) gapBits.push(unresolved + " claim" + (unresolved === 1 ? "" : "s") + " remain contested");
+    (explain.change_triggers || []).slice(0, 2).forEach(function (t) {
+      gapBits.push("settling <code>" + h(t.claim_id) + "</code> would move the decision to " + h(t.new_winner || "no clear winner"));
+    });
+    if (!gapBits.length) gapBits.push("Nothing in this run was left unverified or contested.");
+
+    // Reasons: the claims that actually hold up the leading option. Derived,
+    // not invented -- and labelled as what they are, so nobody reads them as
+    // prose written by a model.
+    var leaderId = stance.leader ? stance.leader.id : null;
+    var supporting = claimsAll.filter(function (c) {
+      return c.standing === "agreed" && (!leaderId || !c.option_id || c.option_id === leaderId);
+    }).slice(0, 3);
+    var reasons = supporting.length
+      ? "<ol class=\"reasons\">" + supporting.map(function (c) {
+          return "<li>" + h(c.text) + ' <span class="muted">(' + h(c.kind) + ", " + h(c.standing) + ")</span></li>";
+        }).join("") + "</ol>"
+      : '<p class="sub">No claim reached agreed standing in this run.</p>';
+
+    var headline = stance.recommends
+      ? '<h2 class="memo-head">' + h(data.recommendation.label) + "</h2>" +
+        '<p class="sub" style="margin:2px 0 0">Recommended — ahead of the runner-up by ' + pct(stance.margin) + ".</p>"
+      : '<h2 class="memo-head">No clear recommendation</h2>' +
+        '<p class="sub" style="margin:2px 0 0">' +
+        (stance.tied
+          ? "The alternatives are tied under the current scoring policy. More evidence is needed before choosing."
+          : "This run did not produce enough separation between the alternatives to recommend one.") +
+        "</p>";
 
     var optionsRows = explain.options.map(function (o) {
       var below = o.share < 0.20;
-      return "<tr><td>" + h(o.label) + (data.recommendation && data.recommendation.option_id === o.id ? ' <strong>(winner)</strong>' : "") + "</td><td>" + pct(o.share) + "</td><td>" + o.supported_by.length + "</td><td>" + o.opposed_by.length + "</td><td>" + (below ? '<span class="tag SPLIT_DECISION">below floor</span>' : "") + "</td></tr>";
+      var isLeader = stance.recommends && data.recommendation && data.recommendation.option_id === o.id;
+      return "<tr><td data-label=\"Alternative\">" + h(o.label) + (isLeader ? ' <strong>(recommended)</strong>' : "") + "</td><td data-label=\"Share\">" + pct(o.share) + "</td><td data-label=\"Supports\">" + o.supported_by.length + "</td><td data-label=\"Opposes\">" + o.opposed_by.length + "</td><td>" + (below ? '<span class="tag SPLIT_DECISION">below floor</span>' : "") + "</td></tr>";
     }).join("");
 
     var dims = explain.confidence.dimensions.map(function (d) {
@@ -1271,74 +1721,186 @@
     var pens = explain.confidence.penalties.map(function (p) {
       return "<tr><td>" + h(p.name) + (p.note ? ' <span class="muted">(' + h(p.note) + ")</span>" : "") + "</td><td>" + Number(p.contribution).toFixed(4) + "</td></tr>";
     }).join("");
-
-    var claimsAll = data.claims || [];
     var triggers = (explain.change_triggers || []).map(function (t) {
       return "<li><code>" + h(t.claim_id) + "</code>: " + h(t.direction) + " → " + h(t.new_winner || "(none)") + "</li>";
     }).join("");
 
     setScreen(
-      '<h1>Result</h1>' + banners + liveObjection +
-      '<div class="card panel">' +
-      '<span class="tag ' + outcomeSlug + '">' + outcomeSlug.replace(/_/g, " ") + "</span>" +
-      '<h2 style="margin:10px 0 6px">' + (data.recommendation ? h(data.recommendation.label) : "No recommendation") + "</h2>" +
-      '<p class="sub" style="margin:0">Confidence ' + Number(explain.confidence.total).toFixed(2) + " · " + claimsAll.length + " claims · policy <code>" + h(data.policy_version) + "</code></p>" +
+      '<h1>Decision</h1>' + demoBanner(isDemo) + banners +
+
+      // ---- the memo: everything needed to act, before any arithmetic ----
+      '<div class="card panel memo">' +
+      '<div class="memo-top"><span class="tag ' + outcomeSlug + '">' + h(outcomeWord(data.outcome)) + "</span>" +
+      (isDemo ? ' <span class="demo-chip">demo</span>' : "") + "</div>" +
+      headline +
+
+      '<div class="memo-section"><div class="memo-label">Main reasons</div>' + reasons + "</div>" +
+
+      '<div class="memo-section"><div class="memo-label">Strongest unresolved objection</div>' +
+      '<p class="memo-body" data-objection>' + objection + "</p></div>" +
+
+      '<div class="memo-section"><div class="memo-label">What is missing</div>' +
+      '<ul class="memo-body">' + gapBits.map(function (b) { return "<li>" + b + "</li>"; }).join("") + "</ul></div>" +
+
+      '<div class="memo-actions">' +
+      '<button type="button" class="btn-primary" id="record-btn">Record decision</button> ' +
+      '<button type="button" class="ghost" id="export-md">Export memo</button> ' +
+      '<button type="button" class="ghost" id="export-json">Export JSON</button>' +
+      "</div>" +
+      '<p class="sub" style="margin:10px 0 0">' + h(scoreLabel(isDemo)) + " " + Number(explain.confidence.total).toFixed(2) +
+      ' <span class="muted">— how well this survived challenge under policy <code>' + h(data.policy_version) +
+      "</code>, not a probability that it is correct.</span></p>" +
       "</div>" +
 
-      '<div class="label section-gap">Options</div>' +
-      '<div class="card panel"><table><thead><tr><th>Option</th><th>Share</th><th>Supports</th><th>Opposes</th><th></th></tr></thead><tbody>' + optionsRows + "</tbody></table></div>" +
-
-      '<div class="label section-gap">Confidence breakdown</div>' +
-      '<div class="card panel">' +
-      '<table id="dimensions-table"><thead><tr><th>Dimension</th><th>Value</th><th>Weight</th><th>Contribution</th></tr></thead><tbody>' + dims + "</tbody></table>" +
-      '<table id="penalties-table" style="margin-top:10px"><thead><tr><th>Penalty</th><th>Contribution</th></tr></thead><tbody>' + pens + "</tbody></table>" +
-      '<p class="sub" style="margin:10px 0 0">Total: <strong>' + Number(explain.confidence.total).toFixed(4) + "</strong> (base " + Number(explain.confidence.base).toFixed(4) + ")</p>" +
+      // ---- everything else, behind tabs ----
+      '<div class="subtabs" role="tablist" aria-label="Decision detail">' +
+      '<button type="button" class="subtab" role="tab" data-tab="decision" aria-selected="true">Decision</button>' +
+      '<button type="button" class="subtab" role="tab" data-tab="evidence" aria-selected="false">Evidence &amp; claims</button>' +
+      '<button type="button" class="subtab" role="tab" data-tab="process" aria-selected="false">Review process</button>' +
+      '<button type="button" class="subtab" role="tab" data-tab="technical" aria-selected="false">Technical details</button>' +
       "</div>" +
 
-      '<div class="label section-gap">Claims</div>' +
+      '<section data-panel="decision">' +
+      '<div class="label">Alternatives considered</div>' +
+      '<div class="card panel"><table><thead><tr><th>Alternative</th><th>' + h(WORDS.share) + "</th><th>Supports</th><th>Opposes</th><th></th></tr></thead><tbody>" + optionsRows + "</tbody></table>" +
+      '<p class="sub" style="margin:10px 0 0">' + h(WORDS.share) + " is each alternative's share of the weighted support across surviving claims. It is not a vote count and not a probability.</p></div>" +
+      "</section>" +
+
+      '<section data-panel="evidence" hidden>' +
+      '<div class="label">Claims</div>' +
       '<div class="card panel">' +
       '<div class="filters">' +
       '<label for="claim-filter" class="visually-hidden">Filter claims</label>' +
       '<select id="claim-filter"><option value="">Show all</option><option value="disputed">Disputed</option><option value="unresolved">Unresolved</option></select>' +
       "</div>" +
       '<table id="claims-table"><thead><tr><th>Claim</th><th>Kind</th><th>Standing</th></tr></thead><tbody></tbody></table>' +
+      '<p class="sub" style="margin:10px 0 0"><strong>Kind</strong> is where a claim came from, not whether it is true: ' +
+      "a claim is traced to the text a model wrote, never checked against the world. Nothing here has been verified against an external source.</p>" +
+      "</div></section>" +
+
+      '<section data-panel="process" hidden>' +
+      '<div class="label">Who answered</div>' +
+      '<div class="card panel"><p class="memo-body">' +
+      ((data.panel && data.panel.length)
+        ? h(data.panel.join(", "))
+        : "This run does not record which models answered it.") +
+      "</p>" +
+      (triggers ? '<div class="label" style="margin-top:14px">What would change this decision</div><ul class="memo-body">' + triggers + "</ul>" : "") +
+      "</div></section>" +
+
+      '<section data-panel="technical" hidden>' +
+      '<div class="label">Confidence breakdown</div>' +
+      '<div class="card panel">' +
+      '<table id="dimensions-table"><thead><tr><th>Dimension</th><th>Value</th><th>Weight</th><th>Contribution</th></tr></thead><tbody>' + dims + "</tbody></table>" +
+      '<table id="penalties-table" style="margin-top:10px"><thead><tr><th>Penalty</th><th>Contribution</th></tr></thead><tbody>' + pens + "</tbody></table>" +
+      '<p class="sub" style="margin:10px 0 0">Total: <strong>' + Number(explain.confidence.total).toFixed(4) + "</strong> (base " + Number(explain.confidence.base).toFixed(4) + ")</p>" +
       "</div>" +
-
-      (triggers ? '<div class="label section-gap">Change triggers</div><div class="card panel"><ul>' + triggers + "</ul></div>" : "") +
-
       '<div class="label section-gap">Run integrity</div>' +
       '<div class="card panel"><ul style="margin:0;padding-left:18px">' +
       "<li>Chain: " + (integrity.chain_verified ? '<span class="dot ok" aria-hidden="true"></span> verified' : '<span class="dot warn" aria-hidden="true"></span> NOT verified') + "</li>" +
       "<li>Fixpoint: " + (integrity.fixpoint_converged ? '<span class="dot ok" aria-hidden="true"></span> converged' : '<span class="dot warn" aria-hidden="true"></span> not converged') + "</li>" +
       "<li>Completeness: " + h((integrity.completeness && integrity.completeness.status) || "unknown") + "</li>" +
-      (integrity.orphaned_cost ? "<li>Orphaned spend: " + money(integrity.orphaned_cost) + "</li>" : "") +
+      (integrity.orphaned_cost ? "<li>" + h(WORDS.unresolved) + ": " + demoMoney(integrity.orphaned_cost, isDemo) + " <span class=\"muted\">(sent to a provider, never confirmed — may or may not have been billed)</span></li>" : "") +
       "</ul></div>" +
+      "</section>" +
 
       '<div class="card panel section-gap" id="accept-card">' +
-      '<div class="ptitle">Accept</div>' +
+      '<div class="ptitle">Record your decision</div>' +
       '<div id="accept-area"></div>' +
-      "</div>" +
-
-      '<p><button type="button" class="ghost" id="export-json">Export JSON</button> <button type="button" class="ghost" id="export-md">Export Markdown</button></p>'
+      "</div>"
     );
+
+    wireSubtabs();
 
     function renderClaims(filter) {
       var tbody = document.querySelector("#claims-table tbody");
       var rows = claimsAll.filter(function (c) { return !filter || c.standing === filter; });
       tbody.innerHTML = rows.map(function (c) {
-        return "<tr><td>" + h(c.text) + "</td><td>" + h(c.kind) + "</td><td>" + claimPill(c.standing) + "</td></tr>";
+        return "<tr><td data-label=\"Claim\">" + h(c.text) + "</td><td data-label=\"Kind\">" + h(c.kind) + "</td><td data-label=\"Standing\">" + claimPill(c.standing) + "</td></tr>";
       }).join("") || '<tr><td colspan="3" class="muted">(no claims match)</td></tr>';
     }
     document.getElementById("claim-filter").addEventListener("change", function (e) { renderClaims(e.target.value); });
     renderClaims("");
 
     document.getElementById("export-json").addEventListener("click", function () { downloadFile(runId + ".json", JSON.stringify(data, null, 2), "application/json"); });
+    // "Record decision" scrolls to the card rather than being a second,
+    // competing accept button: two buttons that both accept is how you get
+    // an accidental one.
+    document.getElementById("record-btn").addEventListener("click", function () {
+      var card = document.getElementById("accept-card");
+      if (card) {
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+        var first = card.querySelector('input[name="decision-choice"]');
+        if (first) first.focus();
+      }
+    });
+
+    // The memo, as a file. The old export was outcome, recommendation and a
+    // confidence number -- it left out the evidence, the dissent and the
+    // reasoning, which is everything that makes the record worth keeping.
     document.getElementById("export-md").addEventListener("click", function () {
-      var md = "# Decision — " + runId + "\n\n" +
-        "Outcome: " + outcomeSlug + "\n\n" +
-        "Recommendation: " + (data.recommendation ? data.recommendation.label : "none") + "\n\n" +
-        "Confidence: " + Number(explain.confidence.total).toFixed(4) + "\n";
-      downloadFile(runId + ".md", md, "text/markdown");
+      var strip = function (html) { return String(html).replace(/<[^>]*>/g, ""); };
+      var lines = [];
+      lines.push("# Decision \u2014 " + runId, "");
+      if (isDemo) {
+        lines.push("> **Demo review \u2014 synthetic responses.** Every model on this panel was the",
+                   "> built-in mock. No provider was called and no charges were incurred. Every",
+                   "> figure below is simulated.", "");
+      }
+      lines.push("**Outcome:** " + outcomeWord(data.outcome), "");
+      lines.push("**Recommendation:** " + (stance.recommends
+        ? data.recommendation.label + " (ahead by " + pct(stance.margin) + ")"
+        : "None. " + (stance.tied
+            ? "The alternatives are tied under the current scoring policy."
+            : "Not enough separation between the alternatives.")), "");
+      lines.push("## Main reasons", "");
+      if (supporting.length) {
+        supporting.forEach(function (c) { lines.push("- " + c.text + " (" + c.kind + ", " + c.standing + ")"); });
+      } else {
+        lines.push("- No claim reached agreed standing in this run.");
+      }
+      lines.push("", "## Strongest unresolved objection", "", strip(objection), "");
+      lines.push("## What is missing", "");
+      gapBits.forEach(function (b) { lines.push("- " + strip(b)); });
+      lines.push("", "## Alternatives considered", "",
+        "| Alternative | " + WORDS.share + " | Supports | Opposes |", "|---|---|---|---|");
+      explain.options.forEach(function (o) {
+        lines.push("| " + o.label.replace(/\|/g, "\\|") + " | " + pct(o.share) + " | " +
+          o.supported_by.length + " | " + o.opposed_by.length + " |");
+      });
+      lines.push("", "## Claims", "", "| Claim | Kind | Standing |", "|---|---|---|");
+      claimsAll.forEach(function (c) {
+        lines.push("| " + String(c.text).replace(/\|/g, "\\|") + " | " + c.kind + " | " + c.standing + " |");
+      });
+      lines.push("",
+        "Kind records where a claim came from, not whether it is true. Nothing here",
+        "has been checked against an external source.", "");
+      lines.push("## Who answered", "",
+        (data.panel && data.panel.length) ? data.panel.join(", ") : "Not recorded.", "");
+      lines.push("## Scoring", "",
+        scoreLabel(isDemo) + ": " + Number(explain.confidence.total).toFixed(4) +
+        " (base " + Number(explain.confidence.base).toFixed(4) + ") under policy " + data.policy_version + ".",
+        "This is how well the decision survived challenge, not a probability that it is correct.", "");
+      explain.confidence.dimensions.forEach(function (d) {
+        lines.push("- " + d.name + ": value " + Number(d.value).toFixed(2) +
+          ", weight " + Number(d.weight).toFixed(2) +
+          ", contribution " + Number(d.contribution).toFixed(4));
+      });
+      explain.confidence.penalties.forEach(function (p) {
+        lines.push("- penalty " + p.name + ": " + Number(p.contribution).toFixed(4) +
+          (p.note ? " (" + p.note + ")" : ""));
+      });
+      if (integrity.orphaned_cost) {
+        lines.push("", WORDS.unresolved + ": " + demoMoney(integrity.orphaned_cost, isDemo) +
+          " \u2014 sent to a provider and never confirmed; may or may not have been billed.");
+      }
+      if ((explain.change_triggers || []).length) {
+        lines.push("", "## What would change this decision", "");
+        explain.change_triggers.forEach(function (t) {
+          lines.push("- " + t.claim_id + ": " + t.direction + " \u2192 " + (t.new_winner || "no clear winner"));
+        });
+      }
+      downloadFile(runId + ".md", lines.join("\n") + "\n", "text/markdown");
     });
 
     renderAcceptArea(runId, data);
@@ -1353,13 +1915,60 @@
     URL.revokeObjectURL(url);
   }
 
+  // Tab switching that keeps every panel in the DOM.
+  //
+  // `hidden` rather than removal: the technical tables stay queryable (tests
+  // and Ctrl-F both rely on that), and switching tabs never re-renders and
+  // loses a filter the reader had set.
+  function wireSubtabs() {
+    var tabs = Array.prototype.slice.call(document.querySelectorAll(".subtab"));
+    tabs.forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        var want = tab.getAttribute("data-tab");
+        tabs.forEach(function (t) {
+          t.setAttribute("aria-selected", String(t === tab));
+        });
+        document.querySelectorAll("[data-panel]").forEach(function (panel) {
+          panel.hidden = panel.getAttribute("data-panel") !== want;
+        });
+      });
+    });
+  }
+
   function renderAcceptArea(runId, data) {
     var area = document.getElementById("accept-area");
+    var stance = decisionStance(data);
+    var isDemo = data.synthetic === true;
+
+    // What the reader is actually choosing between. On a tie there is nothing
+    // to "accept", so the first option is picking one of the alternatives
+    // rather than agreeing with a recommendation that was never made.
+    var choices = stance.recommends
+      ? '<label class="choice"><input type="radio" name="decision-choice" value="accept" checked> Accept the recommendation \u2014 <strong>' + h(data.recommendation.label) + "</strong></label>"
+      : "";
+    (stance.ranked || []).forEach(function (o, i) {
+      if (stance.recommends && data.recommendation && data.recommendation.option_id === o.id) return;
+      choices += '<label class="choice"><input type="radio" name="decision-choice" value="option:' + h(o.id) + '"' +
+        (!stance.recommends && i === 0 ? " checked" : "") + "> Choose <strong>" + h(o.label) + "</strong></label>";
+    });
+    choices += '<label class="choice"><input type="radio" name="decision-choice" value="defer"' +
+      (!stance.recommends && !(stance.ranked || []).length ? " checked" : "") +
+      "> Defer \u2014 not enough evidence yet</label>";
+
     area.innerHTML =
-      '<div id="override-rows"></div>' +
-      '<button type="button" class="link" id="add-override">+ Add override</button><br><br>' +
-      '<button type="button" class="btn-primary" id="accept-btn">Accept</button>' +
-      '<div id="accept-result"></div>';
+      (stance.recommends
+        ? ""
+        : '<p class="sub" style="margin:0 0 10px">This run did not recommend an alternative. Record what <em>you</em> decided, and why.</p>') +
+      '<div class="choices">' + choices + "</div>" +
+      '<label for="decision-note" style="margin-top:12px">Reason' +
+      (stance.recommends ? " (required if you choose another alternative)" : " (required)") +
+      "</label>" +
+      '<input id="decision-note" placeholder="What decided it, or what you are waiting for">' +
+      '<div id="override-rows" style="margin-top:12px"></div>' +
+      '<button type="button" class="link" id="add-override">+ Add a field override</button><br><br>' +
+      '<button type="button" class="btn-primary" id="accept-btn">Record decision</button>' +
+      '<div id="accept-result"></div>' +
+      (isDemo ? '<p class="sub" style="margin:10px 0 0">This is a demo run \u2014 the record will be marked as one.</p>' : "");
 
     var rows = [];
     function renderOverrideRows() {
@@ -1389,10 +1998,45 @@
         resultEl.innerHTML = '<p class="field-error">Every override needs a reason before it can be accepted.</p>';
         return;
       }
+      // A choice other than "go with the recommendation" is a human
+      // overriding the engine, and §the acceptance rules say that needs a
+      // reason. Enforced here rather than trusted to the writer.
+      var picked = document.querySelector('input[name="decision-choice"]:checked');
+      var choice = picked ? picked.value : "accept";
+      var note = (document.getElementById("decision-note") || {}).value || "";
+      if (choice !== "accept" && !note.trim()) {
+        resultEl.innerHTML = '<p class="field-error">Choosing another alternative, or deferring, needs a reason.</p>';
+        return;
+      }
+      if (choice !== "accept") {
+        overrides.push({
+          path: "decision.selected",
+          to: choice === "defer" ? "deferred" : choice.replace(/^option:/, ""),
+          reason: note.trim(),
+        });
+      }
+
+      var chosenLabel = "Deferred";
+      if (choice === "accept" && data.recommendation) chosenLabel = data.recommendation.label;
+      else if (choice.indexOf("option:") === 0) {
+        var id = choice.slice(7);
+        var match = (data.explain.options || []).filter(function (o) { return o.id === id; })[0];
+        chosenLabel = match ? match.label : id;
+      }
+
       api("/api/runs/" + encodeURIComponent(runId) + "/accept", { method: "POST", body: { overrides: overrides } })
         .then(function (acc) {
+          // "By loopback-ui at 2026-09-18T13:40:11.326689674Z" was a database
+          // row read aloud. It also implied an identity: `loopback-ui` is the
+          // local page, not a person, and nothing here authenticated anyone.
           document.getElementById("accept-card").innerHTML =
-            '<div class="ptitle">Accepted</div><p class="sub" style="margin:0">By ' + h(acc.accepted_by) + " at " + h(acc.accepted_at) + "</p>";
+            '<div class="ptitle">Decision recorded</div>' +
+            '<p class="memo-body" style="margin:6px 0 0"><strong>' + h(chosenLabel) + "</strong>" +
+            (note.trim() ? ' <span class="muted">\u2014 ' + h(note.trim()) + "</span>" : "") + "</p>" +
+            '<p class="sub" style="margin:6px 0 0">Recorded locally' +
+            (isDemo ? " for a demo run" : "") + " \u00b7 " + h(friendlyDate(acc.accepted_at)) + "</p>" +
+            '<p class="sub" style="margin:6px 0 0"><span class="muted">Saved to this machine\u2019s run record. ' +
+            "No account or signature is attached \u2014 this is not an authenticated approval.</span></p>";
         })
         .catch(function (e) { resultEl.innerHTML = errorBanner(e); });
     });
@@ -1408,7 +2052,7 @@
   // well as a live one.
   function screenFlow() {
     setStatus("Ready", false);
-    setScreen('<h1>Flow</h1><div class="card panel"><div class="skeleton"></div></div>');
+    setScreen('<h1>Review process</h1><div class="card panel"><div class="skeleton"></div></div>');
     var runId = activeRunId();
     (runId
       ? Promise.resolve(runId)
@@ -1418,7 +2062,7 @@
     ).then(function (id) {
       if (!id) {
         setScreen(
-          '<h1>Flow</h1>' +
+          '<h1>Review process</h1>' +
           '<p class="sub">The pipeline a debate walks, stage by stage. Start one and this fills in.</p>' +
           '<div class="card flow-wrap">' + stepperHtml(-1, false) + "</div>" +
           '<div class="card panel section-gap"><p class="empty-note">No debates yet. <a href="#/new">Start one</a> and its stages appear here.</p></div>'
@@ -1435,10 +2079,10 @@
       renderFlow(runId, data);
     }).catch(function (e) {
       if (e.status === 404) {
-        setScreen('<h1>Flow</h1><div class="card panel"><p class="empty-note">That run is no longer in the store. <a href="#/history">Pick another</a>.</p></div>');
+        setScreen('<h1>Review process</h1><div class="card panel"><p class="empty-note">That run is no longer in the store. <a href="#/history">Pick another</a>.</p></div>');
         return;
       }
-      setScreen('<h1>Flow</h1>' + errorBanner(e));
+      setScreen('<h1>Review process</h1>' + errorBanner(e));
     });
   }
 
@@ -1449,7 +2093,7 @@
     var reached = failed ? STAGE_ORDER.indexOf(data.failed_stage || "") : STAGE_ORDER.length - 1;
     if (reached < 0) reached = STAGE_ORDER.length - 1;
     setScreen(
-      '<h1>Flow</h1>' +
+      '<h1>Review process</h1>' +
       '<p class="sub">Run <code>' + h(runId) + "</code> — " + h(data.status || "complete") + ". Every stage below is one step of ARCHITECTURE §5's pipeline.</p>" +
       (failed ? '<div class="banner danger" role="alert">This run did not finish. The stepper stops at the stage that failed.</div>' : "") +
       '<div class="card flow-wrap">' + stepperHtml(reached, failed) + "</div>" +
@@ -1487,7 +2131,14 @@
     var priced = rows.filter(function (r) { return r.cost_usd !== null && r.cost_usd !== undefined; });
     var totalCost = priced.reduce(function (n, r) { return n + r.cost_usd; }, 0);
     var slowest = rows.reduce(function (m, r) { return Math.max(m, r.elapsed_ms || 0); }, 0);
-    var runCost = runs.reduce(function (n, r) { return n + (r.cost || 0); }, 0);
+    // Demo runs are kept out of the real totals. A simulated $0.09 added into
+    // a figure headed "total spend" is a wrong number, and the person most
+    // likely to be misled by it is whoever is checking what this tool costs.
+    var realRuns = runs.filter(function (r) { return !r.synthetic; });
+    var demoRuns = runs.filter(function (r) { return r.synthetic; });
+    var runCost = realRuns.reduce(function (n, r) { return n + (r.cost || 0); }, 0);
+    var runUnresolved = realRuns.reduce(function (n, r) { return n + (r.orphaned_cost || 0); }, 0);
+    var demoCost = demoRuns.reduce(function (n, r) { return n + (r.cost || 0); }, 0);
 
     function bars(title, sub, valueOf, format) {
       var max = rows.reduce(function (m, r) { return Math.max(m, valueOf(r)); }, 0) || 1;
@@ -1504,8 +2155,10 @@
     }
 
     setScreen(
-      '<h1>Usage</h1>' +
-      '<p class="sub">What the last comparison actually used, straight from what each provider reported. Costs are estimated from published list prices — the run ledger, not this page, is what accounts for a debate.</p>' +
+      '<h1>Usage &amp; costs</h1>' +
+      '<p class="sub">' + h(WORDS.usage) + " and " + h(WORDS.latency) +
+      " come from the providers themselves. " + h(WORDS.estimated) +
+      " multiplies those token counts by a list price held in this build, so every figure here is an estimate rather than a bill — reconcile against your provider's own usage export before trusting a total.</p>" +
       (rows.length === 0
         ? '<div class="card panel"><p class="empty-note">No comparison has run in this browser yet. <a href="#/compare">Ask a question</a> and its token, cost and latency breakdown appears here.</p></div>'
         : '<div class="stat-row">' +
@@ -1522,16 +2175,34 @@
           bars("Cost per model", "Estimated from published list prices, not billed amounts", function (r) { return r.cost_usd || 0; }, fineMoney) +
           '<p class="sub" style="margin-top:10px">Prompt: “' + h(lastCompare.prompt.slice(0, 120)) + (lastCompare.prompt.length > 120 ? "…" : "") + "”</p>"
       ) +
-      '<div class="label section-gap">Debate spend</div>' +
+      '<div class="label section-gap">Decision spend</div>' +
       '<div class="card panel">' +
       (runsError
         ? errorBanner(runsError)
         : runs.length === 0
-        ? '<p class="empty-note">No debates yet.</p>'
-        : '<p class="sub" style="margin:0 0 10px">' + runs.length + " run" + (runs.length === 1 ? "" : "s") + ", " + money(runCost) + " total, as recorded by the budget ledger.</p>" +
-          '<table><thead><tr><th>Question</th><th>Outcome</th><th>Cost</th></tr></thead><tbody>' +
+        ? '<p class="empty-note">No decisions yet.</p>'
+        : // Three figures, never one. "Total" used to mean committed spend
+          // only, sitting next to a separate orphaned figure elsewhere, and
+          // left the reader to work out whether one included the other.
+          '<div class="stat-row">' +
+          '<div class="card stat accent"><div class="k">' + h(WORDS.recorded) + '</div><div class="v">' + fineMoney(runCost) + "</div>" +
+          '<div class="sub2">' + realRuns.length + " real decision" + (realRuns.length === 1 ? "" : "s") + "</div></div>" +
+          '<div class="card stat"><div class="k">' + h(WORDS.unresolved) + '</div><div class="v">' + fineMoney(runUnresolved) + "</div>" +
+          '<div class="sub2">sent, never confirmed</div></div>' +
+          '<div class="card stat"><div class="k">Potential total</div><div class="v">' + fineMoney(runCost + runUnresolved) + "</div>" +
+          '<div class="sub2">if every unresolved call was billed</div></div>' +
+          (demoRuns.length
+            ? '<div class="card stat"><div class="k">Simulated (demo)</div><div class="v">' + fineMoney(demoCost) + "</div>" +
+              '<div class="sub2">' + demoRuns.length + " demo run" + (demoRuns.length === 1 ? "" : "s") + ", excluded above</div></div>"
+            : "") +
+          "</div>" +
+          '<table style="margin-top:14px"><thead><tr><th>Question</th><th>Outcome</th><th>' + h(WORDS.recorded) + "</th><th>" + h(WORDS.unresolved) + "</th></tr></thead><tbody>" +
           runs.slice(0, 10).map(function (r) {
-            return '<tr><td><a href="#/result/' + encodeURIComponent(r.run_id) + '">' + h((r.question || "").slice(0, 60)) + "</a></td><td>" + h(r.outcome || r.status) + "</td><td>" + money(r.cost || 0) + "</td></tr>";
+            var isDemo = !!r.synthetic;
+            return '<tr><td><a href="#/result/' + encodeURIComponent(r.run_id) + '">' + h((r.question || "").slice(0, 60)) + "</a>" +
+              (isDemo ? ' <span class="demo-chip">demo</span>' : "") + "</td><td>" +
+              h(r.outcome ? outcomeWord(r.outcome) : r.status) + "</td><td>" + demoMoney(r.cost || 0, isDemo) + "</td><td>" +
+              (r.orphaned_cost ? money(r.orphaned_cost) : "—") + "</td></tr>";
           }).join("") + "</tbody></table>") +
       "</div>"
     );
@@ -1555,34 +2226,52 @@
   function renderHistory(rows) {
     var outcomes = Array.from(new Set(rows.map(function (r) { return r.outcome; }).filter(Boolean)));
     var policies = Array.from(new Set(rows.map(function (r) { return r.policy_version; }).filter(Boolean)));
+    var demoCount = rows.filter(function (r) { return r.synthetic; }).length;
     setScreen(
-      '<h1>History</h1>' +
-      '<p class="sub">Every debate this store holds. Comparisons are not listed — they are not saved.</p>' +
+      '<h1>Decisions</h1>' +
+      '<p class="sub">Every decision this store holds. Quick comparisons are not listed — they are not saved.</p>' +
+      '<p><a class="btn-primary" href="#/new" id="new-decision-cta" style="display:inline-block;text-decoration:none">New decision</a></p>' +
+      (demoCount
+        ? '<div class="banner demo" role="note" data-demo-banner><strong>' + demoCount + " of these " +
+          (demoCount === 1 ? "is a demo review" : "are demo reviews") +
+          "</strong> — run against the built-in mock, with synthetic answers and simulated figures. " +
+          "They are marked in the table and left out of the totals on Usage &amp; costs.</div>"
+        : "") +
       '<div class="card panel">' +
       '<div class="filters">' +
+      '<label for="f-search" class="visually-hidden">Search questions</label>' +
+      '<input id="f-search" type="search" placeholder="Search questions" style="max-width:260px">' +
       '<label for="f-outcome" class="visually-hidden">Outcome</label>' +
-      '<select id="f-outcome"><option value="">All outcomes</option>' + outcomes.map(function (o) { return '<option value="' + h(o) + '">' + h(o) + "</option>"; }).join("") + "</select>" +
+      '<select id="f-outcome"><option value="">All outcomes</option>' + outcomes.map(function (o) { return '<option value="' + h(o) + '">' + h(outcomeWord(o)) + "</option>"; }).join("") + "</select>" +
       '<label for="f-policy" class="visually-hidden">Policy version</label>' +
       '<select id="f-policy"><option value="">All policy versions</option>' + policies.map(function (p) { return '<option value="' + h(p) + '">' + h(p) + "</option>"; }).join("") + "</select>" +
       '<span class="muted" style="font-size:12px">Decisions are only ever compared within one policy version — filter by it before comparing runs.</span>' +
       "</div>" +
-      '<table><thead><tr><th>Question</th><th>Outcome</th><th>Confidence</th><th>Cost</th><th>Date</th></tr></thead><tbody id="history-body"></tbody></table>' +
+      '<table><thead><tr><th>Question</th><th>Outcome</th><th>' + h(scoreLabel(false)) + "</th><th>" + h(WORDS.recorded) + "</th><th>Date</th></tr></thead><tbody id=\"history-body\"></tbody></table>" +
       "</div>"
     );
     function render() {
       var o = document.getElementById("f-outcome").value;
       var p = document.getElementById("f-policy").value;
-      var filtered = rows.filter(function (r) { return (!o || r.outcome === o) && (!p || r.policy_version === p); });
+      var q = document.getElementById("f-search").value.trim().toLowerCase();
+      var filtered = rows.filter(function (r) {
+        return (!o || r.outcome === o) && (!p || r.policy_version === p) &&
+          (!q || String(r.question || "").toLowerCase().indexOf(q) !== -1);
+      });
       document.getElementById("history-body").innerHTML = filtered.map(function (r) {
-        return '<tr><td><a href="#/result/' + encodeURIComponent(r.run_id) + '">' + h(r.question).slice(0, 80) + "</a></td>" +
-          "<td>" + h(r.outcome || r.status) + "</td>" +
+        var isDemo = !!r.synthetic;
+        return '<tr data-history-row' + (isDemo ? " data-demo-row" : "") + '><td><a href="#/result/' + encodeURIComponent(r.run_id) + '">' + h(r.question).slice(0, 80) + "</a>" +
+          (isDemo ? ' <span class="demo-chip">demo</span>' : "") + "</td>" +
+          "<td>" + h(r.outcome ? outcomeWord(r.outcome) : r.status) + "</td>" +
           "<td>" + (r.confidence != null ? Number(r.confidence).toFixed(2) : "—") + "</td>" +
-          "<td>" + money(r.cost || 0) + (r.orphaned_cost ? ' <span class="muted">(+' + money(r.orphaned_cost) + " orphaned)</span>" : "") + "</td>" +
-          "<td>" + h(r.started_at) + "</td></tr>";
-      }).join("") || '<tr><td colspan="5" class="muted">(no runs match)</td></tr>';
+          "<td>" + demoMoney(r.cost || 0, isDemo) +
+          (r.orphaned_cost ? ' <span class="muted">(+' + money(r.orphaned_cost) + " " + h(WORDS.unresolved.toLowerCase()) + ")</span>" : "") + "</td>" +
+          "<td>" + h(friendlyDate(r.started_at)) + "</td></tr>";
+      }).join("") || '<tr><td colspan="5" class="muted">(no decisions match)</td></tr>';
     }
     document.getElementById("f-outcome").addEventListener("change", render);
     document.getElementById("f-policy").addEventListener("change", render);
+    document.getElementById("f-search").addEventListener("input", render);
     render();
   }
 
@@ -1591,10 +2280,10 @@
   // =====================================================================
   function screenKeys() {
     setStatus("Ready", false);
-    setScreen('<h1>Keys</h1><div class="card panel"><div class="skeleton"></div></div>');
+    setScreen('<h1>Settings</h1><div class="card panel"><div class="skeleton"></div></div>');
     api("/api/providers").then(function (data) {
       renderKeys(data.providers || []);
-    }).catch(function (e) { setScreen('<h1>Keys</h1>' + errorBanner(e)); });
+    }).catch(function (e) { setScreen('<h1>Settings</h1>' + errorBanner(e)); });
   }
 
   function renderKeys(providers) {
@@ -1615,7 +2304,8 @@
     }).join("");
 
     setScreen(
-      '<h1>Keys</h1>' +
+      '<h1>Settings</h1>' +
+      '<div class="label">Providers</div>' +
       '<p class="sub">Which providers can be called, and where their key came from. A key is never shown, only its last four characters.</p>' +
       '<div class="model-row">' + providers.filter(function (p) { return p.id !== "mock"; }).map(modelCardHtml).join("") + "</div>" +
       (real.length === 0

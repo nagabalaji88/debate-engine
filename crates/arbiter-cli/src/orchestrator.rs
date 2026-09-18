@@ -86,6 +86,12 @@ pub async fn run_pipeline(
     handle: &RunHandle,
     budget: &BudgetLedger,
     cache: &ResponseCache,
+    // One token for the whole run, so something outside the pipeline can stop
+    // it. It used to be `CancellationToken::new()` *inside* the per-stage
+    // closure: every stage got a fresh token that nobody else held, so the five
+    // stages that check `is_cancelled` were checking a flag no caller could
+    // ever set. The checks were right; there was no way to reach them.
+    cancel: &CancellationToken,
 ) -> anyhow::Result<SynthesizedDecision> {
     let sink = handle.sink();
     let deadline = Instant::now() + Duration::from_secs(cfg.bounds.max_wall_time_secs);
@@ -96,7 +102,7 @@ pub async fn run_pipeline(
         events: &sink,
         cache,
         deadline,
-        cancel: CancellationToken::new(),
+        cancel: cancel.clone(),
         round,
         rng: DeterministicRng::seeded(cfg.rng_seed),
     };

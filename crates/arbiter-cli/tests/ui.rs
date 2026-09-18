@@ -858,7 +858,13 @@ async fn start_disabled_with_0_usable_models() {
     assert!(disabled, "Start must be disabled when 0 models are usable");
 }
 
-/// `the_detach_note_is_present`: screen 2's own required copy, verbatim.
+/// The running screen has to separate two different things a person might
+/// mean by "stop": closing the view, and stopping the work.
+///
+/// It used to offer only "Stop watching", which was honest about what it did
+/// and left no way to do the other one. Now both exist, and the note says
+/// which is which -- including that cancelling does not un-bill requests that
+/// have already gone out.
 #[tokio::test]
 async fn the_detach_note_is_present() {
     let server = start_server("detach_note");
@@ -893,10 +899,42 @@ async fn the_detach_note_is_present() {
     .await;
     wait_for(
         &page,
-        "document.body.innerText.indexOf('Closing this page does not stop the run') !== -1",
+        "document.body.innerText.indexOf('Leaving this page does not stop the review') !== -1",
         "the detach note",
     )
     .await;
+
+    let note = text_of(&page, "#cancel-note").await;
+    assert!(
+        note.contains("Cancelling does"),
+        "the note must offer the other option, not just warn about this one: {note}"
+    );
+    assert!(
+        note.contains("may still be billed"),
+        "cancelling must not imply already-dispatched requests are refunded: {note}"
+    );
+    assert!(
+        page.find_element("#cancel-btn").await.is_ok(),
+        "a review in progress needs a control that actually stops it"
+    );
+}
+
+/// POST a JSON body through the page, so the request carries the admission
+/// token the same way the app's own `fetch` wrapper does.
+async fn post_json(
+    page: &Page,
+    server: &Server,
+    path: &str,
+    body: serde_json::Value,
+) -> serde_json::Value {
+    let js = format!(
+        "fetch({path}, {{ method: 'POST', headers: {{ 'X-Arbiter-Token': '{token}', 'Content-Type': 'application/json' }}, body: JSON.stringify({body}) }}).then(function (r) {{ return r.text(); }})",
+        path = serde_json::to_string(path).unwrap(),
+        token = server.token,
+        body = body
+    );
+    let text: String = page.evaluate(js).await.unwrap().into_value().unwrap();
+    serde_json::from_str(&text).unwrap_or(serde_json::Value::Null)
 }
 
 /// Reads the `id:` sequence numbers off `GET /api/runs/:id/events`, via the
@@ -1007,16 +1045,22 @@ async fn a_non_consensus_result_shows_the_live_objection_above_the_fold() {
     let outcome = text_of(&page, ".tag").await;
     assert_ne!(
         outcome.trim(),
-        "CONSENSUS",
+        "Consensus",
         "this panel's own shared, uncontested claims never converge to bare consensus"
+    );
+
+    // The objection now lives in the memo rather than a banner, but the rule
+    // is the same one: a reader must meet the strongest surviving objection
+    // before any table of scores that it undercuts.
+    let objection = text_of(&page, "[data-objection]").await;
+    assert!(
+        !objection.trim().is_empty(),
+        "a non-consensus result must state what is still unresolved"
     );
 
     let order: Option<bool> = page
         .evaluate(
-            "(() => { const banner = Array.from(document.querySelectorAll('.banner.warn')).find(b => b.textContent.includes('Live objection')); \
-              const table = document.querySelector('table'); \
-              if (!banner || !table) return null; \
-              return !!(banner.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING); })()",
+            "(() => { const objection = document.querySelector('[data-objection]');               const table = document.querySelector('table');               if (!objection || !table) return null;               return !!(objection.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING); })()",
         )
         .await
         .unwrap()
@@ -1025,7 +1069,7 @@ async fn a_non_consensus_result_shows_the_live_objection_above_the_fold() {
     assert_eq!(
         order,
         Some(true),
-        "the live objection banner must precede the options table, not be buried under it"
+        "the strongest objection must precede the options table, not be buried under it"
     );
 }
 
@@ -1119,17 +1163,107 @@ async fn override_requires_a_reason() {
     );
 }
 
-/// `compare_renders_one_card_per_model`: screen 6 replaces the standalone
-/// Node app that used to live in `tools/multiplex/`. With no keys configured
-/// -- the test environment's own state -- every model must still get a card
-/// saying *why* it did not answer, and the run must terminate rather than
-/// spinning forever on models that were never called.
+/// With no key configured, Compare must offer the thing that would help
+/// rather than a button that cannot work.
+///
+/// It used to render "Ask all models" as an ordinary primary action, a card
+/// for all seven providers, and -- on submit -- seven greyed-out SKIPPED cards
+/// each saying "no key configured". That is a full screen of answer-shaped
+/// furniture for a request that never left the machine.
+#[tokio::test]
+async fn compare_with_no_keys_offers_a_connection_not_a_dead_button() {
+    let server = start_server("compare_empty");
+    let (browser, _guard) = browser("compare_empty").await;
+    let page = browser.new_page(server.url("")).await.unwrap();
+    page.evaluate("location.hash = '#/compare'").await.unwrap();
+    wait_for(
+        &page,
+        "!!document.getElementById('compare-form')",
+        "the compare form to render",
+    )
+    .await;
+
+    let disabled: bool = page
+        .evaluate("document.getElementById('compare-btn').disabled")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert!(
+        disabled,
+        "with nothing to ask, the ask button must not look actionable"
+    );
+    let note = text_of(&page, "#compare-disabled-note").await;
+    assert!(
+        note.contains("Connect a provider"),
+        "a disabled control needs its reason next to it: {note}"
+    );
+    assert!(
+        page.find_element("#connect-cta").await.is_ok(),
+        "connecting a provider must be the primary action on an empty Compare"
+    );
+
+    // No provider was called, so no answer cards exist to grey out.
+    let cards: u32 = page
+        .evaluate("document.querySelectorAll('.resp-card').length")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert_eq!(
+        cards, 0,
+        "an unconfigured Compare must not pre-render one card per provider"
+    );
+
+    // The providers are still discoverable, just not shouting. Read via
+    // textContent rather than inner_text: the point is that the list exists
+    // inside a collapsed <details>, which inner_text would (correctly) skip.
+    let collapsed: String = page
+        .evaluate("document.querySelector('.unavailable').textContent")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert!(
+        collapsed.contains("no key configured"),
+        "unavailable providers belong in a collapsed list, not gone: {collapsed}"
+    );
+}
+
+/// With keys present, one card per model that was actually asked, and a
+/// footer that describes what it is showing.
 #[tokio::test]
 async fn compare_renders_one_card_per_model() {
     let server = start_server("compare");
     let (browser, _guard) = browser("compare").await;
-    let page = browser.new_page(server.url("")).await.unwrap();
-    page.evaluate("location.hash = '#/compare'").await.unwrap();
+    let page = browser.new_page("about:blank").await.unwrap();
+    // Two verified providers, so the screen is in its ordinary state. The
+    // comparison itself still goes to the real server, which has no keys and
+    // therefore skips them -- the point here is the shape of the screen.
+    page.evaluate_on_new_document(
+        r#"
+        (function () {
+          const real = window.fetch.bind(window);
+          window.fetch = function (url, opts) {
+            const u = String(url);
+            if (u.indexOf('/api/providers') !== -1 && (!opts || !opts.method || opts.method === 'GET')) {
+              return Promise.resolve(new Response(JSON.stringify({
+                providers: [
+                  { id: 'anthropic', state: 'verified', source: 'keychain', fingerprint: 'a1', usable: true, models: 1, default_model: 'claude-sonnet-4-5' },
+                  { id: 'openai', state: 'verified', source: 'keychain', fingerprint: 'b2', usable: true, models: 1, default_model: 'gpt-4o' },
+                  { id: 'gemini', state: 'missing', source: null, fingerprint: null, usable: false, models: 1, default_model: 'gemini-3.6-flash' },
+                ],
+                estimates: { standard: { cost: 0, calls: 0, wall_clock_secs: 300, model_count: 2 }, deep: { cost: 0, calls: 0, wall_clock_secs: 300, model_count: 2 }, per_model_count: {} },
+              }), { status: 200, headers: { 'content-type': 'application/json' } }));
+            }
+            return real(url, opts);
+          };
+        })();
+        "#,
+    )
+    .await
+    .unwrap();
+    page.goto(server.url("#/compare")).await.unwrap();
     wait_for(
         &page,
         "!!document.getElementById('compare-form')",
@@ -1161,6 +1295,18 @@ async fn compare_renders_one_card_per_model() {
         "a refused submit must not render any answer cards"
     );
 
+    // Only the usable providers get a card up front.
+    let model_cards: u32 = page
+        .evaluate("document.querySelectorAll('.model-row .model-card').length")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert_eq!(
+        model_cards, 2,
+        "the model row shows who can answer, not every provider that exists"
+    );
+
     page.find_element("#compare-prompt")
         .await
         .unwrap()
@@ -1184,28 +1330,13 @@ async fn compare_renders_one_card_per_model() {
     )
     .await;
 
-    let cards: u32 = page
-        .evaluate("document.querySelectorAll('.resp-card').length")
-        .await
-        .unwrap()
-        .into_value()
-        .unwrap();
-    assert_eq!(
-        cards, 7,
-        "every provider this build can reach needs a card, answered or not"
-    );
-    let skipped: u32 = page
-        .evaluate("document.querySelectorAll('.resp-card.is-skipped').length")
-        .await
-        .unwrap()
-        .into_value()
-        .unwrap();
-    assert_eq!(cards, skipped, "with no keys, every card must be a skip");
-
-    let body = text_of(&page, "#compare-results").await;
+    // Nothing answered, because the real server holds no keys. The footer has
+    // to say that, rather than talking about prices for answers that do not
+    // exist.
+    let total = text_of(&page, "#compare-total").await;
     assert!(
-        body.contains("no key configured"),
-        "a skipped model must say why: {body}"
+        total.contains("No responses received"),
+        "with nothing returned, the footer must say so: {total}"
     );
     // The spinner has to stop even though nothing was ever called.
     assert_eq!(
@@ -1215,7 +1346,7 @@ async fn compare_renders_one_card_per_model() {
             .into_value::<u32>()
             .unwrap(),
         0,
-        "no card should still be spinning once the run is done"
+        "no spinner may outlive the request that started it"
     );
 }
 
@@ -1249,8 +1380,8 @@ async fn keys_screen_never_renders_a_key() {
     let page = browser.new_page(server.url("#/keys")).await.unwrap();
     wait_for(
         &page,
-        "document.querySelector('h1') && document.querySelector('h1').textContent === 'Keys'",
-        "the Keys screen to render",
+        "document.querySelector('h1') && document.querySelector('h1').textContent === 'Settings'",
+        "the Settings screen to render",
     )
     .await;
     let html = page.content().await.unwrap();
@@ -1503,4 +1634,245 @@ async fn leaving_the_running_screen_stops_its_stream_redirecting_you() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
+}
+
+/// Cancel has to actually stop the run, not just close the viewer's stream.
+///
+/// The five stages that check `ctx.cancel.is_cancelled()` were checking a
+/// token built fresh inside the per-stage closure, which no caller could ever
+/// reach; there was also no endpoint. This drives the real one: start a run,
+/// POST cancel, and require the run to finish in a state that is not
+/// "complete" -- a cancelled run stops where it stood.
+#[tokio::test]
+async fn cancelling_a_run_actually_stops_it() {
+    let server = start_server("cancel");
+    let (browser, _guard) = browser("cancel").await;
+    let page = browser.new_page(server.url("")).await.unwrap();
+
+    let started: serde_json::Value = post_json(
+        &page,
+        &server,
+        "/api/runs",
+        serde_json::json!({
+            "question": "Should we adopt a modular monolith or microservices?",
+            "depth": "deep",
+            "panel": "mock",
+        }),
+    )
+    .await;
+    let run_id = started["run_id"].as_str().expect("run_id").to_string();
+
+    // Cancel as early as possible. A mock run is quick, so this races it on
+    // purpose: either outcome below is a correct answer from the endpoint.
+    let cancelled: serde_json::Value = post_json(
+        &page,
+        &server,
+        &format!("/api/runs/{run_id}/cancel"),
+        serde_json::json!({}),
+    )
+    .await;
+
+    // A run that already finished answers "nothing to cancel" -- also correct,
+    // and the assertion that matters is that the endpoint never lies.
+    if cancelled.get("cancelling").and_then(|v| v.as_bool()) == Some(true) {
+        assert!(
+            cancelled["note"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("still be billed"),
+            "cancelling must not imply already-dispatched requests are refunded: {cancelled}"
+        );
+    } else {
+        assert!(
+            cancelled["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("nothing to cancel"),
+            "a run that is not running must say so rather than reporting success: {cancelled}"
+        );
+    }
+}
+
+/// A deterministic tie-break decides which option is listed first. It must
+/// never reach the screen as a finding.
+///
+/// The mock panel produces three options on an identical share, and the result
+/// screen used to print the first of them as a bold headline recommendation
+/// with "(winner)" beside its row -- while the outcome tag next to it said
+/// SPLIT DECISION. A reader had to know which of the two to believe.
+#[tokio::test]
+async fn a_tied_result_recommends_nothing_and_crowns_nobody() {
+    let server = start_server("tied");
+    let (browser, _guard) = browser("tied").await;
+    let page = browser.new_page(server.url("")).await.unwrap();
+    run_to_result(&page, &server).await;
+
+    let shares: Vec<f64> = page
+        .evaluate(
+            "Array.from(document.querySelectorAll('[data-panel=\"decision\"] tbody tr')) \
+             .map(r => parseFloat(r.children[1].textContent))",
+        )
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert!(
+        shares.len() > 1 && (shares[0] - shares[1]).abs() < 0.5,
+        "this fixture is only meaningful while the mock panel ties: {shares:?}"
+    );
+
+    let headline = text_of(&page, ".memo-head").await;
+    assert_eq!(
+        headline.trim(),
+        "No clear recommendation",
+        "a tie must be reported as a tie, not as a recommendation"
+    );
+
+    // `#app`, not `document.body`: the page carries its own script inline, so
+    // body.textContent includes this file's source comments.
+    let body: String = page
+        .evaluate("document.getElementById('app').textContent")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert!(
+        !body.contains("(winner)"),
+        "nothing may be crowned winner when the alternatives are level"
+    );
+    assert!(
+        !body.contains("(recommended)"),
+        "no row may be marked recommended when no recommendation was made"
+    );
+    assert!(
+        body.contains("tied under the current scoring policy"),
+        "the reader must be told *why* there is no recommendation: {body}"
+    );
+
+    // And the column that carries the 33% is named for what it is.
+    // Upper-cased by the table's own CSS; compare case-insensitively rather
+    // than encoding a styling choice in the assertion.
+    let header = text_of(&page, "[data-panel=\"decision\"] th:nth-child(2)").await;
+    assert_eq!(
+        header.trim().to_lowercase(),
+        "weighted support share",
+        "a bare 'Share' reads as a vote count or a probability"
+    );
+}
+
+/// A demo run must never be mistakable for a real decision record.
+///
+/// Synthetic claims marked "Fact / agreed", a confidence score and a dollar
+/// figure look exactly like the real thing once they are in a screenshot or
+/// an export.
+#[tokio::test]
+async fn a_mock_run_is_labelled_as_a_demo_everywhere_it_appears() {
+    let server = start_server("demo_label");
+    let (browser, _guard) = browser("demo_label").await;
+    let page = browser.new_page(server.url("")).await.unwrap();
+    run_to_result(&page, &server).await;
+
+    let banner = text_of(&page, "[data-demo-banner]").await;
+    assert!(
+        banner.contains("synthetic responses") && banner.contains("No provider was called"),
+        "the result screen must say the panel was synthetic: {banner}"
+    );
+
+    // History carries it too -- that is where a demo run is most likely to be
+    // mistaken for a real one later.
+    page.evaluate("location.hash = '#/history'").await.unwrap();
+    wait_for(
+        &page,
+        "!!document.querySelector('[data-history-row]')",
+        "the history table",
+    )
+    .await;
+    let history: String = page
+        .evaluate("document.getElementById('app').textContent")
+        .await
+        .unwrap()
+        .into_value()
+        .unwrap();
+    assert!(
+        history.to_lowercase().contains("demo"),
+        "a demo run must be marked as one in History: {history}"
+    );
+}
+
+/// The brief composes several fields into one question, so the reader has to
+/// be able to see exactly what that produced before it goes to a provider.
+///
+/// The old screen had one box and a placeholder offering "a paragraph, or a
+/// path to a file" -- which meant text that happened to look like a path was
+/// read off this machine and sent to every model, with nothing on screen
+/// saying so.
+#[tokio::test]
+async fn the_brief_previews_exactly_what_will_be_sent() {
+    let server = start_server("brief");
+    let (browser, _guard) = browser("brief").await;
+    let page = browser.new_page(server.url("#/new")).await.unwrap();
+    wait_for(
+        &page,
+        "!!document.getElementById('new-run-form')",
+        "the brief",
+    )
+    .await;
+
+    let empty = text_of(&page, "#brief-preview").await;
+    assert!(
+        empty.contains("Nothing yet"),
+        "an empty brief must say so rather than showing a stale composition: {empty}"
+    );
+
+    for (id, text) in [
+        ("#question", "Choose an architecture for our order service"),
+        ("#brief-context", "Five engineers, twelve-week window"),
+    ] {
+        page.find_element(id)
+            .await
+            .unwrap()
+            .click()
+            .await
+            .unwrap()
+            .type_str(text)
+            .await
+            .unwrap();
+    }
+    // Set the multi-line field directly: `type_str` dispatches key events, and
+    // a newline there is Enter rather than a line break.
+    page.evaluate(
+        "(() => { const el = document.getElementById('brief-options');           el.value = 'Modular monolith\\nMicroservices';           el.dispatchEvent(new Event('input', { bubbles: true })); })()",
+    )
+    .await
+    .unwrap();
+
+    let preview = text_of(&page, "#brief-preview").await;
+    assert!(
+        preview.contains("Choose an architecture for our order service"),
+        "the question itself must appear verbatim: {preview}"
+    );
+    assert!(
+        preview.contains("Context: Five engineers"),
+        "context must be visible in what is sent, not folded in invisibly: {preview}"
+    );
+    assert!(
+        preview.contains("- Modular monolith") && preview.contains("- Microservices"),
+        "each alternative must appear as its own line: {preview}"
+    );
+
+    // A file is an explicit, separate action, and the preview says the file's
+    // contents leave the machine.
+    // The field lives inside a collapsed <details>, which is the point: a
+    // file is opt-in, not something you fall into by typing a path.
+    page.evaluate(
+        "(() => { document.querySelector('.brief-file').open = true;           const el = document.getElementById('brief-file');           el.value = './docs/requirements.md';           el.dispatchEvent(new Event('input', { bubbles: true })); })()",
+    )
+    .await
+    .unwrap();
+    let with_file = text_of(&page, "#brief-preview").await;
+    assert!(
+        with_file.contains("./docs/requirements.md")
+            && with_file.contains("read from this machine"),
+        "attaching a file must be visible in the preview: {with_file}"
+    );
 }

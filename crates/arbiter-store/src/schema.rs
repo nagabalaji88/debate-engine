@@ -35,6 +35,7 @@ CREATE TABLE run_catalog (
   duration_ms     INTEGER,
   model_count     INTEGER,
   depth           TEXT,
+  synthetic       INTEGER NOT NULL DEFAULT 0,  -- every model was the mock
   policy_version  TEXT NOT NULL,      -- history is only comparable within one
   started_at      TEXT NOT NULL,
   completed_at    TEXT,

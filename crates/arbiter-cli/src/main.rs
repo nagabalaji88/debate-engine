@@ -540,7 +540,10 @@ async fn run_command(
 
     let budget = arbiter_kernel::budget::BudgetLedger::new(Some(cfg.bounds.max_cost));
     let cache = arbiter_kernel::cache::ResponseCache::new();
-    let result = run_pipeline(&cfg, &pack, &providers, &handle, &budget, &cache).await;
+    // Ctrl-C is the CLI's cancel; nothing else reaches in, so this token is
+    // constructed here and simply never set.
+    let cancel = arbiter_kernel::stage::CancellationToken::new();
+    let result = run_pipeline(&cfg, &pack, &providers, &handle, &budget, &cache, &cancel).await;
     let duration_ms = run_started_at.elapsed().as_millis() as i64;
 
     // The only place `cache_entries` is ever written to (PLAN_DEVIATIONS.md
@@ -590,6 +593,7 @@ async fn run_command(
                         duration_ms: Some(duration_ms),
                         model_count: Some(cfg.panel.len() as i64),
                         depth: Some(format!("{depth:?}")),
+                        synthetic: cfg.panel.iter().all(|(_, p)| p.as_str() == "mock"),
                         completed_at: arbiter_store::now_rfc3339(),
                     },
                 );
@@ -614,6 +618,7 @@ async fn run_command(
                         duration_ms: Some(duration_ms),
                         model_count: Some(cfg.panel.len() as i64),
                         depth: Some(format!("{depth:?}")),
+                        synthetic: cfg.panel.iter().all(|(_, p)| p.as_str() == "mock"),
                         completed_at: arbiter_store::now_rfc3339(),
                     },
                 );

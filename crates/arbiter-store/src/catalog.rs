@@ -19,6 +19,31 @@ pub enum CatalogError {
     Io(#[from] std::io::Error),
 }
 
+/// Adds `run_catalog.synthetic` to a catalogue created before that column
+/// existed.
+///
+/// `open_with` only ever runs its migration on a *fresh* file, so an operator
+/// who already has a `history.db` would otherwise get "no such column" on
+/// every read. There is no incremental migration runner to hang this off yet
+/// (ARCHITECTURE §8.7 names the version axis but this file has only ever had
+/// one version), so it is done here, guarded and idempotent: read the column
+/// list, add the column only if it is missing.
+fn add_synthetic_column_if_missing(conn: &Connection) -> Result<(), CatalogError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(run_catalog)")?;
+    let has_column = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|c| c.ok())
+        .any(|name| name == "synthetic");
+    drop(stmt);
+    if !has_column {
+        conn.execute(
+            "ALTER TABLE run_catalog ADD COLUMN synthetic INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
 /// Opens (creating if needed) `history.db` at `path`, in WAL mode with the
 /// 5,000 ms `busy_timeout` §8.5 specifies, and applies its schema.
 pub fn open_history_db(
@@ -30,6 +55,7 @@ pub fn open_history_db(
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.busy_timeout(Duration::from_millis(5000))?;
     crate::schema::open_history_db(&conn, engine_version, now)?;
+    add_synthetic_column_if_missing(&conn)?;
     Ok(conn)
 }
 
@@ -69,6 +95,9 @@ pub struct Completion {
     pub duration_ms: Option<i64>,
     pub model_count: Option<i64>,
     pub depth: Option<String>,
+    /// Every model on the panel was the mock. Recorded so History and Usage
+    /// can mark a demo run as one, and keep its figures out of real totals.
+    pub synthetic: bool,
     pub completed_at: String,
 }
 
@@ -79,8 +108,8 @@ pub fn update_completion(conn: &Connection, c: &Completion) -> Result<(), Catalo
         "UPDATE run_catalog SET
             status = ?1, outcome = ?2, confidence = ?3, margin = ?4,
             cost = ?5, orphaned_cost = ?6, duration_ms = ?7, model_count = ?8,
-            depth = ?9, completed_at = ?10
-         WHERE run_id = ?11",
+            depth = ?9, synthetic = ?10, completed_at = ?11
+         WHERE run_id = ?12",
         params![
             c.status,
             c.outcome,
@@ -91,6 +120,7 @@ pub fn update_completion(conn: &Connection, c: &Completion) -> Result<(), Catalo
             c.duration_ms,
             c.model_count,
             c.depth,
+            c.synthetic,
             c.completed_at,
             c.run_id,
         ],
@@ -119,6 +149,9 @@ pub struct RunSummary {
     pub policy_version: String,
     pub started_at: String,
     pub completed_at: Option<String>,
+    /// Every model was the mock. History marks these, and Usage keeps their
+    /// figures out of the real totals.
+    pub synthetic: bool,
 }
 
 /// `arbiter history [--outcome · --since · --min-confidence]` (ARCHITECTURE
@@ -138,7 +171,8 @@ pub fn list_runs(
     filter: &HistoryFilter,
 ) -> Result<Vec<RunSummary>, CatalogError> {
     let mut sql = "SELECT run_id, status, question, outcome, confidence, margin, cost, \
-                    orphaned_cost, model_count, depth, policy_version, started_at, completed_at \
+                    orphaned_cost, model_count, depth, policy_version, started_at, completed_at, \
+                    synthetic \
                     FROM run_catalog WHERE 1=1"
         .to_string();
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -174,6 +208,7 @@ pub fn list_runs(
                 policy_version: r.get(10)?,
                 started_at: r.get(11)?,
                 completed_at: r.get(12)?,
+                synthetic: r.get::<_, i64>(13)? != 0,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -296,6 +331,9 @@ mod tests {
                 duration_ms: Some(42_000),
                 model_count: Some(5),
                 depth: Some("standard".to_string()),
+                // `reindex` rebuilds from run.db and cannot see the panel, so a run it
+                // recovers is not claimed to be a demo.
+                synthetic: false,
                 completed_at: crate::now_rfc3339(),
             },
         )
@@ -342,6 +380,7 @@ mod tests {
                         duration_ms: None,
                         model_count: None,
                         depth: None,
+                        synthetic: false,
                         completed_at: crate::now_rfc3339(),
                     },
                 )
@@ -415,6 +454,9 @@ mod tests {
                     duration_ms: Some(1000),
                     model_count: Some(3),
                     depth: Some("standard".to_string()),
+                    // `reindex` rebuilds from run.db and cannot see the panel, so a run it
+                    // recovers is not claimed to be a demo.
+                    synthetic: false,
                     completed_at: crate::now_rfc3339(),
                 },
             )

@@ -351,7 +351,8 @@ pub async fn replay_command(run_id: RunId, json: bool, store_root: PathBuf) -> a
     // entry despite them being present.
     let handle = RunHandle::new(run_id.clone(), Box::new(NullWriter)).continuing_from(None);
 
-    let replayed = run_pipeline(&cfg, &pack, &providers, &handle, &budget, &cache)
+    let cancel = arbiter_kernel::stage::CancellationToken::new();
+    let replayed = run_pipeline(&cfg, &pack, &providers, &handle, &budget, &cache, &cancel)
         .await
         .map_err(|e| {
             anyhow::anyhow!(
@@ -509,7 +510,8 @@ pub async fn resume_command(
         .last();
     let handle = RunHandle::new(run_id.clone(), writer).continuing_from(last_event.as_ref());
 
-    let result = run_pipeline(&cfg, &pack, &providers, &handle, &ledger, &cache).await;
+    let cancel = arbiter_kernel::stage::CancellationToken::new();
+    let result = run_pipeline(&cfg, &pack, &providers, &handle, &ledger, &cache, &cancel).await;
 
     // Same as `arbiter run`'s own persistence pass (PLAN_DEVIATIONS.md D44):
     // whatever this attempt actually cached -- rehydrated entries the cache

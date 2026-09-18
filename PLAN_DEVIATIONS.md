@@ -3291,3 +3291,155 @@ for every run, including the standard runs that do exactly one round
 completion percentage is gone: the stages differ by orders of magnitude in
 duration and the challenge loop repeats, so it was a number with nothing
 behind it.
+
+## D66 — the result screen leads with the decision, not the arithmetic
+
+A second review round found the result screen still arguing with itself: a
+`SPLIT DECISION` tag beside a bold headline recommendation, three alternatives
+on an identical 33% share, and one of them marked **(winner)**. The reviewer's
+sentence is the right one — *"a deterministic tie-break for ordering should not
+become a user-facing winner"*.
+
+`decisionStance` now decides whether there is a recommendation at all. It needs
+three things at once: an outcome that supports one (`Consensus` or
+`MajorityWithDissent`), a `recommendation` in the record, and a leader actually
+ahead of the runner-up by more than `TIE_EPSILON` (0.5pp). Short of that the
+headline reads **No clear recommendation**, with the reason, and no row is
+crowned. The same flag gates the acceptance card, which on a tie offers *choose
+an alternative* or *defer* rather than *accept* — there is nothing to accept.
+
+`Share` is now **Weighted support share**, with a sentence saying it is neither
+a vote count nor a probability. `Confidence 0.5302` is **Argument strength**,
+described as how well the decision survived challenge.
+
+The rest — options, claims, who answered, confidence dimensions, penalties,
+integrity — moved behind four tabs. They render into the DOM and toggle with
+`hidden`, so Ctrl-F and the existing tests still find them; hiding by removal
+would also lose a claim filter every time someone switched tab.
+
+The Markdown export was outcome, recommendation and a confidence number. It is
+now the whole memo: reasons, objection, gaps, alternatives, every claim with
+its kind and standing, who answered, the scoring breakdown, unresolved spend
+and the change triggers.
+
+## D67 — a demo run says it is one, everywhere
+
+A mock-panel run produced synthetic claims labelled "Fact / agreed", a
+confidence score, a dollar figure and an acceptance record. Nothing on the
+result, History or Usage screens distinguished that from a real decision, which
+makes every screenshot of this tool a potential misrepresentation.
+
+`synthetic` is computed where the panel is known — `is_synthetic` requires
+*every* member to be `mock:`, because one real provider means real text and
+real money — and travels on the run detail, the history rows and a new
+`run_catalog.synthetic` column. `history.db` files created before that column
+existed get it via a guarded `ALTER TABLE`; there is no incremental migration
+runner to hang it off yet, and failing to open an existing catalogue would have
+been a worse answer.
+
+Demo figures are labelled (`Simulated $0.090`, `Demo argument score`) rather
+than hidden — a demo run with its numbers scrubbed is harder to debug and no
+more honest — and Usage keeps them out of the real totals entirely, in their
+own stat tile.
+
+## D68 — Compare stops offering an action that cannot work
+
+With no key configured, Compare rendered "Ask all models" as an ordinary
+primary button, a card for each of seven providers, and — on submit — seven
+greyed-out SKIPPED cards each reading "no key configured". Then a footer saying
+*"No published price for any model that answered"*, when nothing had answered.
+
+Now: **Connect a provider** is the primary action, submit is disabled with its
+reason beside it, providers without keys collapse into a `<details>`, and no
+answer card is rendered for a provider that was never called. The footer has
+three separate sentences for three separate situations — nothing answered,
+answers with no price available, answers priced from the list.
+
+## D69 — one vocabulary for money and measurement
+
+Compare said tokens, cost and latency were "all three facts the providers
+report". Usage said costs were "estimated from published list prices". Both
+described the same `pricing.rs` table, and only one could be true.
+
+One `WORDS` map now supplies every label: *Provider-reported usage* and
+*Measured latency* (facts from the provider), *Estimated cost* (those counts
+times a list price held in this build), *Unresolved spend* (sent, never
+confirmed), *Reconciled cost* (checked against an export), *Recorded cost*.
+Usage shows recorded, unresolved and potential-total as three figures rather
+than one "total" the reader has to interrogate.
+
+## D70 — cancel actually cancels
+
+Five stages call `ctx.cancel.is_cancelled()`. The orchestrator built
+`CancellationToken::new()` *inside* the per-stage closure, so each stage got a
+fresh token nobody else held, and there was no endpoint regardless. The checks
+were correct and unreachable.
+
+One token per run now threads through `run_pipeline`, held in `AppState.cancels`
+for the run's lifetime by a `CancelGuard` that removes it on drop — including
+on panic, so a finished run never looks cancellable. `POST /api/runs/:id/cancel`
+sets it; a run that is not running answers 404 rather than a cheerful 200,
+because a Cancel that silently does nothing is how you teach someone to
+distrust a button.
+
+It does not claw back money, and says so: requests already dispatched may still
+be billed. The running screen separates **Cancel review** from **Leave this
+page**, which previously only existed as the honest-but-insufficient "Stop
+watching".
+
+## D71 — the running screen describes the work, not the pipeline
+
+Fifteen stage names, `challenge.run`, and raw JSON. Four phases now carry the
+reader — gather perspectives, examine claims, challenge alternatives, prepare
+recommendation — each with a sentence about what is happening to their
+decision. The stage stepper and the event log are intact under **Technical
+activity**, because the engineer debugging a run needs exactly what was there
+before.
+
+Spend accrues live, labelled *Estimated cost* or *Recorded cost* depending on
+whether any call in the run fell back to its reservation estimate.
+
+## D72 — the brief, and what leaves this machine
+
+One question box became a brief: what you are deciding, context, alternatives,
+constraints, success criteria, with depth and budget under **Review settings**.
+
+The run API takes a question string, not a structured brief, so the fields are
+composed into headed sections rather than inventing a wire format the engine
+has never seen. Because that composition happens behind the reader's back, a
+live **What will be sent** preview shows the exact text.
+
+That preview also fixes something worse. The old placeholder read "Paste a
+paragraph, or a path to a file", and `resolve_question` reads any matching path
+off disk — so text that happened to look like a path was read from this machine
+and sent to every provider on the panel, with nothing on screen saying so.
+Attaching a file is now a separate, collapsed, explicitly-labelled action, and
+the preview names the file whose contents will travel.
+
+## D73 — accepting is recording a decision
+
+"Accept" with a free-text override table, confirming as `By loopback-ui at
+2026-09-18T13:40:11.326689674Z` — a database row read aloud, implying an
+identity that nothing authenticated.
+
+Now: pick the recommendation, choose a different alternative, or defer. Anything
+other than agreeing needs a reason, enforced before the request goes out. The
+confirmation names the option chosen and the reason, dates it readably, and
+states plainly that it is a local record with no account or signature attached.
+
+## D74 — phone width, and the focus ring that was drowning the others
+
+Tables become stacked blocks under 620px with the column name carried in via
+`data-label`; a five-column score table does not survive 390px and a horizontal
+scrollbar hides columns rather than fitting them.
+
+The wide blue rectangle on every screenshot was the routed `<h1>`, focused in
+code after each navigation so screen readers announce the new screen. It
+carries `tabindex="-1"` and so can never be reached by Tab — removing *its*
+outline costs no keyboard user anything, while leaving `:focus-visible` intact
+everywhere it does matter. The screen change still announces itself through the
+focus move and `aria-live` on `<main>`.
+
+Naming settled on **Arbiter** throughout: Decisions, Quick compare, Usage &
+costs, Settings. Flow became a view of one decision rather than a top-level
+destination.

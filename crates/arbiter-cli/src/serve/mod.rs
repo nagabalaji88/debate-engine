@@ -22,20 +22,50 @@ use crate::run_handle::RunHandle;
 use arbiter_core::{Policy, RunId};
 use arbiter_kernel::bounds::{Bounds, Depth};
 use arbiter_kernel::prompt::PromptPack;
-use arbiter_kernel::stage::ProviderRegistry;
+use arbiter_kernel::stage::{CancellationToken, ProviderRegistry};
 use arbiter_kernel::store::{Manifest, RunStore};
 use arbiter_store::sqlite_store::SqliteRunStore;
 use axum::Router;
 use axum::routing::{get, post};
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 /// The one loopback address this server will ever bind — ARCHITECTURE
 /// §17.1's own first requirement, enforced here rather than merely
 /// documented: any other address is a hard refusal, not a warning
 /// (`serve_localhost_only`, F2).
 const LOOPBACK: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 1);
+
+/// Registers a run's cancellation token for the life of the run, and removes
+/// it however the run ends -- including a panic, since `Drop` runs then too.
+/// A token left behind would keep a finished run looking cancellable.
+pub(crate) struct CancelGuard {
+    run_id: String,
+    cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
+}
+
+impl CancelGuard {
+    pub(crate) fn new(
+        cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
+        run_id: &str,
+        token: CancellationToken,
+    ) -> Self {
+        cancels.lock().unwrap().insert(run_id.to_string(), token);
+        Self {
+            run_id: run_id.to_string(),
+            cancels,
+        }
+    }
+}
+
+impl Drop for CancelGuard {
+    fn drop(&mut self) {
+        self.cancels.lock().unwrap().remove(&self.run_id);
+    }
+}
 
 /// Shared, read-only server state — every handler and [`admission`] borrow
 /// this via `axum::extract::State`. Holds the store paths and the
@@ -52,6 +82,14 @@ pub(crate) struct AppState {
     /// `Origin`/`Sec-Fetch-Site` admission compares an inbound request
     /// against.
     pub(crate) origin: Arc<str>,
+    /// One cancellation token per in-flight run, so `POST /api/runs/:id/cancel`
+    /// can reach the pipeline that is actually running.
+    ///
+    /// Entries are removed when the run ends. A run id absent from here is
+    /// either finished or never started, and both answer "nothing to cancel"
+    /// the same way -- which is also why a completed run's Cancel is a 404
+    /// rather than a silent success.
+    pub(crate) cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
 }
 
 /// `arbiter serve [--bind ADDR] [--port N] [--store DIR] [--open]`.
@@ -85,6 +123,7 @@ pub async fn serve_command(
         store_root,
         token: token.clone(),
         origin: origin.clone(),
+        cancels: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let url = format!("{origin}/?token={token}");
@@ -133,6 +172,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/api/runs/{id}", get(handlers::get_run))
         .route("/api/runs/{id}/events", get(handlers::run_events))
         .route("/api/runs/{id}/accept", post(handlers::accept_run))
+        .route("/api/runs/{id}/cancel", post(handlers::cancel_run))
         .route("/api/providers", get(handlers::list_providers))
         // Screen 6. Like `POST /api/runs` this one spends money, so it sits
         // behind the same admission middleware as everything else below.
@@ -252,12 +292,14 @@ pub(crate) fn spawn_run(
 
     let run_id_for_task = run_id.clone();
     let store_root = state.store_root.clone();
+    let cancels = state.cancels.clone();
     tokio::spawn(async move {
         run_to_completion(
             handle,
             history_conn,
             run_id_for_task,
             store_root,
+            cancels,
             pack,
             panel,
             judges,
@@ -280,6 +322,7 @@ async fn run_to_completion(
     history_conn: Option<rusqlite::Connection>,
     run_id: RunId,
     _store_root: PathBuf,
+    cancels: Arc<Mutex<HashMap<String, CancellationToken>>>,
     pack: PromptPack,
     panel: Vec<(arbiter_core::ModelId, arbiter_core::ProviderId)>,
     judges: Vec<(arbiter_core::ModelId, arbiter_core::ProviderId)>,
@@ -304,8 +347,12 @@ async fn run_to_completion(
     let started_at = std::time::Instant::now();
     let budget = arbiter_kernel::budget::BudgetLedger::new(Some(cfg.bounds.max_cost));
     let cache = arbiter_kernel::cache::ResponseCache::new();
-    let result =
-        crate::orchestrator::run_pipeline(&cfg, &pack, &providers, &handle, &budget, &cache).await;
+    let cancel = CancellationToken::new();
+    let _cancel_guard = CancelGuard::new(cancels, run_id.as_str(), cancel.clone());
+    let result = crate::orchestrator::run_pipeline(
+        &cfg, &pack, &providers, &handle, &budget, &cache, &cancel,
+    )
+    .await;
     let duration_ms = started_at.elapsed().as_millis() as i64;
 
     for (key, response) in cache.snapshot() {
@@ -343,6 +390,7 @@ async fn run_to_completion(
                         duration_ms: Some(duration_ms),
                         model_count: Some(cfg.panel.len() as i64),
                         depth: Some(format!("{depth:?}")),
+                        synthetic: cfg.panel.iter().all(|(_, p)| p.as_str() == "mock"),
                         completed_at: arbiter_store::now_rfc3339(),
                     },
                 );
@@ -367,6 +415,7 @@ async fn run_to_completion(
                         duration_ms: Some(duration_ms),
                         model_count: Some(cfg.panel.len() as i64),
                         depth: Some(format!("{depth:?}")),
+                        synthetic: cfg.panel.iter().all(|(_, p)| p.as_str() == "mock"),
                         completed_at: arbiter_store::now_rfc3339(),
                     },
                 );
