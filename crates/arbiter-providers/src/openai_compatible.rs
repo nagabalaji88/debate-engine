@@ -142,6 +142,7 @@ impl OpenAiCompatibleProvider {
             prompt_tokens: http::optional_u64(body, "/usage/prompt_tokens"),
             completion_tokens: http::optional_u64(body, "/usage/completion_tokens"),
             request_id,
+            cost_usd: None,
         })
     }
 }
@@ -198,7 +199,12 @@ impl Provider for OpenAiCompatibleProvider {
                     self.flavor.provider_id()
                 ))
             })?;
-            Self::parse(self.flavor, &body, request_id)
+            let parsed = Self::parse(self.flavor, &body, request_id)?;
+            Ok(crate::pricing::price_response(
+                &self.flavor.provider_id(),
+                &request.model,
+                parsed,
+            ))
         })
     }
 }

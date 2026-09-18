@@ -298,20 +298,24 @@ impl PositionsGenerate {
         let response = match response {
             Ok(r) => r,
             Err(e) => {
-                // A clean provider error (not a never-arrived response) --
-                // FAILED, not ORPHANED. Drop releases the reservation, but the
-                // release event and the provider's own message both have to be
-                // raised here: an unauthorised key is the single most likely
-                // reason a real panel produces nothing, and swallowing it left
-                // the operator with an empty transcript and a cheerful
-                // "InsufficientEvidence / complete".
+                // The request had already gone out (`mark_sent` above), so
+                // whether this reservation is free money depends on what kind
+                // of failure it was -- `settle_failed_call` draws that line and
+                // holds the money when the answer is "we cannot tell". The
+                // provider's own message is carried out either way: an
+                // unauthorised key is the single most likely reason a real
+                // panel produces nothing, and swallowing it left the operator
+                // with an empty transcript and a cheerful "InsufficientEvidence
+                // / complete".
                 let reason = e.to_string();
-                super::emit_budget_released(
+                super::settle_failed_call(
                     ctx,
                     &self.name(),
+                    guard,
+                    &call_id,
                     &reservation_id,
                     self.estimated_cost_per_call,
-                    &reason,
+                    &e,
                 );
                 return Err(PositionSkip::new(&model, &provider_id, reason));
             }
@@ -326,7 +330,8 @@ impl PositionsGenerate {
             guard.mark_acknowledged();
         }
 
-        let actual_cost = self.estimated_cost_per_call;
+        let (actual_cost, cost_measured) =
+            super::settled_cost(&response, self.estimated_cost_per_call);
         let released_remainder = guard.commit(actual_cost);
         let response_hash = format!("blake3:{}", blake3::hash(response.text.as_bytes()).to_hex());
         ctx.events.emit(
@@ -336,6 +341,7 @@ impl PositionsGenerate {
                 "call_id": call_id.as_str(),
                 "response_hash": response_hash,
                 "actual_cost": actual_cost.0,
+                "cost_measured": cost_measured,
             }),
         );
         ctx.events.emit(
@@ -344,6 +350,7 @@ impl PositionsGenerate {
             serde_json::json!({
                 "reservation_id": reservation_id.as_str(),
                 "actual_cost": actual_cost.0,
+                "cost_measured": cost_measured,
                 "released_remainder": released_remainder.0,
             }),
         );
@@ -512,13 +519,31 @@ mod tests {
                 prompt_tokens: 0,
                 completion_tokens: 0,
                 request_id: None,
+                cost_usd: None,
             }));
         }
+        /// A transport failure: the request went out and nothing came back to
+        /// say what became of it. `settle_failed_call` treats these as
+        /// ambiguous and holds the reservation.
         fn script_error(&self, message: impl Into<String>) {
             self.script
                 .lock()
                 .unwrap()
                 .push_back(Err(ProviderError::Other(message.into())));
+        }
+
+        /// The provider answered, with a refusal. Distinct from
+        /// [`Self::script_error`] because the budget treats them differently
+        /// and a test that blurs them tests neither: a 401 is provably not
+        /// billed, so its reservation goes back.
+        fn script_http_error(&self, status: u16, message: impl Into<String>) {
+            self.script
+                .lock()
+                .unwrap()
+                .push_back(Err(ProviderError::Http {
+                    status,
+                    message: message.into(),
+                }));
         }
     }
     impl Provider for ScriptedProvider {
@@ -808,8 +833,8 @@ mod tests {
     #[tokio::test]
     async fn a_panel_where_every_member_fails_is_a_stage_failure_naming_the_reason() {
         let mock = ScriptedProvider::new(ProviderId::new("mock"));
-        mock.script_error("401 Unauthorized: invalid x-api-key");
-        mock.script_error("401 Unauthorized: invalid x-api-key");
+        mock.script_http_error(401, "401 Unauthorized: invalid x-api-key");
+        mock.script_http_error(401, "401 Unauthorized: invalid x-api-key");
 
         let mut registry = ProviderRegistry::default();
         registry.register(Box::new(mock));
@@ -914,5 +939,53 @@ mod tests {
         );
         let rendered = template.render(&vars).unwrap();
         assert!(rendered.contains("Should we adopt microservices?"));
+    }
+    /// ARCHITECTURE §8.4's line, as a test: a call that reached `SENT` and then
+    /// failed ambiguously holds its reservation and says `CALL_ORPHANED`; a
+    /// call the provider *answered* with a refusal releases. Every error used
+    /// to take the second path, so "we cannot tell whether this was billed"
+    /// was recorded as "it was not" -- the collapse §8.4 calls out as the
+    /// cause of duplicate charges on resume.
+    #[tokio::test]
+    async fn an_ambiguous_failure_holds_its_money_and_a_refusal_hands_it_back() {
+        for (script_ambiguous, expect_held, expect_orphan_events) in
+            [(true, 0.01, 1), (false, 0.0, 0)]
+        {
+            let mock = ScriptedProvider::new(ProviderId::new("mock"));
+            if script_ambiguous {
+                mock.script_error("connection reset by peer");
+            } else {
+                mock.script_http_error(429, "rate limited");
+            }
+
+            let mut registry = ProviderRegistry::default();
+            registry.register(Box::new(mock));
+            let budget = BudgetLedger::new(Some(Cost(1.0)));
+            let cache = ResponseCache::new();
+            let sink = RecordingSink::default();
+            let ctx = stage_ctx(&registry, &budget, &cache, &sink);
+
+            let panel = vec![(ModelId::new("model-a"), ProviderId::new("mock"))];
+            let stage = PositionsGenerate::new(panel, template(), Cost(0.01), 1);
+            let _ = stage
+                .run(
+                    Question {
+                        text: "Q".to_string(),
+                    },
+                    &ctx,
+                )
+                .await;
+
+            assert!(
+                (budget.reserved().0 - expect_held).abs() < 1e-9,
+                "ambiguous={script_ambiguous}: expected {expect_held} held, got {}",
+                budget.reserved().0
+            );
+            assert_eq!(
+                sink.count(EventType::CallOrphaned),
+                expect_orphan_events,
+                "ambiguous={script_ambiguous}: held money must be announced"
+            );
+        }
     }
 }

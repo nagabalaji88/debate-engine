@@ -353,15 +353,19 @@ impl ClaimsExtract {
         let response = match provider.call(request).await {
             Ok(r) => r,
             Err(e) => {
-                // The reservation is released by the guard's Drop, but the
-                // event and the provider's own message have to be raised
-                // here or this call vanishes from the record entirely.
-                super::emit_budget_released(
+                // Released or held depending on what kind of failure this was
+                // -- `settle_failed_call` keeps the money reserved when it
+                // cannot be shown the provider never ran the call. Either way
+                // the event and the provider's own message are raised here, or
+                // this call vanishes from the record entirely.
+                super::settle_failed_call(
                     ctx,
                     &self.name(),
+                    guard,
+                    &call_id,
                     &reservation_id,
                     self.estimated_cost_per_call,
-                    &e.to_string(),
+                    &e,
                 );
                 return None;
             }
@@ -374,13 +378,14 @@ impl ClaimsExtract {
             );
             guard.mark_acknowledged();
         }
-        let actual_cost = self.estimated_cost_per_call;
+        let (actual_cost, cost_measured) =
+            super::settled_cost(&response, self.estimated_cost_per_call);
         guard.commit(actual_cost);
         let response_hash = format!("blake3:{}", blake3::hash(response.text.as_bytes()).to_hex());
         ctx.events.emit(
             EventType::CallCompleted,
             &stage_name,
-            serde_json::json!({"call_id": call_id.as_str(), "response_hash": response_hash, "actual_cost": actual_cost.0}),
+            serde_json::json!({"call_id": call_id.as_str(), "response_hash": response_hash, "actual_cost": actual_cost.0, "cost_measured": cost_measured}),
         );
 
         ctx.cache.put(
@@ -687,6 +692,28 @@ fn apply_repairs(candidates: &mut [RawCandidate], repairs: &[RawRepair]) {
     }
 }
 
+/// The extractor's `kind` string, read as a closed set.
+///
+/// Anything that is not one of the four labels the core distinguishes is
+/// **not** a fact. It used to be: the match had `_ => EvidenceKind::Fact` as
+/// its fallthrough, so a model answering `"assumption"` -- or `"Fact "`, or a
+/// typo -- produced a claim weighted 1.00 by
+/// `arbiter_core::decision::evidence` where an assumption is weighted 0.50.
+/// A label nobody can read is the one case where we know the least, so it
+/// takes the lowest weight rather than the highest.
+///
+/// Matched case-insensitively on the trimmed string, because a model returning
+/// `"Fact"` for `"fact"` is answering correctly in every sense that matters.
+fn declared_kind(raw: &str) -> EvidenceKind {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "fact" => EvidenceKind::Fact,
+        "inference" => EvidenceKind::Inference,
+        "assumption" => EvidenceKind::Assumption,
+        "opinion" => EvidenceKind::Opinion,
+        _ => EvidenceKind::Unverified,
+    }
+}
+
 fn build_claims(
     candidates: &[RawCandidate],
     grounded: &BTreeMap<usize, Grounding>,
@@ -699,10 +726,9 @@ fn build_claims(
             let grounding = grounded.get(&i).cloned().unwrap_or(Grounding::Unsupported);
             let claim_id = ClaimId::new(format!("claim_{}_{}", position.id.as_str(), i + 1));
             let grounding = resolve_local_premise_ids(grounding, position);
-            let kind = match (&grounding, c.kind.as_str()) {
-                (Grounding::Unsupported, _) => EvidenceKind::Unverified,
-                (_, "inference") => EvidenceKind::Inference,
-                _ => EvidenceKind::Fact,
+            let kind = match &grounding {
+                Grounding::Unsupported => EvidenceKind::Unverified,
+                _ => declared_kind(&c.kind),
             };
             let member = ClaimMember::new(
                 claim_id.clone(),
@@ -971,6 +997,7 @@ mod tests {
                 prompt_tokens: 0,
                 completion_tokens: 0,
                 request_id: None,
+                cost_usd: None,
             }));
         }
         /// Scripts a response built from a `serde_json::json!` value rather
@@ -1324,5 +1351,35 @@ mod tests {
         let rendered = repair.render(&vars).unwrap();
         assert!(rendered.contains("some position"));
         assert!(rendered.contains("#1: some claim"));
+    }
+    /// The reviewer's finding 8. `build_claims` used to send every kind it did
+    /// not recognise to `Fact`, which is the *strongest* label in the evidence
+    /// weighting (1.00, against an assumption's 0.50). A model doing the right
+    /// thing -- marking its own assumption as an assumption -- was punished for
+    /// it by having the claim promoted to a fact.
+    #[test]
+    fn a_declared_assumption_is_not_promoted_to_a_fact() {
+        assert_eq!(declared_kind("assumption"), EvidenceKind::Assumption);
+        assert_eq!(declared_kind("opinion"), EvidenceKind::Opinion);
+        assert_eq!(declared_kind("fact"), EvidenceKind::Fact);
+        assert_eq!(declared_kind("inference"), EvidenceKind::Inference);
+    }
+
+    /// A label nobody can read is the case where we know least about the
+    /// claim, so it takes the lowest weight rather than the highest. The old
+    /// fallthrough made `"fakt"` a fact.
+    #[test]
+    fn an_unreadable_kind_is_unverified_rather_than_a_fact() {
+        assert_eq!(declared_kind("fakt"), EvidenceKind::Unverified);
+        assert_eq!(declared_kind(""), EvidenceKind::Unverified);
+        assert_eq!(declared_kind("statement"), EvidenceKind::Unverified);
+    }
+
+    /// Case and stray whitespace are a model answering correctly in every
+    /// sense that matters, so they must not cost the claim its kind.
+    #[test]
+    fn kind_parsing_forgives_case_and_whitespace() {
+        assert_eq!(declared_kind("Fact"), EvidenceKind::Fact);
+        assert_eq!(declared_kind("  INFERENCE  "), EvidenceKind::Inference);
     }
 }

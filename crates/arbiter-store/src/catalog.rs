@@ -482,6 +482,8 @@ mod tests {
             pack_hash: "blake3:p".to_string(),
             correlation_table_version: "1".to_string(),
             rng_seed: 1,
+            panel: vec![("m".to_string(), "mock".to_string())],
+            judges: vec![("m".to_string(), "mock".to_string())],
         };
         store.create(&RunId::new("run_a"), &manifest).unwrap();
         store.create(&RunId::new("run_b"), &manifest).unwrap();

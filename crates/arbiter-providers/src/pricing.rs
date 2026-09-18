@@ -63,6 +63,55 @@ pub fn pricing_for(provider: &ProviderId) -> Option<Pricing> {
     })
 }
 
+/// What a call actually cost, or `None` when this table cannot say.
+///
+/// `None` is the important half. It is returned when the provider publishes no
+/// single rate (an aggregator routes to whichever upstream model it likes),
+/// when the model asked for is not the one [`pricing_for`] quotes, and when the
+/// response carried no token counts at all. Each of those is "we do not know",
+/// and the ledger records them as unmeasured rather than inventing a figure —
+/// a wrong number shown with the same confidence as a right one is the failure
+/// this whole module is trying to avoid.
+///
+/// The model check matters more than it looks: `pricing_for` quotes each
+/// provider's *default* model, so `anthropic:claude-haiku` priced at Sonnet's
+/// rate would overstate a cheap call several-fold. A panel that names its
+/// models explicitly is the normal case, not the exception.
+pub fn measured_cost(
+    provider: &ProviderId,
+    model: &arbiter_core::ModelId,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+) -> Option<f64> {
+    if prompt_tokens == 0 && completion_tokens == 0 {
+        return None;
+    }
+    let default = crate::default_model_for(provider)?;
+    if default.as_str() != model.as_str() {
+        return None;
+    }
+    Some(pricing_for(provider)?.cost_of(prompt_tokens, completion_tokens))
+}
+
+/// Stamp a parsed response with what it cost, where that is knowable.
+///
+/// Called by each adapter at the end of `call`, where both the model that was
+/// asked and the usage that came back are in scope. Leaves `cost_usd` as
+/// `None` when [`measured_cost`] cannot say.
+pub fn price_response(
+    provider: &ProviderId,
+    model: &arbiter_core::ModelId,
+    mut response: arbiter_kernel::provider::ProviderResponse,
+) -> arbiter_kernel::provider::ProviderResponse {
+    response.cost_usd = measured_cost(
+        provider,
+        model,
+        response.prompt_tokens,
+        response.completion_tokens,
+    );
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,5 +156,37 @@ mod tests {
     fn a_call_that_reported_no_tokens_costs_nothing_rather_than_panicking() {
         let p = pricing_for(&ProviderId::new("anthropic")).unwrap();
         assert_eq!(p.cost_of(0, 0), 0.0);
+    }
+    #[test]
+    fn a_model_this_table_does_not_quote_has_no_measured_cost() {
+        let anthropic = ProviderId::new("anthropic");
+        let priced = crate::default_model_for(&anthropic).unwrap();
+        assert!(measured_cost(&anthropic, &priced, 1000, 1000).is_some());
+        // Sonnet's rate must not be charged to a Haiku call.
+        assert!(
+            measured_cost(
+                &anthropic,
+                &arbiter_core::ModelId::new("claude-haiku-4-5"),
+                1000,
+                1000
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn an_aggregator_reports_no_measured_cost_however_many_tokens_it_used() {
+        let openrouter = ProviderId::new("openrouter");
+        let model = crate::default_model_for(&openrouter).unwrap();
+        assert!(measured_cost(&openrouter, &model, 5000, 5000).is_none());
+    }
+
+    /// A response that carried no usage block is unknown, not free. Reporting
+    /// zero would let an unmetered provider look like the cheapest one.
+    #[test]
+    fn a_response_with_no_token_counts_is_unknown_rather_than_zero() {
+        let anthropic = ProviderId::new("anthropic");
+        let model = crate::default_model_for(&anthropic).unwrap();
+        assert_eq!(measured_cost(&anthropic, &model, 0, 0), None);
     }
 }

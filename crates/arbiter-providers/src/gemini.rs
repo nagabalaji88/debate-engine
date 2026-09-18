@@ -88,6 +88,7 @@ impl GeminiProvider {
             prompt_tokens: http::optional_u64(body, "/usageMetadata/promptTokenCount"),
             completion_tokens: http::optional_u64(body, "/usageMetadata/candidatesTokenCount"),
             request_id,
+            cost_usd: None,
         })
     }
 }
@@ -131,7 +132,12 @@ impl Provider for GeminiProvider {
             }
             let body: serde_json::Value = serde_json::from_str(&text)
                 .map_err(|e| ProviderError::Other(format!("gemini: response was not JSON: {e}")))?;
-            Self::parse(&body, request_id)
+            let parsed = Self::parse(&body, request_id)?;
+            Ok(crate::pricing::price_response(
+                &ProviderId::new("gemini"),
+                &request.model,
+                parsed,
+            ))
         })
     }
 }

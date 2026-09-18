@@ -78,14 +78,22 @@ impl RunStore for SqliteRunStore {
         let conn = self.open_and_init(run_id)?;
         let owner = Owner::current();
         lease::create(&conn, run_id.as_str(), &owner).map_err(lease_error_to_store_error)?;
-        Ok(Box::new(SqliteRunWriter { conn }))
+        Ok(Box::new(SqliteRunWriter {
+            conn,
+            run_id: run_id.as_str().to_string(),
+            owner,
+        }))
     }
 
     fn reopen(&self, run_id: &RunId) -> Result<Box<dyn RunWriter>, KernelStoreError> {
         let conn = self.open_and_init(run_id)?;
         let owner = Owner::current();
         lease::reopen(&conn, run_id.as_str(), &owner).map_err(lease_error_to_store_error)?;
-        Ok(Box::new(SqliteRunWriter { conn }))
+        Ok(Box::new(SqliteRunWriter {
+            conn,
+            run_id: run_id.as_str().to_string(),
+            owner,
+        }))
     }
 
     fn reader(&self, run_id: &RunId) -> Result<Box<dyn RunReader>, KernelStoreError> {
@@ -97,6 +105,25 @@ impl RunStore for SqliteRunStore {
 #[derive(Debug)]
 pub struct SqliteRunWriter {
     conn: Connection,
+    /// Carried so `Drop` can hand the lease back. The lease is keyed by run id
+    /// and fenced on the owner, and a dropped writer has neither to hand.
+    run_id: String,
+    owner: Owner,
+}
+
+/// Dropping the writer ends this process's claim on the run.
+///
+/// The lease's crash story is unchanged -- a process that dies without
+/// dropping anything still leaves a stale PID for the next `reopen` to step
+/// over. This covers the *ordinary* ending, where the writer goes away but the
+/// process does not: a server that finishes a run and then has to reopen it to
+/// record an acceptance. Best-effort by necessity, since `Drop` cannot fail;
+/// if the release does not land, the lease simply reverts to the old
+/// crash-detection behaviour rather than breaking.
+impl Drop for SqliteRunWriter {
+    fn drop(&mut self) {
+        let _ = lease::release(&self.conn, &self.run_id, &self.owner);
+    }
 }
 
 impl RunWriter for SqliteRunWriter {
@@ -539,6 +566,8 @@ mod tests {
             pack_hash: "blake3:pack".to_string(),
             correlation_table_version: "2026.1".to_string(),
             rng_seed: 42,
+            panel: vec![("m".to_string(), "mock".to_string())],
+            judges: vec![("m".to_string(), "mock".to_string())],
         }
     }
 
@@ -893,5 +922,63 @@ mod tests {
         assert!((committed - 0.80).abs() < 1e-9);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+    /// A server that runs a debate and then records the operator's acceptance
+    /// of it reopens the run in the same process that wrote it. Before the
+    /// writer released its lease on drop, `owner_is_gone` saw a live PID and
+    /// this failed with "run already open" -- so Accept was unreachable for
+    /// every run `arbiter serve` produced in its own session.
+    #[test]
+    fn a_completed_run_can_be_reopened_by_the_process_that_wrote_it() {
+        let store = SqliteRunStore::new(temp_root());
+        let run_id = RunId::new("run_accept_same_process");
+
+        let writer = store.create(&run_id, &manifest()).expect("create");
+        drop(writer);
+
+        let mut reopened = store
+            .reopen(&run_id)
+            .expect("a finished run must be reopenable by the process that wrote it");
+        reopened
+            .transact(&mut |tx| {
+                tx.append_event(&sample_event(&run_id, "evt_accept"))
+                    .map(|_| ())
+            })
+            .expect("the reopened writer must be able to write");
+    }
+
+    /// The release is fenced on the owner, not merely on the run id: a writer
+    /// dropped *after* another process has legitimately taken the run over
+    /// must not clear that new owner's claim.
+    #[test]
+    fn releasing_does_not_clear_a_lease_someone_else_now_holds() {
+        let store = SqliteRunStore::new(temp_root());
+        let run_id = RunId::new("run_fenced");
+        let conn = store.open_and_init(&run_id).unwrap();
+
+        let mine = Owner::current();
+        lease::create(&conn, run_id.as_str(), &mine).unwrap();
+
+        // Someone else takes it over -- a different boot, so `owner_is_gone`.
+        let theirs = Owner {
+            pid: mine.pid,
+            boot_id: "a-different-boot".to_string(),
+            hostname: mine.hostname.clone(),
+        };
+        lease::reopen(&conn, run_id.as_str(), &theirs).unwrap();
+
+        // My late drop must be a no-op, not a release of their lease.
+        assert!(
+            !lease::release(&conn, run_id.as_str(), &mine).unwrap(),
+            "a stale owner must not be able to release the current owner's lease"
+        );
+        let held: String = conn
+            .query_row(
+                "SELECT boot_id FROM run WHERE run_id = ?1",
+                [run_id.as_str()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(held, "a-different-boot", "the new owner must still hold it");
     }
 }

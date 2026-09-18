@@ -299,7 +299,28 @@
 
   var app = document.getElementById("app");
 
+  // Whatever the screen being replaced still owns: an EventSource, an
+  // interval, an in-flight fetch it will try to render into. A screen
+  // registers its cleanup here and `setScreen` runs it before the next
+  // screen's markup goes in.
+  //
+  // Without this, `screenRunning`'s stream and timer outlived the navigation
+  // away from it: a run that finished while the operator was reading History
+  // redirected them, mid-scroll, to a result page they had not asked for, and
+  // late callbacks wrote into elements that no longer existed.
+  var disposers = [];
+  function onScreenExit(fn) { disposers.push(fn); }
+  function disposeScreen() {
+    var pending = disposers;
+    disposers = [];
+    pending.forEach(function (fn) {
+      // One screen's bad cleanup must not strand the rest.
+      try { fn(); } catch (e) { /* already gone */ }
+    });
+  }
+
   function setScreen(html) {
+    disposeScreen();
     app.innerHTML = html;
     var heading = app.querySelector("h1");
     if (heading) { heading.setAttribute("tabindex", "-1"); heading.focus(); }
@@ -957,6 +978,11 @@
         },
       }).then(function (data) {
         setActiveRunId(data.run_id);
+        // The running screen needs the depth to say how many challenge rounds
+        // this run can reach, and the run's own events never carry it.
+        try {
+          sessionStorage.setItem("arbiter.depth." + data.run_id, document.getElementById("depth").value);
+        } catch (e) { /* private mode: the stepper falls back to one round */ }
         location.hash = "#/running/" + encodeURIComponent(data.run_id);
       }).catch(function (e) {
         submitting = false;
@@ -1013,10 +1039,21 @@
     var startedAt = Date.now();
     var events = [];
     var lastStage = "init";
-    var round = 1;
+    // Counts challenge rounds that have actually started. It began at 1, so
+    // the first `challenge.plan` incremented it to 2 and the operator watched
+    // round 1 of the debate go by labelled "round 2".
+    var round = 0;
+    // Standard runs one round, deep runs up to three
+    // (`arbiter-kernel/src/bounds.rs`'s `Depth::max_rounds`). The stepper used
+    // to say "of 3" for both, so a standard run looked stalled at a third of
+    // the way through something it was never going to do.
+    var maxRounds = (sessionStorage.getItem("arbiter.depth." + runId) === "deep") ? 3 : 1;
     var source = null;
     var elapsedTimer = null;
     var paused = false;
+    // Set once this screen has been navigated away from, so a late callback
+    // that already had its reply in flight cannot redirect or repaint.
+    var gone = false;
 
     setScreen(
       '<h1>Running</h1>' +
@@ -1040,6 +1077,16 @@
       if (el) el.innerHTML = Math.round((Date.now() - startedAt) / 1000) + '<span class="unit">s</span>';
     }, 1000);
 
+    // Navigating away closes the stream and stops the clock. The run itself
+    // carries on server-side -- this screen is a view of it, and closing the
+    // view has never been what stops the work (the "leaving does not stop the
+    // run" note below says so to the operator).
+    onScreenExit(function () {
+      if (source) { source.close(); source = null; }
+      if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+      gone = true;
+    });
+
     var logEl = document.getElementById("event-log");
     logEl.addEventListener("mouseenter", function () { paused = true; });
     logEl.addEventListener("mouseleave", function () { paused = false; renderLog(); });
@@ -1057,6 +1104,7 @@
     }
 
     function applyEvent(e) {
+      if (gone) return;
       events.push(e);
       // `EventType`'s own wire form is SCREAMING_SNAKE_CASE
       // (`arbiter-kernel/src/event.rs`'s `#[serde(rename_all = ...)]`) --
@@ -1071,7 +1119,16 @@
       var stageLine = document.getElementById("stage-line");
       if (stageLine) stageLine.textContent = lastStage;
       var progressLine = document.getElementById("progress-line");
-      if (progressLine) progressLine.innerHTML = Math.round(((idx + 1) / STAGE_ORDER.length) * 100) + '<span class="unit">% · round ' + round + " of 3 · step " + (idx + 1) + " of " + STAGE_ORDER.length + "</span>";
+      // No completion percentage: the stages differ by orders of magnitude in
+      // duration and the challenge loop can repeat, so "62%" would be a number
+      // with nothing behind it. The step and round are both facts.
+      if (progressLine) {
+        progressLine.innerHTML = "step " + (idx + 1) + " of " + STAGE_ORDER.length +
+          '<span class="unit"> · ' +
+          (round === 0 ? "before the first challenge round"
+                       : "challenge round " + round + " of at most " + maxRounds) +
+          "</span>";
+      }
       var claimsLine = document.getElementById("claims-line");
       if (claimsLine && e.payload && typeof e.payload.claims === "number") claimsLine.textContent = String(e.payload.claims);
 
@@ -1104,6 +1161,7 @@
     // First, confirm the run isn't already finished (a refresh/direct link
     // to an already-completed or unknown run must not show a frozen stream).
     api("/api/runs/" + encodeURIComponent(runId)).then(function (data) {
+      if (gone) return;
       if (data.status === "complete") { location.hash = "#/result/" + encodeURIComponent(runId); return; }
       if (data.status === "failed") {
         setStatus("Failed", false);

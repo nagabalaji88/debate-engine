@@ -1,5 +1,21 @@
 //! F2 — `provider_timeout` (K2), ARCHITECTURE §18's CI suite: "SkipItem,
 //! reservation released, 4-model debate completes."
+//!
+//! **§18's summary line and §8.4's state table disagree, and §8.4 wins**
+//! (PLAN_DEVIATIONS.md D60). §18 says "reservation released"; §8.4's own
+//! branch table says a call that reached `SENT` is held:
+//!
+//! > | `SENT` | it may have been billed, and there is no id to check | hold;
+//! > report as orphaned |
+//!
+//! and, a paragraph above it, **"`ORPHANED` must never silently become
+//! `FAILED`. Collapsing the two is what produces a duplicate charge on
+//! resume."** A timeout is the textbook case: the request left the machine, so
+//! nothing here can prove the provider did not run and bill the completion.
+//! This fixture asserted the release, which made it a test *for* the
+//! collapse §8.4 forbids. What §18 is really fixing is the `SkipItem`
+//! behaviour -- a weaker debate rather than a failed round -- and that is
+//! unchanged and still asserted below.
 
 use arbiter_core::{ModelId, ProviderId};
 use arbiter_fixtures::harness::{RecordingSink, template};
@@ -27,8 +43,9 @@ fn provider(id: &str) -> MockProvider {
 
 /// A single model timing out in round 1 must not fail the round: the
 /// remaining three panel members' positions still come back, the timed-out
-/// model's reservation is released (not left dangling as an orphan), and
-/// the stage itself returns `Ok`, never a `StageError`.
+/// model's reservation is *held* as an orphan (§8.4: money that may already be
+/// spent stays held until reconciliation), and the stage itself returns `Ok`,
+/// never a `StageError`.
 #[tokio::test]
 async fn provider_timeout() {
     let p1 = provider("p1");
@@ -93,12 +110,24 @@ async fn provider_timeout() {
     );
     assert_eq!(
         budget.reserved(),
-        Cost(0.0),
-        "no reservation is left outstanding: the timed-out call's reservation was released, not orphaned"
+        Cost(1.0),
+        "a timed-out call reached SENT, so its reservation is held as orphaned spend, \
+         not handed back as though the provider had proven it never ran (§8.4)"
     );
     assert_eq!(
         budget.committed(),
         Cost(3.0),
         "only the three successful calls actually spent budget"
+    );
+
+    // The event has to be on the record too: an orphan the operator cannot see
+    // is money quietly consumed. `doctor` reports the orphaned subtotal from
+    // exactly these.
+    assert!(
+        events
+            .events()
+            .iter()
+            .any(|(t, _, _)| *t == arbiter_kernel::event::EventType::CallOrphaned),
+        "a held reservation must be announced with CALL_ORPHANED, never held silently"
     );
 }

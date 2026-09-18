@@ -163,6 +163,17 @@ pub(crate) fn resolve(spec: &str) -> anyhow::Result<ResolvedPanel> {
     })
 }
 
+/// The panel as the manifest records it: `(model, provider)` strings, in the
+/// order they answer.
+pub(crate) fn manifest_roster(
+    roster: &[(arbiter_core::ModelId, arbiter_core::ProviderId)],
+) -> Vec<(String, String)> {
+    roster
+        .iter()
+        .map(|(m, p)| (m.as_str().to_string(), p.as_str().to_string()))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

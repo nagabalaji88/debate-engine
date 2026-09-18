@@ -53,6 +53,7 @@ impl MockProvider {
             prompt_tokens: 0,
             completion_tokens: 0,
             request_id: None,
+            cost_usd: None,
         }));
     }
 

@@ -12,6 +12,18 @@ Return a JSON array. Each element has exactly this shape:
 - A directly stated fact:
   `{"text": "<claim in your own words>", "kind": "fact", "grounding": {"quote": "<exact substring of the position text that supports it>"}}`
 
+- An assumption the position takes as given without establishing it:
+  `{"text": "<claim in your own words>", "kind": "assumption", "grounding": {"quote": "<exact substring of the position text that shows it>"}}`
+
+- A value judgement or preference, rather than a checkable statement:
+  `{"text": "<claim in your own words>", "kind": "opinion", "grounding": {"quote": "<exact substring of the position text that shows it>"}}`
+
+  Use `fact` only for a statement that could be checked against the world.
+  "Microservices are the industry standard" is an opinion unless the position
+  cites something; "our team has eight engineers" is a fact. Labelling an
+  assumption as a fact is the error that matters most here -- it weights the
+  claim twice as heavily in the decision.
+
 - An inference the position draws from other claims in this same array:
   `{"text": "<claim in your own words>", "kind": "inference", "grounding": {"derived_from": ["#1", "#4"], "confidence": 0.8}}`
 

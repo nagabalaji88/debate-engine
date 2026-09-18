@@ -214,6 +214,8 @@ pub(crate) fn spawn_run(
         pack_hash: pack.hash.to_string(),
         correlation_table_version: "none".to_string(),
         rng_seed,
+        panel: crate::panel::manifest_roster(&panel),
+        judges: crate::panel::manifest_roster(&judges),
     };
 
     let sqlite_store = SqliteRunStore::new(&state.store_root);
@@ -310,6 +312,10 @@ async fn run_to_completion(
         let _ = handle.put_cache_entry(&key, &response);
     }
 
+    // Read once, after the pipeline is done writing: what the run's own
+    // events say it spent, in place of the `0.0` this used to record.
+    let spend = handle.spend();
+
     match &result {
         Ok(synthesized) => {
             let _ = handle.append_lifecycle_event(
@@ -332,8 +338,8 @@ async fn run_to_completion(
                         outcome: Some(format!("{:?}", record.outcome)),
                         confidence: Some(record.confidence.total),
                         margin,
-                        cost: 0.0,
-                        orphaned_cost: 0.0,
+                        cost: spend.committed,
+                        orphaned_cost: spend.orphaned,
                         duration_ms: Some(duration_ms),
                         model_count: Some(cfg.panel.len() as i64),
                         depth: Some(format!("{depth:?}")),
@@ -356,8 +362,8 @@ async fn run_to_completion(
                         outcome: None,
                         confidence: None,
                         margin: None,
-                        cost: 0.0,
-                        orphaned_cost: 0.0,
+                        cost: spend.committed,
+                        orphaned_cost: spend.orphaned,
                         duration_ms: Some(duration_ms),
                         model_count: Some(cfg.panel.len() as i64),
                         depth: Some(format!("{depth:?}")),

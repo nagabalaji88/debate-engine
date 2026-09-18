@@ -473,6 +473,8 @@ async fn run_command(
         // version of yet.
         correlation_table_version: "none".to_string(),
         rng_seed,
+        panel: crate::panel::manifest_roster(&panel),
+        judges: crate::panel::manifest_roster(&judges),
     };
 
     let sqlite_store = SqliteRunStore::new(&store_root);
@@ -550,6 +552,10 @@ async fn run_command(
         handle.put_cache_entry(&key, &response)?;
     }
 
+    // Read once, after the pipeline is done writing: what the run's own
+    // events say it spent, in place of the `0.0` this used to record.
+    let spend = handle.spend();
+
     match &result {
         Ok(synthesized) => {
             handle.append_lifecycle_event(
@@ -579,8 +585,8 @@ async fn run_command(
                         outcome: Some(format!("{:?}", record.outcome)),
                         confidence: Some(record.confidence.total),
                         margin,
-                        cost: 0.0,
-                        orphaned_cost: 0.0,
+                        cost: spend.committed,
+                        orphaned_cost: spend.orphaned,
                         duration_ms: Some(duration_ms),
                         model_count: Some(cfg.panel.len() as i64),
                         depth: Some(format!("{depth:?}")),
@@ -603,8 +609,8 @@ async fn run_command(
                         outcome: None,
                         confidence: None,
                         margin: None,
-                        cost: 0.0,
-                        orphaned_cost: 0.0,
+                        cost: spend.committed,
+                        orphaned_cost: spend.orphaned,
                         duration_ms: Some(duration_ms),
                         model_count: Some(cfg.panel.len() as i64),
                         depth: Some(format!("{depth:?}")),

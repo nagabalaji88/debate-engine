@@ -25,6 +25,8 @@ fn manifest() -> Manifest {
         pack_hash: "blake3:pack".to_string(),
         correlation_table_version: "v1".to_string(),
         rng_seed: 1,
+        panel: vec![("m".to_string(), "mock".to_string())],
+        judges: vec![("m".to_string(), "mock".to_string())],
     }
 }
 

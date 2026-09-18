@@ -14,6 +14,7 @@ pub mod init;
 pub mod lease;
 pub mod project;
 pub mod schema;
+pub mod spend;
 pub mod sqlite_store;
 
 /// The current instant, RFC3339 (`2026-08-31T12:04:11.221Z`) — the format

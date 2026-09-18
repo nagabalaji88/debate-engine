@@ -1,9 +1,13 @@
 name: CI
 
 on:
+  # Every branch, not just `main`. The filter used to be `branches: [main]`
+  # while all the work happened on `claude/...` branches, so CI had never
+  # actually run: the Actions API reported zero workflow runs for the
+  # repository. A gate nobody has seen go green is not a gate.
   push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -26,5 +30,14 @@ jobs:
 
       # ARCHITECTURE.md §18: CI proves the engine with zero LLM tokens. No network
       # credentials exist in this job, so a test that needs one fails loudly.
+      # The browser tests drive a real Chromium over CDP. Without this step
+      # they were passing only on a machine that happened to have one at
+      # `/opt/pw-browsers/chromium`; `ARBITER_CHROMIUM` lets the test find
+      # whatever this runner installed instead of hard-coding that path.
+      - name: install chromium
+        run: |
+          npx --yes playwright@1.49.0 install --with-deps chromium
+          echo "ARBITER_CHROMIUM=$(node -e "console.log(require('playwright').chromium.executablePath())")" >> "$GITHUB_ENV"
+
       - name: test
         run: cargo test --workspace --all-features

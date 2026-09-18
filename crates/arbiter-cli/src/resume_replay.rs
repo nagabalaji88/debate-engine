@@ -35,6 +35,10 @@ struct Reconstructed {
     policy_version: String,
     pack_hash: String,
     rng_seed: u64,
+    /// The panel the run actually used, as `(model, provider)`. Empty for a
+    /// run written before the manifest recorded one -- which is why
+    /// [`refuse_to_substitute_a_panel`] treats empty as unknown, not as mock.
+    panel: Vec<(String, String)>,
 }
 
 fn read_run_started(reader: &dyn RunReader) -> anyhow::Result<Reconstructed> {
@@ -58,7 +62,62 @@ fn read_run_started(reader: &dyn RunReader) -> anyhow::Result<Reconstructed> {
             .get("rng_seed")
             .and_then(|v| v.as_u64())
             .ok_or_else(|| anyhow::anyhow!("RUN_STARTED payload missing 'rng_seed'"))?,
+        panel: p
+            .get("panel")
+            .and_then(|v| v.as_array())
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|row| {
+                        let pair = row.as_array()?;
+                        Some((
+                            pair.first()?.as_str()?.to_string(),
+                            pair.get(1)?.as_str()?.to_string(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
+}
+
+/// Stop before continuing a real-provider run with synthetic models.
+///
+/// `build_config` rebuilds a panel with `mock_panel()`, because until the
+/// manifest recorded one there was nothing else it could do. For a run that
+/// was answered by real models that is the worst possible failure: the resumed
+/// stages produce synthetic text, append it to the same run id under the same
+/// hash chain, and the transcript ends up half real and half invented with
+/// nothing marking the seam. A decision record is worthless if it cannot say
+/// which models produced it.
+///
+/// So this refuses, rather than substituting. A run recorded before the
+/// manifest carried a panel is refused too: "we don't know who answered" is
+/// not a reason to assume it was the mock.
+fn refuse_to_substitute_a_panel(reconstructed: &Reconstructed, verb: &str) -> anyhow::Result<()> {
+    if reconstructed.panel.is_empty() {
+        anyhow::bail!(
+            "this run does not record which models answered it, so `{verb}` cannot rebuild \
+             its panel -- continuing would put synthetic answers in a run that may have been \
+             produced by real ones. Runs started by this version onwards record their panel. \
+             `arbiter show` still reads everything this run already holds."
+        );
+    }
+    let real: Vec<String> = reconstructed
+        .panel
+        .iter()
+        .filter(|(_, provider)| provider != "mock")
+        .map(|(model, provider)| format!("{provider}:{model}"))
+        .collect();
+    if !real.is_empty() {
+        anyhow::bail!(
+            "`{verb}` cannot yet restore a real-provider panel, and will not silently \
+             substitute the synthetic one: this run was answered by {}. Resuming it would \
+             append mock text to a real transcript under the same run id. Start a new run \
+             instead -- `arbiter show` still reads everything this one already holds.",
+            real.join(", ")
+        );
+    }
+    Ok(())
 }
 
 /// `depth` is not part of `RUN_STARTED`'s payload (`Manifest` never carried
@@ -276,6 +335,7 @@ pub async fn replay_command(run_id: RunId, json: bool, store_root: PathBuf) -> a
         .map_err(|e| anyhow::anyhow!("loading prompt pack: {e}"))?;
     check_pack(&pack, &reconstructed)?;
 
+    refuse_to_substitute_a_panel(&reconstructed, "replay")?;
     let depth = read_depth(&store_root, &run_id);
     let cfg = build_config(run_id.clone(), &reconstructed, depth, None)?;
 
@@ -416,6 +476,7 @@ pub async fn resume_command(
         }
     }
 
+    refuse_to_substitute_a_panel(&reconstructed, "resume")?;
     let depth = read_depth(&store_root, &run_id);
     let (_reserved, committed) = reader
         .budget_totals()

@@ -3145,3 +3145,149 @@ but only one of them can be read off the screen — and that default is a
 and replace it. The one-click free picker replaces those lines rather than
 adding to them, for exactly that reason: a panel asked to be free must not
 still be carrying the paid default.
+
+## D60 — §18's fixture summary loses to §8.4's state table on a timed-out call
+
+An external review found that every provider failure released its reservation,
+including a timeout. ARCHITECTURE §8.4 is explicit that it must not:
+
+> | `SENT` | it may have been billed, and there is no id to check | hold; report as orphaned |
+
+and, directly above that table, **"`ORPHANED` must never silently become
+`FAILED`. Collapsing the two is what produces a duplicate charge on resume."**
+
+The `k2_provider_timeout` fixture asserted the opposite — "the timed-out call's
+reservation was released, not orphaned" — taking §18's one-line summary
+("SkipItem, reservation released, 4-model debate completes") literally. Two
+parts of the spec disagreed and the code followed the weaker one, so the
+codebase contained a test *for* the collapse §8.4 forbids.
+
+§8.4 wins: it is the normative table, it gives its reasoning, and §18's line is
+a summary of the fixture's *main* point, which is `SkipItem` — a weaker debate
+rather than a failed round. That part is unchanged and still asserted.
+
+The line now drawn, in `stages::settle_failed_call`:
+
+| Failure | Meaning | Reservation |
+|---|---|---|
+| `ProviderError::Http { .. }` | the provider answered, with a refusal | released |
+| `ProviderError::Other(_)` | transport: timeout, reset, truncated body | **held, `CALL_ORPHANED`** |
+
+The variant *is* the signal, and it already existed: `http::status_error`
+produces the first, `http::transport_error` the second. A 401 is provably not
+billed. A timeout is not provably anything, and the request had already left
+the machine (`mark_sent`) before it happened.
+
+One visible consequence: `--panel mock` runs now report a little orphaned
+spend, because a scripted mock failure is a `ProviderError::Other` and the
+stage cannot special-case who it is talking to. That is the simulation working.
+
+`CALL_ORPHANED` had no caller anywhere in the codebase before this. So did
+`ReservationGuard::mark_orphaned`, fully implemented, with a doc comment
+explaining the semantics it was never given a chance to apply.
+
+## D61 — the ledger is the event log, because the budget table is not written
+
+The same review found that `Tx::reserve_call` and `Tx::commit_budget` have no
+call sites outside `sqlite_store.rs`'s own tests: the normal run path emits
+events through `RunHandle`, and `append_event` only appends the event. So
+`provider_calls` and the durable budget totals stay empty for every real run,
+while `resume` reads them as authoritative.
+
+Fixing that properly means one durable call executor that persists reservation
+and event in a single transaction before dispatch, and response, completion and
+settlement in another after it. That is a real piece of work and it is not this
+change.
+
+What this change does is stop the *reporting* lying in the meantime.
+`arbiter_store::spend` totals a run from its own events — the place the numbers
+actually are — and `RunHandle` accumulates it as they are written.
+`history.db`'s `cost` and `orphaned_cost` columns were literal `0.0`, with a
+comment saying no aggregate reader existed to source them from; they now carry
+what the run spent, and Usage stops totalling a column of zeros.
+
+`Spend::fully_measured` travels with the figure. It is false as soon as any one
+call fell back to its estimate, because a reader deciding whether to trust a
+total needs its weakest link, not its average.
+
+## D62 — cost is what the provider reported, not the call count
+
+`orchestrator.rs` sets `CALL_COST = 0.01` and all eight calling stages committed
+exactly that as `actual_cost`, ignoring the token counts sitting on the response
+they had just parsed. The reviewer's phrasing is the right one: the dollar cap
+was a call-count budget wearing a currency symbol. Free models consumed it at
+the same rate as Opus.
+
+`ProviderResponse` now carries `cost_usd: Option<f64>`, stamped by the adapter
+at the end of `call` — the only place that knows both which model was asked and
+what it costs. The kernel deliberately does not depend on `arbiter-providers`,
+so the stages could never have looked a price up for themselves; this is why the
+seam goes here rather than in the ledger.
+
+`None` is the load-bearing half. `pricing::measured_cost` returns it for an
+aggregator (whose price is whichever upstream model it routed to), for a model
+the table does not quote, and for a response with no usage block. Stages then
+commit the reservation estimate and mark the call unmeasured, rather than
+presenting a guess as a billed figure.
+
+The model check is not decoration: `pricing_for` quotes each provider's
+*default* model, so pricing `anthropic:claude-haiku` at Sonnet's rate would
+overstate a cheap call several-fold — and a panel that names its models
+explicitly is the normal case now, not the exception.
+
+This is not yet a hard spending guarantee. The reservation is still sized from
+a flat estimate, so a single very long completion can overshoot its own
+reservation; what changed is that the *record* of what was spent is now the
+provider's number wherever the provider gives one.
+
+## D63 — a claim's kind is a closed set
+
+`build_claims` matched `"inference"` and sent **everything else** to
+`EvidenceKind::Fact`, including `"assumption"`, `"opinion"`, and any typo. The
+core weights those at 1.00, 0.50 and 0.40 respectively
+(`decision::evidence`), so a model correctly marking its own assumption as an
+assumption had that claim promoted to a fact and counted at double weight. The
+careful answer was punished.
+
+`declared_kind` now parses the four labels the core distinguishes, case- and
+whitespace-tolerantly, and sends anything else to `Unverified` — the lowest
+weight. A label nobody can read is the case where we know least about a claim,
+so it takes the weakest reading rather than the strongest.
+
+The extractor prompt now documents `assumption` and `opinion` too, since the
+distinction is worthless if nothing can produce it. Its instruction says which
+error matters: labelling an assumption as a fact doubles its weight.
+
+## D64 — a lease ends when the writer does
+
+Accepting a decision in the session that produced it was impossible. `reopen`
+asks whether the recorded owner is gone; a server that created a run is still
+very much alive when the operator clicks Accept, so `owner_is_gone` said no and
+the handler failed with "run already open". The reviewer predicted this from
+the source and could not run it; the regression test in `sqlite_store.rs`
+reproduces it exactly.
+
+`lease::release` writes a sentinel owner on `SqliteRunWriter::drop`, fenced on
+the owner's own identity so a writer dropped after someone else legitimately
+took the run over cannot clear that new owner. The crash story is untouched: a
+process that dies without dropping anything still leaves a stale PID for the
+next `reopen` to step over. This covers the ordinary ending, where the writer
+goes away and the process does not.
+
+## D65 — a screen cleans up after itself
+
+`screenRunning` owned an EventSource and an interval that nothing closed on
+navigation. A run completing while the operator was reading History fired
+`RUN_COMPLETED` into the old handler and threw them to a result page they had
+not asked for. `setScreen` now runs a disposer stack first, and the browser
+test `leaving_the_running_screen_stops_its_stream_redirecting_you` fails
+without it.
+
+Two progress bugs went with it. The round counter started at 1 and incremented
+on the first `challenge.plan`, so round 1 was displayed as round 2; it now
+counts rounds that have actually started. The denominator was hard-coded to 3
+for every run, including the standard runs that do exactly one round
+(`Depth::max_rounds`); it now reflects the depth the run was started with. The
+completion percentage is gone: the stages differ by orders of magnitude in
+duration and the challenge loop repeats, so it was a number with nothing
+behind it.

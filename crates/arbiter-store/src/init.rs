@@ -39,6 +39,8 @@ fn run_started_payload(question: &str, manifest: &Manifest) -> serde_json::Value
         "pack_hash": manifest.pack_hash,
         "correlation_table_version": manifest.correlation_table_version,
         "rng_seed": manifest.rng_seed,
+        "panel": manifest.panel,
+        "judges": manifest.judges,
     })
 }
 
@@ -99,6 +101,8 @@ mod tests {
             pack_hash: "blake3:pack".to_string(),
             correlation_table_version: "2026.1".to_string(),
             rng_seed: 42,
+            panel: vec![("m".to_string(), "mock".to_string())],
+            judges: vec![("m".to_string(), "mock".to_string())],
         }
     }
 

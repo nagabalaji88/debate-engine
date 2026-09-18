@@ -182,6 +182,13 @@ pub(crate) fn owner_is_gone(
     recorded_pid: u32,
     current_boot_id: &str,
 ) -> bool {
+    // An explicitly released lease is gone by statement, checked before the
+    // PID: `release` writes PID 0, and asking whether PID 0 is alive is not a
+    // question about one process at all -- `kill(0, 0)` addresses the whole
+    // process group, so it would answer "alive" and keep the lease shut.
+    if recorded_boot_id == RELEASED_BOOT_ID {
+        return true;
+    }
     recorded_boot_id != current_boot_id || !pid_is_alive(recorded_pid)
 }
 
@@ -214,6 +221,40 @@ pub fn create(conn: &Connection, run_id: &str, owner: &Owner) -> Result<i64, Lea
         }
         Err(e) => Err(LeaseError::Sqlite(e)),
     }
+}
+
+/// The `boot_id` written by [`release`] to mark a lease deliberately handed
+/// back. A real boot id is a UUID (or, if that read fails, the empty string),
+/// so this can never collide with one -- which matters, because
+/// [`owner_is_gone`] decides on exactly this column and a collision would hand
+/// a live run's lease to a second writer.
+pub(crate) const RELEASED_BOOT_ID: &str = "released";
+
+/// Hand the lease back, so a *later* writer in this same process can take it.
+///
+/// Without this, ownership only ends when the owning process does: `reopen`
+/// asks whether the recorded owner is gone, and a server that created a run is
+/// still very much alive when the operator clicks Accept on it. The run was
+/// finished and its writer dropped, but the lease row still named a live PID,
+/// so accepting a run in the session that produced it failed with "run already
+/// open" -- see the regression test in `sqlite_store.rs`.
+///
+/// Fenced on the owner's own identity rather than the epoch: the `WHERE` only
+/// matches while *we* still hold the lease, so a writer dropped after some
+/// other process legitimately took the run over cannot clear that new owner.
+/// Returns whether this call was the one that released it.
+///
+/// This is deliberately not a liveness re-check -- it writes a sentinel that
+/// makes [`owner_is_gone`] true for everyone, which is the same answer that
+/// process exit would eventually produce, only immediately and without waiting
+/// for a PID to be reaped.
+pub fn release(conn: &Connection, run_id: &str, owner: &Owner) -> Result<bool, LeaseError> {
+    let changed = conn.execute(
+        "UPDATE run SET owner_pid = 0, boot_id = ?1
+         WHERE run_id = ?2 AND owner_pid = ?3 AND boot_id = ?4",
+        rusqlite::params![RELEASED_BOOT_ID, run_id, owner.pid, owner.boot_id],
+    )?;
+    Ok(changed == 1)
 }
 
 /// INTERFACES §1's `reopen`: read `(owner_pid, boot_id, lease_epoch)`, decide the

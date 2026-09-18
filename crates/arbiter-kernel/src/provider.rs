@@ -115,6 +115,19 @@ pub struct ProviderResponse {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub request_id: Option<String>,
+    /// What this call actually cost, in USD, when the adapter can say.
+    ///
+    /// `None` means unmeasured -- an aggregator with no single published rate,
+    /// a model the price table does not quote, or a response that carried no
+    /// usage block. The ledger commits the *reservation estimate* for those
+    /// and marks the call unmeasured, rather than recording a guess as though
+    /// it were a billed amount.
+    ///
+    /// It is computed here, by the adapter, because only the adapter knows
+    /// which model it called and what that model costs; the kernel deliberately
+    /// does not depend on `arbiter-providers`, and the stages that commit money
+    /// have no way to look a price up for themselves.
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -222,6 +235,7 @@ mod tests {
                     prompt_tokens: 1,
                     completion_tokens: 1,
                     request_id: None,
+                    cost_usd: None,
                 })
             })
         }

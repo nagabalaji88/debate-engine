@@ -22,6 +22,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 struct Inner {
     writer: Box<dyn RunWriter>,
     chain: arbiter_store::events::ChainState,
+    /// Running total of what this run has spent, accumulated as the events go
+    /// past. Kept here because the handle is the one place every event is
+    /// guaranteed to pass through, and because the alternative -- re-reading
+    /// the whole log at the end -- would report a figure the durable budget
+    /// table cannot yet corroborate anyway (D61).
+    spend: arbiter_store::spend::Spend,
 }
 
 /// Owns the one open `RunWriter` for a run, shared between event emission
@@ -64,6 +70,7 @@ impl RunHandle {
             inner: Mutex::new(Inner {
                 writer,
                 chain: arbiter_store::events::ChainState::empty(),
+                spend: arbiter_store::spend::Spend::empty(),
             }),
             next_event_id: AtomicU64::new(1),
             instance_tag,
@@ -147,8 +154,19 @@ impl RunHandle {
         };
         let mut guard = self.inner.lock().unwrap();
         let inner = &mut *guard;
+        inner.spend = arbiter_store::spend::accumulate(inner.spend, &event);
         arbiter_store::events::append_chained(inner.writer.as_mut(), &mut inner.chain, event)?;
         Ok(())
+    }
+
+    /// What this run has spent so far, as its own events describe it.
+    ///
+    /// Replaces the hard-coded `0.0` that `history.db` used to record for
+    /// every completed run -- a figure that made Usage's grand total
+    /// permanently `$0.00` and, worse, made a real run indistinguishable from
+    /// a free one.
+    pub fn spend(&self) -> arbiter_store::spend::Spend {
+        self.inner.lock().unwrap().spend
     }
 
     /// The first store-write failure recorded by [`Sink::emit`], if any,

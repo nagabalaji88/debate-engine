@@ -223,15 +223,17 @@ impl RebuttalRun {
             let response = match provider.call(request).await {
                 Ok(r) => r,
                 Err(e) => {
-                    // The reservation is released by the guard's Drop, but the
-                    // event and the provider's own message have to be raised
-                    // here or this call vanishes from the record entirely.
-                    super::emit_budget_released(
+                    // Released or held depending on what kind of failure this
+                    // was -- `settle_failed_call` keeps the money reserved
+                    // when it cannot be shown the provider never ran the call.
+                    super::settle_failed_call(
                         ctx,
                         &self.name(),
+                        guard,
+                        &call_id,
                         &reservation_id,
                         self.estimated_cost_per_call,
-                        &e.to_string(),
+                        &e,
                     );
                     return None;
                 }
@@ -244,14 +246,15 @@ impl RebuttalRun {
                 );
                 guard.mark_acknowledged();
             }
-            let actual_cost = self.estimated_cost_per_call;
+            let (actual_cost, cost_measured) =
+                super::settled_cost(&response, self.estimated_cost_per_call);
             let released_remainder = guard.commit(actual_cost);
             let response_hash =
                 format!("blake3:{}", blake3::hash(response.text.as_bytes()).to_hex());
             ctx.events.emit(
                 EventType::CallCompleted,
                 &self.name(),
-                serde_json::json!({"call_id": call_id.as_str(), "response_hash": response_hash, "actual_cost": actual_cost.0}),
+                serde_json::json!({"call_id": call_id.as_str(), "response_hash": response_hash, "actual_cost": actual_cost.0, "cost_measured": cost_measured}),
             );
             ctx.events.emit(
                 EventType::BudgetCommitted,
@@ -259,6 +262,7 @@ impl RebuttalRun {
                 serde_json::json!({
                     "reservation_id": reservation_id.as_str(),
                     "actual_cost": actual_cost.0,
+                "cost_measured": cost_measured,
                     "released_remainder": released_remainder.0,
                 }),
             );
@@ -490,6 +494,7 @@ mod tests {
                 prompt_tokens: 0,
                 completion_tokens: 0,
                 request_id: None,
+                cost_usd: None,
             }));
         }
     }

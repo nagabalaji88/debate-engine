@@ -164,8 +164,14 @@ async fn browser(label: &str) -> (Browser, BrowserGuard) {
         .await
         .expect("browser permits are never closed");
     let profile = temp_store(&format!("chrome_profile_{label}"));
+    // `ARBITER_CHROMIUM` first, so a machine that keeps its browser somewhere
+    // else -- a CI runner, a developer's laptop -- can say where without
+    // patching this file. The path below is this sandbox's own, kept as the
+    // default because it is where the pre-installed browser actually lives.
+    let executable = std::env::var("ARBITER_CHROMIUM")
+        .unwrap_or_else(|_| "/opt/pw-browsers/chromium".to_string());
     let config = BrowserConfig::builder()
-        .chrome_executable("/opt/pw-browsers/chromium")
+        .chrome_executable(executable)
         .user_data_dir(&profile)
         .no_sandbox()
         .build()
@@ -1429,5 +1435,72 @@ async fn every_screen_is_keyboard_navigable() {
                 "#{field} must declare autofocus on screen '{hash}'"
             );
         }
+    }
+}
+
+/// The reviewer's navigation-lifecycle finding, as a browser test rather than
+/// a probe against a fake DOM.
+///
+/// `screenRunning` owns an EventSource and an interval, and nothing used to
+/// close them on navigation. A run that completed while the operator was
+/// reading History fired `RUN_COMPLETED` into the old handler, which threw
+/// them to a result page they had not asked for. The assertion is on that
+/// visible consequence: having left the running screen, you stay where you
+/// went.
+#[tokio::test]
+async fn leaving_the_running_screen_stops_its_stream_redirecting_you() {
+    let server = start_server("nav_dispose");
+    let (browser, _guard) = browser("nav_dispose").await;
+    let page = browser.new_page(server.url("")).await.unwrap();
+
+    page.evaluate("if (location.hash !== '#/new') { location.hash = '#/new'; }")
+        .await
+        .unwrap();
+    wait_for(
+        &page,
+        "!!document.getElementById('new-run-form')",
+        "the form",
+    )
+    .await;
+    page.find_element("#question")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap()
+        .type_str("Should we adopt a modular monolith or microservices?")
+        .await
+        .unwrap();
+    page.find_element("#start-btn")
+        .await
+        .unwrap()
+        .click()
+        .await
+        .unwrap();
+
+    // Leave for History while the run is still going.
+    wait_for(
+        &page,
+        "location.hash.indexOf('#/running/') === 0",
+        "the running screen",
+    )
+    .await;
+    page.evaluate("location.hash = '#/history'").await.unwrap();
+    wait_for(&page, "location.hash === '#/history'", "the history screen").await;
+
+    // Give the run every chance to finish and try to take us with it. A mock
+    // run is quick, so this window comfortably covers its completion.
+    for _ in 0..40 {
+        let hash: String = page
+            .evaluate("location.hash")
+            .await
+            .unwrap()
+            .into_value()
+            .unwrap();
+        assert_eq!(
+            hash, "#/history",
+            "a completing run must not navigate an operator who has left the running screen"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }

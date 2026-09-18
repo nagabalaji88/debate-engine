@@ -66,6 +66,17 @@ pub struct Manifest {
     /// Seeds `StageContext::rng` (`DeterministicRng`, INTERFACES §6) — "seeded
     /// from the manifest".
     pub rng_seed: u64,
+    /// Who actually answered, as `(model, provider)` pairs in panel order, and
+    /// who judged.
+    ///
+    /// Recorded because nothing else in the run could say. `resume` rebuilt a
+    /// panel from scratch when it needed one, which meant a run that had been
+    /// answered by real models could be continued by synthetic ones under the
+    /// same run id -- the transcript would carry both, indistinguishably. A
+    /// run's own record of who spoke belongs with the policy and pack hashes
+    /// it is already frozen alongside.
+    pub panel: Vec<(String, String)>,
+    pub judges: Vec<(String, String)>,
 }
 
 /// A dollar amount. Every ledger quantity in ARCHITECTURE §7/§8.3 (`estimate`,
